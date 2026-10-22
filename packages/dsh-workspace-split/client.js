@@ -8,6 +8,17 @@ window.__ModuleLoader__.load({
     // ---------- limits (PRD: 20 global default, 12 per-window hard default; both configurable) ----------
     const DEFAULT_MAX_CELLS = 20;
     const DEFAULT_MAX_PER_WINDOW = 12;
+    /** Bound for one retained Session's initial history open (see CellView). */
+    const OPEN_TIMEOUT_MS = 15000;
+
+    // Opening several histories at once leaves some retains unsettled, so cells
+    // queue: one open in flight, the rest waiting their turn.
+    let openChain = Promise.resolve();
+    function enqueueOpen(task) {
+      const run = openChain.then(task, task);
+      openChain = run.catch(() => {});
+      return run;
+    }
 
     // ---------- localStorage persistence ----------
     const LS_KEY = 'dsws-layout';
@@ -48,9 +59,9 @@ window.__ModuleLoader__.load({
       return h('button', {
         title: '切换分屏视图',
         style: {
-          padding: '4px 10px', fontSize: 12,
-          border: '1px solid var(--dsw-alias-border-l3, #444)',
-          borderRadius: 6, background: 'transparent',
+          padding: '4px 10px', fontSize: 12, lineHeight: '18px',
+          border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+          borderRadius: 'var(--dsw-radius-sm, 6px)', background: 'transparent',
           color: 'var(--dsw-alias-label-primary, inherit)', cursor: 'pointer',
         },
         onClick: () => { try { window.__dswsToggle?.(); } catch (_e) {} },
@@ -64,7 +75,9 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null);
       const [inputText, setInputText] = useState('');
       const [sending, setSending] = useState(false);
+      const [retry, setRetry] = useState(0);
       const refRef = useRef(null);
+      const openTimerRef = useRef(null);
       const bodyRef = useRef(null);
       const textareaRef = useRef(null);
 
@@ -77,21 +90,47 @@ window.__ModuleLoader__.load({
       // Retain session once catalogued.
       useEffect(() => {
         if (!sessionId || !cataloged) { if (!sessionId) { setBinding(null); setError(null); } return; }
+        console.warn('[dsws] retain start', String(sessionId).slice(0, 8));
         let cancelled = false;
         let reference = null;
-        try {
-          reference = sessions.retain(sessionId, { source: 'controllerOperation' });
-          refRef.current = reference;
-          reference.ready.then((b) => { if (!cancelled) setBinding(b); })
-            .catch((e) => { if (!cancelled) setError(String(e)); });
-        } catch (e) { setError(String(e)); }
+        const controller = new AbortController();
+        openTimerRef.current = setTimeout(() => {
+          console.warn('[dsws] open timeout', String(sessionId).slice(0, 8));
+          if (cancelled) return;
+          try { controller.abort(); } catch {}
+          setError(`打开会话超时（${OPEN_TIMEOUT_MS / 1000}s）`);
+        }, OPEN_TIMEOUT_MS);
+        const finish = () => clearTimeout(openTimerRef.current);
+        // Serialize the history open: concurrent opens leave some unsettled.
+        enqueueOpen(() => {
+          if (cancelled) return Promise.resolve();
+          try {
+            reference = sessions.retain(sessionId, { source: 'controllerOperation', signal: controller.signal });
+            refRef.current = reference;
+            return Promise.resolve(reference.ready).then((b) => {
+              if (cancelled) return;
+              finish();
+              setBinding(b);
+            }, (e) => {
+              if (cancelled) return;
+              finish();
+              setError(String(e));
+            });
+          } catch (e) {
+            finish();
+            setError(String(e));
+            return Promise.resolve();
+          }
+        });
         return () => {
           cancelled = true;
+          clearTimeout(openTimerRef.current);
+          try { controller.abort(); } catch {}
           try { refRef.current?.release(); } catch {}
           refRef.current = null;
           setBinding(null);
         };
-      }, [sessionId, cataloged, sessions]);
+      }, [sessionId, cataloged, sessions, retry]);
 
       // Subscribe to event source.
       const [events, setEvents] = useState([]);
@@ -137,7 +176,13 @@ window.__ModuleLoader__.load({
       };
 
       if (!sessionId) return h('div', { style: { textAlign: 'center', marginTop: 40, color: 'var(--dsw-alias-label-caption, #999)', flex: 1 } }, '从上方选择会话');
-      if (error) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-state-error, #e00)', flex: 1 } }, `加载失败: ${error}`);
+      if (error) return h('div', { style: { padding: 12, flex: 1, color: 'var(--dsw-alias-label-secondary, #888)' } },
+        h('div', { style: { marginBottom: 8 } }, `加载失败: ${error}`),
+        h('button', {
+          style: { ...composerBtnStyle, opacity: 1, alignSelf: 'flex-start' },
+          onClick: () => { setError(null); setBinding(null); setRetry((n) => n + 1); },
+        }, '重试'),
+      );
       if (!cataloged) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '等待会话目录…');
       if (!binding) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '加载中…');
 
@@ -377,17 +422,20 @@ window.__ModuleLoader__.load({
         borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
         color: 'var(--dsw-alias-label-primary, inherit)',
       };
+      // minmax(0, 1fr) on both axes: a bare 1fr resolves its min to auto, so a
+      // long transcript would grow its row past the viewport instead of scrolling.
       const gridStyle = {
         display: 'grid',
-        gridTemplateColumns: `repeat(${gridSize}, 1fr)`,
-        gridTemplateRows: `repeat(${gridSize}, 1fr)`,
+        gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
+        gridTemplateRows: `repeat(${gridSize}, minmax(0, 1fr))`,
         gap: 8, padding: 12,
-        flex: 1, minHeight: 0, overflow: 'auto',
+        flex: 1, minHeight: 0, overflow: 'hidden',
       };
       const btnStyle = {
-        padding: '2px 8px', fontSize: 12, cursor: 'pointer',
-        border: '1px solid var(--dsw-alias-border-l3, #444)',
-        borderRadius: 4, background: 'transparent',
+        padding: '2px 8px', fontSize: 12, lineHeight: '18px', cursor: 'pointer',
+        border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
+        background: 'transparent',
         color: 'var(--dsw-alias-label-primary, inherit)',
       };
 
