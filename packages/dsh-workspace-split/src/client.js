@@ -45,6 +45,26 @@ function saveLayout(gridSize, cells, inSplit) {
   } catch {}
 }
 
+/**
+ * One cell holds either a pinned Session or a Workspace scope that still shows
+ * exactly one Session. Client shapes:
+ * `{ t: 'session', id }` and `{ t: 'workspace', ws, id }`.
+ * Layouts saved before workspace scoping stored a bare Session id, so plain
+ * strings normalize to the Session shape.
+ * @param value - stored cell value.
+ * @returns the normalized cell, or null for an empty cell.
+ */
+function normalizeCell(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string') return { t: 'session', id: value }
+  if (typeof value !== 'object') return null
+  if (value.t === 'session' && typeof value.id === 'string') return { t: 'session', id: value.id }
+  if (value.t === 'workspace' && typeof value.ws === 'string') {
+    return { t: 'workspace', ws: value.ws, id: typeof value.id === 'string' ? value.id : null }
+  }
+  return null
+}
+
 // ---------- Markdown ----------
 // Parsed with the same package set the native renderer uses
 // (mdast-util-from-markdown + gfm + math). Styles are copied from
@@ -1242,23 +1262,30 @@ function CellView(props) {
 // ---------- split grid panel ----------
 function SplitMain(props) {
   const sessions = props.__sessions
+  const workspaces = props.__workspaces
   const subscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions])
   const getSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions])
   const list = useSyncExternalStore(subscribe, getSnapshot)
 
+  const wsSubscribe = useCallback((cb) => workspaces.list.subscribe(cb), [workspaces])
+  const wsSnapshot = useCallback(() => workspaces.list.getSnapshot(), [workspaces])
+  const wsState = useSyncExternalStore(wsSubscribe, wsSnapshot)
+
   const saved = useRef(loadLayout()).current
   const [gridSize, setGridSize] = useState(saved?.gridSize ?? 2)
   const [activeCell, setActiveCell] = useState(0)
+  const [dragOver, setDragOver] = useState(-1)
   const [cells, setCells] = useState(() => {
     const s = saved?.cells ?? []
     const size = (saved?.gridSize ?? 2) ** 2
     const arr = Array(size).fill(null)
-    for (let i = 0; i < Math.min(s.length, size); i++) arr[i] = s[i] ?? null
+    for (let i = 0; i < Math.min(s.length, size); i++) arr[i] = normalizeCell(s[i])
     return arr
   })
 
   const items = list?.ids?.map((id) => list.byId[id]).filter(Boolean) ?? []
   const nonBlank = items.filter((s) => !s.blank)
+  const workspaceItems = wsState?.items ?? []
 
   // Track running state per session for the status dots.
   const runningMap = useRef({})
@@ -1291,13 +1318,43 @@ function SplitMain(props) {
   const maxCells = props.__maxCells ?? DEFAULT_MAX_CELLS
   const total = Math.min(gridSize * gridSize, maxCells)
 
-  const setCell = (idx, sessionId) => {
+  const setCell = (idx, cell) => {
     setCells((prev) => {
       const next = [...prev]
-      next[idx] = sessionId
+      next[idx] = cell
       return next
     })
   }
+
+  /** Sessions of one Workspace, in the Workspace's own order, blanks dropped. */
+  const sessionsOfWorkspace = useCallback((workspaceId) => {
+    const ws = workspaceItems.find((w) => String(w.workspaceId) === workspaceId)
+    if (!ws) return []
+    const ranked = []
+    for (const id of ws.sessionIds ?? []) {
+      const row = list?.byId?.[id]
+      if (row && !row.blank) ranked.push(row)
+    }
+    return ranked
+  }, [workspaceItems, list])
+
+  /**
+   * Resolve one drop into a cell assignment. Both sidebar row kinds publish a
+   * bare id on `text/plain` (a Session id, or a Workspace id for a project
+   * row), so the id is looked up in each catalog: Session first, then Workspace.
+   * @param raw - dataTransfer text.
+   * @returns the cell to assign, or null when the payload belongs to neither.
+   */
+  const cellFromDrop = useCallback((raw) => {
+    const payload = String(raw ?? '').trim()
+    if (!payload) return null
+    if (list?.byId?.[payload]) return { t: 'session', id: payload }
+    const ws = workspaceItems.find((w) => String(w.workspaceId) === payload)
+    if (!ws) return null
+    const workspaceId = String(ws.workspaceId)
+    const first = sessionsOfWorkspace(workspaceId)[0]
+    return { t: 'workspace', ws: workspaceId, id: first?.id ?? null }
+  }, [list, workspaceItems, sessionsOfWorkspace])
 
   useEffect(() => {
     const size = Math.min(gridSize * gridSize, maxCells)
@@ -1312,13 +1369,19 @@ function SplitMain(props) {
     saveLayout(gridSize, cells, window.__dswsInSplit ?? false)
   }, [gridSize, cells])
 
-  // Drop stale references: cells pointing at sessions no longer in the catalog.
+  // Drop stale references: a pinned cell whose Session left the catalog empties,
+  // and a Workspace cell keeps its scope but lets the dead Session go.
   useEffect(() => {
     if (list?.phase !== 'ready') return
     const known = new Set(list.ids ?? [])
     setCells((prev) => {
-      if (prev.every((c) => c === null || known.has(c))) return prev
-      return prev.map((c) => (c !== null && known.has(c) ? c : null))
+      let changed = false
+      const next = prev.map((cell) => {
+        if (cell === null || cell.id === null || known.has(cell.id)) return cell
+        changed = true
+        return cell.t === 'workspace' ? { ...cell, id: null } : null
+      })
+      return changed ? next : prev
     })
   }, [list])
 
@@ -1429,9 +1492,16 @@ function SplitMain(props) {
     ),
     h('div', { style: gridStyle },
       Array.from({ length: total }, (_, i) => {
-        const sid = cells[i]
+        const cell = cells[i]
+        const sid = cell?.id ?? null
         const sess = sid ? nonBlank.find((s) => s.id === sid) : null
         const isActive = i === activeCell
+        const isDragOver = i === dragOver
+        // A Workspace cell offers only that Workspace's Sessions in its picker.
+        const options = cell?.t === 'workspace' ? sessionsOfWorkspace(cell.ws) : nonBlank
+        const wsTitle = cell?.t === 'workspace'
+          ? (workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? '项目')
+          : null
         return h('div', {
           key: i,
           style: {
@@ -1441,8 +1511,31 @@ function SplitMain(props) {
             boxShadow: isActive
               ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
               : 'none',
+            background: isDragOver
+              ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
+              : cellStyle.background,
           },
           onMouseDown: () => setActiveCell(i),
+          // Accept a Sidebar drag: a Session row or a project row.
+          onDragOver: (e) => {
+            e.preventDefault()
+            try {
+              e.dataTransfer.dropEffect = 'move'
+            } catch (_e) {}
+            if (dragOver !== i) setDragOver(i)
+          },
+          onDragLeave: () => setDragOver((current) => (current === i ? -1 : current)),
+          onDrop: (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setDragOver(-1)
+            let raw = ''
+            try {
+              raw = e.dataTransfer?.getData('text/plain') ?? ''
+            } catch (_e) {}
+            const next = cellFromDrop(raw)
+            if (next) setCell(i, next)
+          },
         },
           h('div', {
             style: {
@@ -1459,23 +1552,31 @@ function SplitMain(props) {
             h('select', {
               style: { ...selectStyle, marginLeft: 'auto' },
               value: sid ?? '',
-              onChange: (e) => setCell(i, e.target.value || null),
+              onChange: (e) => {
+                const id = e.target.value || null
+                setCell(i, id === null
+                  ? null
+                  : cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id } : { t: 'session', id })
+              },
             },
-              h('option', { value: '' }, '选择会话…'),
-              nonBlank.map((s) =>
+              h('option', { value: '' }, wsTitle === null ? '选择会话…' : `${wsTitle}（选会话）`),
+              options.map((s) =>
                 h('option', { key: s.id, value: s.id },
                   (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? ' ●' : '')),
               ),
             ),
           ),
-          h(CellView, { sessions, sessionId: sid }),
+          cell?.t === 'workspace' && !sess
+            ? h('div', { style: { flex: 1, padding: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
+                options.length === 0 ? `项目「${wsTitle}」还没有会话` : '从上方选择该项目的会话')
+            : h(CellView, { sessions, sessionId: sid }),
         )
       }),
     ),
   )
 }
 
-export const inject = ['slots', 'layout', 'sessions']
+export const inject = ['slots', 'layout', 'sessions', 'workspaces']
 
 // Config: cell limits. Users override in cordis.patch.yml.
 export function apply(ctx, config) {
@@ -1517,11 +1618,16 @@ export function apply(ctx, config) {
   }, SplitButton))
 
   const sessionsRef = ctx.sessions
+  const workspacesRef = ctx.workspaces
   ctx.slots.inject('main', () => ctx.slots.register({
     name: 'main',
     key: 'split',
   }, function SplitPanel() {
-    return h(SplitMain, { __sessions: sessionsRef, __maxCells: maxCells })
+    return h(SplitMain, {
+      __sessions: sessionsRef,
+      __workspaces: workspacesRef,
+      __maxCells: maxCells,
+    })
   }))
 
   // Auto-enter the split panel after the panel row is registered.
