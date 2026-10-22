@@ -7380,6 +7380,7 @@ var { useState, useEffect, useCallback, useSyncExternalStore, useRef } = import_
 var DEFAULT_MAX_CELLS = 10;
 var DEFAULT_CONFIRM_CELLS = 6;
 var PICKER_MAX = 10;
+var LIMIT_MAX = PICKER_MAX * PICKER_MAX;
 var OPEN_TIMEOUT_MS = 15e3;
 var openChain = Promise.resolve();
 function enqueueOpen(task) {
@@ -7424,9 +7425,43 @@ function fitGeometry(rows, cols, maxCells) {
   }
   return { rows: r, cols: c };
 }
-function configLimit(value, fallback) {
+function clampLimit(value, fallback) {
   const n = Number(value);
-  return Number.isInteger(n) && n >= 1 ? n : fallback;
+  if (!Number.isInteger(n) || n < 1) return fallback;
+  return Math.min(n, LIMIT_MAX);
+}
+function normalizeLimits(value) {
+  const maxCells = clampLimit(value?.maxCells, DEFAULT_MAX_CELLS);
+  return {
+    maxCells,
+    confirmOverCells: Math.min(clampLimit(value?.confirmOverCells, DEFAULT_CONFIRM_CELLS), maxCells)
+  };
+}
+var LIMITS_KEY = "dsws-limits";
+function loadLimits() {
+  try {
+    const raw = localStorage.getItem(LIMITS_KEY);
+    return normalizeLimits(raw ? JSON.parse(raw) : null);
+  } catch {
+    return normalizeLimits(null);
+  }
+}
+var limitsSnapshot = loadLimits();
+var limitListeners = /* @__PURE__ */ new Set();
+function subscribeLimits(listener) {
+  limitListeners.add(listener);
+  return () => limitListeners.delete(listener);
+}
+function getLimits() {
+  return limitsSnapshot;
+}
+function updateLimits(patch) {
+  limitsSnapshot = normalizeLimits({ ...limitsSnapshot, ...patch });
+  try {
+    localStorage.setItem(LIMITS_KEY, JSON.stringify(limitsSnapshot));
+  } catch {
+  }
+  for (const listener of limitListeners) listener();
 }
 function normalizeCell(value) {
   if (value === null || value === void 0) return null;
@@ -8535,11 +8570,12 @@ var pickerStyles = {
   }),
   caret: { fontSize: 8, opacity: 0.7 },
   panel: {
-    position: "absolute",
-    top: "calc(100% + 8px)",
-    right: 0,
+    position: "fixed",
     zIndex: 60,
     width: 240,
+    maxWidth: "calc(100vw - 16px)",
+    maxHeight: "calc(100vh - 16px)",
+    overflow: "auto",
     boxSizing: "border-box",
     padding: "12px 12px 10px",
     border: "0.5px solid var(--dsw-alias-border-l2, #555)",
@@ -8668,16 +8704,37 @@ var pickerDialogStyles = {
     color: primary ? "#fff" : "var(--dsw-alias-label-primary, inherit)"
   })
 };
+function keepDialogFocus(event, card) {
+  if (event.key !== "Tab" || card === null) return;
+  const buttons = [...card.querySelectorAll("button")];
+  if (buttons.length === 0) return;
+  const first = buttons[0];
+  const last = buttons[buttons.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 function GridDialog(props) {
   const cancelRef = useRef(null);
+  const cardRef = useRef(null);
+  const onCancelRef = useRef(props.onCancel);
+  onCancelRef.current = props.onCancel;
   useEffect(() => {
     cancelRef.current?.focus();
     const onKey = (event) => {
-      if (event.key === "Escape") props.onCancel();
+      if (event.key === "Escape") {
+        onCancelRef.current();
+        return;
+      }
+      keepDialogFocus(event, cardRef.current);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [props.onCancel]);
+  }, []);
   return h(
     "div",
     {
@@ -8689,6 +8746,7 @@ function GridDialog(props) {
     h(
       "div",
       {
+        ref: cardRef,
         role: "dialog",
         "aria-modal": "true",
         "aria-label": props.title,
@@ -8722,10 +8780,8 @@ function GridPickerDialog(props) {
   if (dialog.kind === "unlock") {
     return h(GridDialog, {
       title: `\u9700\u8981\u89E3\u9501 ${count} \u683C`,
-      body: `\u5355\u4E2A\u754C\u9762\u9ED8\u8BA4\u6700\u591A ${maxCells} \u683C\u3002\u8981\u4F7F\u7528 ${count} \u683C\uFF0C\u9700\u8981\u5148\u5728\u63D2\u4EF6\u914D\u7F6E\u91CC\u89E3\u9501\u4E0A\u9650\u3002`,
-      note: "\u6253\u5F00 cordis.patch.yml\uFF0C\u628A config.maxCells \u8C03\u5230\u4E0B\u9762\u7684\u6570\u503C\uFF0C\u4FDD\u5B58\u540E\u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002",
-      code: `config:
-  maxCells: ${count}`,
+      body: `\u5355\u4E2A\u754C\u9762\u9ED8\u8BA4\u6700\u591A ${maxCells} \u683C\u3002\u8981\u4F7F\u7528 ${count} \u683C\uFF0C\u9700\u8981\u5148\u5728\u8BBE\u7F6E\u91CC\u89E3\u9501\u4E0A\u9650\u3002`,
+      note: `\u6253\u5F00 \u8BBE\u7F6E \u2192 \u901A\u7528 \u2192 \u5206\u5C4F\u7F51\u683C\uFF0C\u628A\u300C\u6700\u591A\u683C\u5B50\u6570\u300D\u8C03\u5230 ${count} \u6216\u66F4\u5927\uFF1B\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002`,
       confirmLabel: "\u77E5\u9053\u4E86",
       onCancel,
       onConfirm
@@ -8741,13 +8797,13 @@ function GridPickerDialog(props) {
   });
 }
 function GridChoiceGrid(props) {
-  const { preview, maxCells, confirmCells, onPreview, onChoose } = props;
+  const { preview, maxCells, confirmCells, onPreview, onChoose, focusTick } = props;
   const gridRef = useRef(null);
   const previewCount = preview.rows * preview.cols;
   const tone = previewCount > maxCells ? "blocked" : previewCount > confirmCells ? "confirm" : "active";
   useEffect(() => {
     gridRef.current?.focus();
-  }, []);
+  }, [focusTick]);
   const onKeyDown = (event) => {
     const delta = {
       ArrowUp: [-1, 0],
@@ -8795,7 +8851,7 @@ function GridChoiceGrid(props) {
   }, cells);
 }
 function pickerHint(blocked, confirm, maxCells, confirmCells) {
-  if (blocked) return { tone: "warn", text: `\u8D85\u8FC7\u4E0A\u9650 ${maxCells} \u683C\uFF0C\u9700\u5728\u914D\u7F6E\u4E2D\u89E3\u9501` };
+  if (blocked) return { tone: "warn", text: `\u8D85\u8FC7\u4E0A\u9650 ${maxCells} \u683C\uFF0C\u53BB\u8BBE\u7F6E\u89E3\u9501` };
   if (confirm) return { tone: "warn", text: `\u8D85\u8FC7 ${confirmCells} \u683C\uFF0C\u786E\u8BA4\u540E\u7EE7\u7EED` };
   return { tone: "muted", text: `\u5EFA\u8BAE\u4E0D\u8D85\u8FC7 ${confirmCells} \u683C` };
 }
@@ -8804,6 +8860,8 @@ function GridPicker(props) {
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState(null);
   const [dialog, setDialog] = useState(null);
+  const [anchor, setAnchor] = useState(null);
+  const [focusTick, setFocusTick] = useState(0);
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const shown = preview ?? { rows, cols };
@@ -8811,10 +8869,24 @@ function GridPicker(props) {
   const blocked = count > maxCells;
   const confirm = !blocked && count > confirmCells;
   const hint = pickerHint(blocked, confirm, maxCells, confirmCells);
+  const place = useCallback(() => {
+    const el = triggerRef.current;
+    if (el === null) return;
+    const rect = el.getBoundingClientRect();
+    const panelWidth = 240;
+    const panelHeight = 320;
+    const top = rect.bottom + 8 + panelHeight <= window.innerHeight ? rect.bottom + 8 : Math.max(8, window.innerHeight - panelHeight - 8);
+    const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
+    setAnchor({ top, left });
+  }, []);
   const close = useCallback((refocus) => {
     setOpen(false);
     setPreview(null);
     if (refocus) triggerRef.current?.focus();
+  }, []);
+  const closeDialog = useCallback(() => {
+    setDialog(null);
+    setFocusTick((value) => value + 1);
   }, []);
   useEffect(() => {
     if (!open) return void 0;
@@ -8823,15 +8895,20 @@ function GridPicker(props) {
       close(false);
     };
     const onKey = (event) => {
-      if (event.key === "Escape" && dialog === null) close(false);
+      if (event.key === "Escape" && dialog === null) close(true);
     };
+    const onReflow = () => place();
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
     return () => {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
     };
-  }, [open, dialog, close]);
+  }, [open, dialog, close, place]);
   const commit = useCallback((nextRows, nextCols) => {
     onApply(nextRows, nextCols);
     setDialog(null);
@@ -8853,10 +8930,10 @@ function GridPicker(props) {
     dialog,
     maxCells,
     confirmCells,
-    onCancel: () => setDialog(null),
+    onCancel: closeDialog,
     onConfirm: () => {
       if (dialog.kind === "confirm") commit(dialog.rows, dialog.cols);
-      else setDialog(null);
+      else closeDialog();
     }
   });
   return h(
@@ -8872,6 +8949,7 @@ function GridPicker(props) {
         "aria-expanded": open,
         title: `\u5F53\u524D ${rows} \u884C \xD7 ${cols} \u5217\uFF0C\u70B9\u51FB\u9009\u62E9\u7F51\u683C\u5927\u5C0F`,
         onClick: () => {
+          if (!open) place();
           setOpen((value) => !value);
           setPreview(null);
           setDialog(null);
@@ -8885,7 +8963,11 @@ function GridPicker(props) {
       {
         role: "dialog",
         "aria-label": "\u9009\u62E9\u7F51\u683C\u5927\u5C0F",
-        style: pickerStyles.panel
+        style: {
+          ...pickerStyles.panel,
+          top: anchor === null ? 0 : anchor.top,
+          left: anchor === null ? 0 : anchor.left
+        }
       },
       h(
         "div",
@@ -8897,6 +8979,7 @@ function GridPicker(props) {
         preview: shown,
         maxCells,
         confirmCells,
+        focusTick,
         onPreview: setPreview,
         onChoose: choose
       }),
@@ -8914,9 +8997,10 @@ function SplitMain(props) {
   const wsSubscribe = useCallback((cb) => workspaces.list.subscribe(cb), [workspaces]);
   const wsSnapshot = useCallback(() => workspaces.list.getSnapshot(), [workspaces]);
   const wsState = useSyncExternalStore(wsSubscribe, wsSnapshot);
+  const limits = useSyncExternalStore(subscribeLimits, getLimits);
+  const maxCells = limits.maxCells;
+  const confirmCells = limits.confirmOverCells;
   const saved = useRef(loadLayout()).current;
-  const maxCells = props.__maxCells ?? DEFAULT_MAX_CELLS;
-  const confirmCells = props.__confirmCells ?? DEFAULT_CONFIRM_CELLS;
   const [geometry, setGeometry] = useState(() => {
     const start = savedGeometry(saved);
     return fitGeometry(start.rows, start.cols, maxCells);
@@ -8926,9 +9010,9 @@ function SplitMain(props) {
   const [dragOver, setDragOver] = useState(-1);
   const [cells, setCells] = useState(() => {
     const s = saved?.cells ?? [];
-    const size = geometry.rows * geometry.cols;
+    const size = Math.max(geometry.rows * geometry.cols, s.length);
     const arr = Array(size).fill(null);
-    for (let i = 0; i < Math.min(s.length, size); i++) arr[i] = normalizeCell(s[i]);
+    for (let i = 0; i < s.length; i++) arr[i] = normalizeCell(s[i]);
     return arr;
   });
   const items = list2?.ids?.map((id) => list2.byId[id]).filter(Boolean) ?? [];
@@ -8961,6 +9045,13 @@ function SplitMain(props) {
       }
     });
   }, [nonBlank.length]);
+  useEffect(() => {
+    setGeometry((prev) => {
+      const fitted = fitGeometry(prev.rows, prev.cols, maxCells);
+      if (fitted.rows === prev.rows && fitted.cols === prev.cols) return prev;
+      return fitted;
+    });
+  }, [maxCells]);
   const total = rows * cols;
   const applyGeometry = useCallback((nextRows, nextCols) => {
     setGeometry(fitGeometry(nextRows, nextCols, maxCells));
@@ -8995,10 +9086,8 @@ function SplitMain(props) {
   useEffect(() => {
     const size = rows * cols;
     setCells((prev) => {
-      if (prev.length === size) return prev;
-      const next = Array(size).fill(null);
-      for (let i = 0; i < Math.min(prev.length, size); i++) next[i] = prev[i];
-      return next;
+      if (prev.length >= size) return prev;
+      return [...prev, ...Array(size - prev.length).fill(null)];
     });
     setActiveCell((prev) => Math.min(prev, size - 1));
   }, [rows, cols]);
@@ -9215,13 +9304,92 @@ function SplitMain(props) {
     )
   );
 }
-var inject = ["slots", "layout", "sessions", "workspaces"];
-function apply(ctx, config) {
-  const maxCells = configLimit(config?.maxCells, DEFAULT_MAX_CELLS);
-  const confirmCells = Math.min(
-    configLimit(config?.confirmOverCells, DEFAULT_CONFIRM_CELLS),
-    maxCells
+var limitsRowStyles = {
+  row: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 12,
+    padding: "10px 0",
+    fontSize: 13,
+    color: "var(--dsw-alias-label-primary, inherit)"
+  },
+  label: { fontWeight: 500, minWidth: 96 },
+  field: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 12,
+    color: "var(--dsw-alias-label-secondary, #999)"
+  },
+  input: {
+    width: 64,
+    padding: "3px 6px",
+    boxSizing: "border-box",
+    fontSize: 13,
+    background: "var(--dsw-specific-input-major, transparent)",
+    color: "var(--dsw-alias-label-primary, inherit)",
+    border: "0.5px solid var(--dsw-alias-border-l2, #555)",
+    borderRadius: "var(--dsw-radius-sm, 6px)"
+  },
+  hint: {
+    flexBasis: "100%",
+    fontSize: 12,
+    lineHeight: "18px",
+    color: "var(--dsw-alias-label-caption, #999)"
+  }
+};
+function LimitsRow() {
+  const limits = useSyncExternalStore(subscribeLimits, getLimits);
+  const setMax = (event) => {
+    const value = Number(event.target.value);
+    if (Number.isInteger(value) && value >= 1) updateLimits({ maxCells: value });
+  };
+  const setConfirm = (event) => {
+    const value = Number(event.target.value);
+    if (Number.isInteger(value) && value >= 1) updateLimits({ confirmOverCells: value });
+  };
+  return h(
+    "div",
+    { style: limitsRowStyles.row },
+    h("span", { style: limitsRowStyles.label }, "\u5206\u5C4F\u7F51\u683C"),
+    h(
+      "label",
+      { style: limitsRowStyles.field },
+      "\u6700\u591A\u683C\u5B50\u6570",
+      h("input", {
+        type: "number",
+        min: 1,
+        max: LIMIT_MAX,
+        step: 1,
+        value: limits.maxCells,
+        onChange: setMax,
+        style: limitsRowStyles.input
+      })
+    ),
+    h(
+      "label",
+      { style: limitsRowStyles.field },
+      "\u8D85\u8FC7\u6B64\u6570\u987B\u786E\u8BA4",
+      h("input", {
+        type: "number",
+        min: 1,
+        max: LIMIT_MAX,
+        step: 1,
+        value: limits.confirmOverCells,
+        onChange: setConfirm,
+        style: limitsRowStyles.input
+      })
+    ),
+    h(
+      "span",
+      { style: limitsRowStyles.hint },
+      "\u9ED8\u8BA4\u6700\u591A 10 \u683C\uFF1B\u8C03\u5230 10 \u4EE5\u4E0A\u5373\u89E3\u9501\u3002\u4FEE\u6539\u7ACB\u5373\u751F\u6548\u3002"
+    )
   );
+}
+var inject = ["slots", "layout", "sessions", "workspaces"];
+function apply(ctx) {
   const saved = loadLayout();
   let inSplit = saved?.inSplit ?? false;
   window.__dswsInSplit = inSplit;
@@ -9234,7 +9402,7 @@ function apply(ctx, config) {
     }
     const cur = loadLayout() ?? {};
     const start = savedGeometry(cur);
-    const geo = fitGeometry(start.rows, start.cols, maxCells);
+    const geo = fitGeometry(start.rows, start.cols, getLimits().maxCells);
     saveLayout(geo.rows, geo.cols, cur.cells ?? [], inSplit);
   };
   ctx.effect(() => () => {
@@ -9256,6 +9424,11 @@ function apply(ctx, config) {
     id: "workspace-split-btn-hero",
     order: 5
   }, SplitButton));
+  ctx.slots.inject("settings.general.item", () => ctx.slots.register({
+    name: "settings.general.item",
+    id: "workspace-split-limits",
+    order: 30
+  }, LimitsRow));
   const sessionsRef = ctx.sessions;
   const workspacesRef = ctx.workspaces;
   ctx.slots.inject("main", () => ctx.slots.register({
@@ -9264,9 +9437,7 @@ function apply(ctx, config) {
   }, function SplitPanel() {
     return h(SplitMain, {
       __sessions: sessionsRef,
-      __workspaces: workspacesRef,
-      __maxCells: maxCells,
-      __confirmCells: confirmCells
+      __workspaces: workspacesRef
     });
   }));
   if (inSplit) {

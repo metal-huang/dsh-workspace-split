@@ -18,12 +18,15 @@ const { useState, useEffect, useCallback, useSyncExternalStore, useRef } = React
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
 // extra tile retains another live Session, so seven to ten ask for a
-// confirmation first, and going past ten requires raising `maxCells` in the
-// plugin config (cordis.patch.yml) — the picker points users there.
+// confirmation first, and going past ten requires raising the limit in
+// Settings (General → Split grid). DSH does not hand plugin config to the
+// browser half, so the limit lives in localStorage instead of cordis.patch.yml.
 const DEFAULT_MAX_CELLS = 10
 const DEFAULT_CONFIRM_CELLS = 6
 /** Largest row or column count the picker offers. */
 const PICKER_MAX = 10
+/** Upper bound of the user-editable limit. */
+const LIMIT_MAX = PICKER_MAX * PICKER_MAX
 /** Bound for one retained Session's initial history open (see CellView). */
 const OPEN_TIMEOUT_MS = 15000
 
@@ -79,10 +82,50 @@ function fitGeometry(rows, cols, maxCells) {
   return { rows: r, cols: c }
 }
 
-/** Coerce a configured cell limit to a positive integer. */
-function configLimit(value, fallback) {
+/** Coerce a limit to a positive integer, capped to the picker's range. */
+function clampLimit(value, fallback) {
   const n = Number(value)
-  return Number.isInteger(n) && n >= 1 ? n : fallback
+  if (!Number.isInteger(n) || n < 1) return fallback
+  return Math.min(n, LIMIT_MAX)
+}
+
+/** Normalize one { maxCells, confirmOverCells } pair; confirm never exceeds max. */
+function normalizeLimits(value) {
+  const maxCells = clampLimit(value?.maxCells, DEFAULT_MAX_CELLS)
+  return {
+    maxCells,
+    confirmOverCells: Math.min(clampLimit(value?.confirmOverCells, DEFAULT_CONFIRM_CELLS), maxCells),
+  }
+}
+
+const LIMITS_KEY = 'dsws-limits'
+function loadLimits() {
+  try {
+    const raw = localStorage.getItem(LIMITS_KEY)
+    return normalizeLimits(raw ? JSON.parse(raw) : null)
+  } catch {
+    return normalizeLimits(null)
+  }
+}
+
+// The split panel, the picker and the Settings row all read this one snapshot,
+// so raising the cap in Settings takes effect without a reload.
+let limitsSnapshot = loadLimits()
+const limitListeners = new Set()
+
+function subscribeLimits(listener) {
+  limitListeners.add(listener)
+  return () => limitListeners.delete(listener)
+}
+function getLimits() {
+  return limitsSnapshot
+}
+function updateLimits(patch) {
+  limitsSnapshot = normalizeLimits({ ...limitsSnapshot, ...patch })
+  try {
+    localStorage.setItem(LIMITS_KEY, JSON.stringify(limitsSnapshot))
+  } catch {}
+  for (const listener of limitListeners) listener()
 }
 
 /**
@@ -1321,11 +1364,12 @@ const pickerStyles = {
   }),
   caret: { fontSize: 8, opacity: 0.7 },
   panel: {
-    position: 'absolute',
-    top: 'calc(100% + 8px)',
-    right: 0,
+    position: 'fixed',
     zIndex: 60,
     width: 240,
+    maxWidth: 'calc(100vw - 16px)',
+    maxHeight: 'calc(100vh - 16px)',
+    overflow: 'auto',
     boxSizing: 'border-box',
     padding: '12px 12px 10px',
     border: '0.5px solid var(--dsw-alias-border-l2, #555)',
@@ -1458,21 +1502,45 @@ const pickerDialogStyles = {
   }),
 }
 
+/** Keep Tab and Shift+Tab inside a two-button dialog. */
+function keepDialogFocus(event, card) {
+  if (event.key !== 'Tab' || card === null) return
+  const buttons = [...card.querySelectorAll('button')]
+  if (buttons.length === 0) return
+  const first = buttons[0]
+  const last = buttons[buttons.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
 /**
  * Modal used by the picker for the two limit gates: 7–10 cells need an explicit
- * "may lag" confirmation, and more than the configured cap points at the config
- * file instead of applying.
+ * "may lag" confirmation, and more than the current cap points at Settings
+ * instead of applying.
  */
 function GridDialog(props) {
   const cancelRef = useRef(null)
+  const cardRef = useRef(null)
+  // Live re-renders must not steal focus back from the confirm button.
+  const onCancelRef = useRef(props.onCancel)
+  onCancelRef.current = props.onCancel
   useEffect(() => {
     cancelRef.current?.focus()
     const onKey = (event) => {
-      if (event.key === 'Escape') props.onCancel()
+      if (event.key === 'Escape') {
+        onCancelRef.current()
+        return
+      }
+      keepDialogFocus(event, cardRef.current)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [props.onCancel])
+  }, [])
 
   return h('div', {
     style: pickerDialogStyles.backdrop,
@@ -1481,6 +1549,7 @@ function GridDialog(props) {
     },
   },
     h('div', {
+      ref: cardRef,
       role: 'dialog',
       'aria-modal': 'true',
       'aria-label': props.title,
@@ -1514,9 +1583,8 @@ function GridPickerDialog(props) {
   if (dialog.kind === 'unlock') {
     return h(GridDialog, {
       title: `需要解锁 ${count} 格`,
-      body: `单个界面默认最多 ${maxCells} 格。要使用 ${count} 格，需要先在插件配置里解锁上限。`,
-      note: '打开 cordis.patch.yml，把 config.maxCells 调到下面的数值，保存后重新加载插件。',
-      code: `config:\n  maxCells: ${count}`,
+      body: `单个界面默认最多 ${maxCells} 格。要使用 ${count} 格，需要先在设置里解锁上限。`,
+      note: `打开 设置 → 通用 → 分屏网格，把「最多格子数」调到 ${count} 或更大；改完立即生效。`,
       confirmLabel: '知道了',
       onCancel,
       onConfirm,
@@ -1534,13 +1602,13 @@ function GridPickerDialog(props) {
 
 /** 10 × 10 hoverable square grid; arrows move the preview, Enter applies it. */
 function GridChoiceGrid(props) {
-  const { preview, maxCells, confirmCells, onPreview, onChoose } = props
+  const { preview, maxCells, confirmCells, onPreview, onChoose, focusTick } = props
   const gridRef = useRef(null)
   const previewCount = preview.rows * preview.cols
   const tone = previewCount > maxCells ? 'blocked' : previewCount > confirmCells ? 'confirm' : 'active'
   useEffect(() => {
     gridRef.current?.focus()
-  }, [])
+  }, [focusTick])
 
   const onKeyDown = (event) => {
     const delta = {
@@ -1593,20 +1661,22 @@ function GridChoiceGrid(props) {
 
 /** Hint line: what clicking the highlighted block will do. */
 function pickerHint(blocked, confirm, maxCells, confirmCells) {
-  if (blocked) return { tone: 'warn', text: `超过上限 ${maxCells} 格，需在配置中解锁` }
+  if (blocked) return { tone: 'warn', text: `超过上限 ${maxCells} 格，去设置解锁` }
   if (confirm) return { tone: 'warn', text: `超过 ${confirmCells} 格，确认后继续` }
   return { tone: 'muted', text: `建议不超过 ${confirmCells} 格` }
 }
 
 /**
  * Toolbar trigger plus its popover. Enforces the two-stage limit: silent up to
- * `confirmCells`, confirm up to `maxCells`, config unlock beyond.
+ * `confirmCells`, confirm up to `maxCells`, Settings unlock beyond.
  */
 function GridPicker(props) {
   const { rows, cols, maxCells, confirmCells, onApply } = props
   const [open, setOpen] = useState(false)
   const [preview, setPreview] = useState(null)
   const [dialog, setDialog] = useState(null)
+  const [anchor, setAnchor] = useState(null)
+  const [focusTick, setFocusTick] = useState(0)
   const wrapRef = useRef(null)
   const triggerRef = useRef(null)
   const shown = preview ?? { rows, cols }
@@ -1615,10 +1685,31 @@ function GridPicker(props) {
   const confirm = !blocked && count > confirmCells
   const hint = pickerHint(blocked, confirm, maxCells, confirmCells)
 
+  // Fixed positioning escapes the main column's overflow:hidden, which would
+  // otherwise clip the lower rows (the 7–10 range) in a short window.
+  const place = useCallback(() => {
+    const el = triggerRef.current
+    if (el === null) return
+    const rect = el.getBoundingClientRect()
+    const panelWidth = 240
+    const panelHeight = 320
+    const top = rect.bottom + 8 + panelHeight <= window.innerHeight
+      ? rect.bottom + 8
+      : Math.max(8, window.innerHeight - panelHeight - 8)
+    const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8))
+    setAnchor({ top, left })
+  }, [])
+
   const close = useCallback((refocus) => {
     setOpen(false)
     setPreview(null)
     if (refocus) triggerRef.current?.focus()
+  }, [])
+
+  const closeDialog = useCallback(() => {
+    setDialog(null)
+    // Put the keyboard back on the grid so arrows/Enter keep working.
+    setFocusTick((value) => value + 1)
   }, [])
 
   useEffect(() => {
@@ -1628,15 +1719,20 @@ function GridPicker(props) {
       close(false)
     }
     const onKey = (event) => {
-      if (event.key === 'Escape' && dialog === null) close(false)
+      if (event.key === 'Escape' && dialog === null) close(true)
     }
+    const onReflow = () => place()
     document.addEventListener('mousedown', onPointerDown)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onReflow)
+    window.addEventListener('scroll', onReflow, true)
     return () => {
       document.removeEventListener('mousedown', onPointerDown)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onReflow)
+      window.removeEventListener('scroll', onReflow, true)
     }
-  }, [open, dialog, close])
+  }, [open, dialog, close, place])
 
   const commit = useCallback((nextRows, nextCols) => {
     onApply(nextRows, nextCols)
@@ -1662,10 +1758,10 @@ function GridPicker(props) {
     dialog,
     maxCells,
     confirmCells,
-    onCancel: () => setDialog(null),
+    onCancel: closeDialog,
     onConfirm: () => {
       if (dialog.kind === 'confirm') commit(dialog.rows, dialog.cols)
-      else setDialog(null)
+      else closeDialog()
     },
   })
 
@@ -1678,6 +1774,7 @@ function GridPicker(props) {
       'aria-expanded': open,
       title: `当前 ${rows} 行 × ${cols} 列，点击选择网格大小`,
       onClick: () => {
+        if (!open) place()
         setOpen((value) => !value)
         setPreview(null)
         setDialog(null)
@@ -1689,7 +1786,11 @@ function GridPicker(props) {
     open ? h('div', {
       role: 'dialog',
       'aria-label': '选择网格大小',
-      style: pickerStyles.panel,
+      style: {
+        ...pickerStyles.panel,
+        top: anchor === null ? 0 : anchor.top,
+        left: anchor === null ? 0 : anchor.left,
+      },
     },
       h('div', { style: pickerStyles.caption },
         `${shown.rows} 行 × ${shown.cols} 列`,
@@ -1699,6 +1800,7 @@ function GridPicker(props) {
         preview: shown,
         maxCells,
         confirmCells,
+        focusTick,
         onPreview: setPreview,
         onChoose: choose,
       }),
@@ -1720,9 +1822,10 @@ function SplitMain(props) {
   const wsSnapshot = useCallback(() => workspaces.list.getSnapshot(), [workspaces])
   const wsState = useSyncExternalStore(wsSubscribe, wsSnapshot)
 
+  const limits = useSyncExternalStore(subscribeLimits, getLimits)
+  const maxCells = limits.maxCells
+  const confirmCells = limits.confirmOverCells
   const saved = useRef(loadLayout()).current
-  const maxCells = props.__maxCells ?? DEFAULT_MAX_CELLS
-  const confirmCells = props.__confirmCells ?? DEFAULT_CONFIRM_CELLS
   const [geometry, setGeometry] = useState(() => {
     const start = savedGeometry(saved)
     return fitGeometry(start.rows, start.cols, maxCells)
@@ -1732,9 +1835,11 @@ function SplitMain(props) {
   const [dragOver, setDragOver] = useState(-1)
   const [cells, setCells] = useState(() => {
     const s = saved?.cells ?? []
-    const size = geometry.rows * geometry.cols
+    // Keep assignments that the current (smaller) grid hides, so shrinking and
+    // growing again does not silently throw away pinned sessions.
+    const size = Math.max(geometry.rows * geometry.cols, s.length)
     const arr = Array(size).fill(null)
-    for (let i = 0; i < Math.min(s.length, size); i++) arr[i] = normalizeCell(s[i])
+    for (let i = 0; i < s.length; i++) arr[i] = normalizeCell(s[i])
     return arr
   })
 
@@ -1768,6 +1873,15 @@ function SplitMain(props) {
       } catch {}
     })
   }, [nonBlank.length])
+
+  // Lowering the cap in Settings shrinks an oversized grid to fit.
+  useEffect(() => {
+    setGeometry((prev) => {
+      const fitted = fitGeometry(prev.rows, prev.cols, maxCells)
+      if (fitted.rows === prev.rows && fitted.cols === prev.cols) return prev
+      return fitted
+    })
+  }, [maxCells])
 
   const total = rows * cols
 
@@ -1816,10 +1930,9 @@ function SplitMain(props) {
   useEffect(() => {
     const size = rows * cols
     setCells((prev) => {
-      if (prev.length === size) return prev
-      const next = Array(size).fill(null)
-      for (let i = 0; i < Math.min(prev.length, size); i++) next[i] = prev[i]
-      return next
+      // Never truncate: hidden assignments come back when the grid grows again.
+      if (prev.length >= size) return prev
+      return [...prev, ...Array(size - prev.length).fill(null)]
     })
     setActiveCell((prev) => Math.min(prev, size - 1))
   }, [rows, cols])
@@ -2033,15 +2146,88 @@ function SplitMain(props) {
   )
 }
 
+// ---------- settings row ----------
+const limitsRowStyles = {
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
+    padding: '10px 0',
+    fontSize: 13,
+    color: 'var(--dsw-alias-label-primary, inherit)',
+  },
+  label: { fontWeight: 500, minWidth: 96 },
+  field: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    fontSize: 12,
+    color: 'var(--dsw-alias-label-secondary, #999)',
+  },
+  input: {
+    width: 64,
+    padding: '3px 6px',
+    boxSizing: 'border-box',
+    fontSize: 13,
+    background: 'var(--dsw-specific-input-major, transparent)',
+    color: 'var(--dsw-alias-label-primary, inherit)',
+    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+  },
+  hint: {
+    flexBasis: '100%',
+    fontSize: 12,
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-caption, #999)',
+  },
+}
+
+/** General-settings row: the only place the hard cap above ten is unlocked. */
+function LimitsRow() {
+  const limits = useSyncExternalStore(subscribeLimits, getLimits)
+  const setMax = (event) => {
+    const value = Number(event.target.value)
+    if (Number.isInteger(value) && value >= 1) updateLimits({ maxCells: value })
+  }
+  const setConfirm = (event) => {
+    const value = Number(event.target.value)
+    if (Number.isInteger(value) && value >= 1) updateLimits({ confirmOverCells: value })
+  }
+  return h('div', { style: limitsRowStyles.row },
+    h('span', { style: limitsRowStyles.label }, '分屏网格'),
+    h('label', { style: limitsRowStyles.field },
+      '最多格子数',
+      h('input', {
+        type: 'number',
+        min: 1,
+        max: LIMIT_MAX,
+        step: 1,
+        value: limits.maxCells,
+        onChange: setMax,
+        style: limitsRowStyles.input,
+      }),
+    ),
+    h('label', { style: limitsRowStyles.field },
+      '超过此数须确认',
+      h('input', {
+        type: 'number',
+        min: 1,
+        max: LIMIT_MAX,
+        step: 1,
+        value: limits.confirmOverCells,
+        onChange: setConfirm,
+        style: limitsRowStyles.input,
+      }),
+    ),
+    h('span', { style: limitsRowStyles.hint },
+      '默认最多 10 格；调到 10 以上即解锁。修改立即生效。'),
+  )
+}
+
 export const inject = ['slots', 'layout', 'sessions', 'workspaces']
 
-// Config: cell limits. Users override in cordis.patch.yml.
-export function apply(ctx, config) {
-  const maxCells = configLimit(config?.maxCells, DEFAULT_MAX_CELLS)
-  const confirmCells = Math.min(
-    configLimit(config?.confirmOverCells, DEFAULT_CONFIRM_CELLS),
-    maxCells,
-  )
+export function apply(ctx) {
   // Restore split state from the previous page load.
   const saved = loadLayout()
   let inSplit = saved?.inSplit ?? false
@@ -2055,7 +2241,7 @@ export function apply(ctx, config) {
     } catch (_e) {}
     const cur = loadLayout() ?? {}
     const start = savedGeometry(cur)
-    const geo = fitGeometry(start.rows, start.cols, maxCells)
+    const geo = fitGeometry(start.rows, start.cols, getLimits().maxCells)
     saveLayout(geo.rows, geo.cols, cur.cells ?? [], inSplit)
   }
   ctx.effect(() => () => {
@@ -2080,6 +2266,14 @@ export function apply(ctx, config) {
     order: 5,
   }, SplitButton))
 
+  // The browser half cannot read cordis.patch.yml, so the cap lives in General
+  // settings; this row is the unlock entry the picker points at.
+  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+    name: 'settings.general.item',
+    id: 'workspace-split-limits',
+    order: 30,
+  }, LimitsRow))
+
   const sessionsRef = ctx.sessions
   const workspacesRef = ctx.workspaces
   ctx.slots.inject('main', () => ctx.slots.register({
@@ -2089,8 +2283,6 @@ export function apply(ctx, config) {
     return h(SplitMain, {
       __sessions: sessionsRef,
       __workspaces: workspacesRef,
-      __maxCells: maxCells,
-      __confirmCells: confirmCells,
     })
   }))
 
