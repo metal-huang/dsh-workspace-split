@@ -43,9 +43,15 @@ window.__ModuleLoader__.load({
       const bodyRef = useRef(null);
       const textareaRef = useRef(null);
 
-      // Retain session.
+      // Wait until the session appears in the host catalog before retaining.
+      const catalogSubscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions]);
+      const catalogSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions]);
+      const catalog = useSyncExternalStore(catalogSubscribe, catalogSnapshot);
+      const cataloged = !!sessionId && !!catalog?.ids?.includes(sessionId);
+
+      // Retain session once catalogued.
       useEffect(() => {
-        if (!sessionId) { setBinding(null); setError(null); return; }
+        if (!sessionId || !cataloged) { if (!sessionId) { setBinding(null); setError(null); } return; }
         let cancelled = false;
         let reference = null;
         try {
@@ -60,7 +66,7 @@ window.__ModuleLoader__.load({
           refRef.current = null;
           setBinding(null);
         };
-      }, [sessionId, sessions]);
+      }, [sessionId, cataloged, sessions]);
 
       // Subscribe to event source.
       const [events, setEvents] = useState([]);
@@ -107,7 +113,9 @@ window.__ModuleLoader__.load({
 
       if (!sessionId) return h('div', { style: { textAlign: 'center', marginTop: 40, color: 'var(--dsw-alias-label-caption, #999)', flex: 1 } }, '从上方选择会话');
       if (error) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-state-error, #e00)', flex: 1 } }, `加载失败: ${error}`);
+      if (!cataloged) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '等待会话目录…');
       if (!binding) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '加载中…');
+
 
       const visible = events.slice(-80);
       return h(React.Fragment, null,
@@ -182,11 +190,33 @@ window.__ModuleLoader__.load({
     };
 
     function eventStyle(kind) {
-      const base = { padding: '4px 8px', marginBottom: 4, borderRadius: 4, wordBreak: 'break-word', whiteSpace: 'pre-wrap' };
-      if (kind === 'user') return { ...base, background: 'var(--dsw-alias-bg-elevated, #2a2a2a)', color: 'var(--dsw-alias-label-primary, #eee)' };
-      if (kind === 'assistant') return { ...base, color: 'var(--dsw-alias-label-primary, #eee)' };
-      if (kind === 'tool') return { ...base, color: 'var(--dsw-alias-label-secondary, #888)', fontStyle: 'italic' };
-      if (kind === 'divider') return { ...base, textAlign: 'center', color: 'var(--dsw-alias-label-caption, #999)', fontSize: 11 };
+      const base = {
+        padding: '6px 10px', marginBottom: 6, borderRadius: 8,
+        wordBreak: 'break-word', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.55,
+        maxWidth: '88%',
+      };
+      if (kind === 'user') return {
+        ...base, marginLeft: 'auto', marginRight: 0,
+        background: 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)',
+        color: 'var(--dsw-alias-label-primary, #eee)',
+        borderBottomRightRadius: 2,
+      };
+      if (kind === 'assistant') return {
+        ...base, marginRight: 'auto', marginLeft: 0,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary, #eee)',
+        border: '1px solid var(--dsw-alias-border-l3, #3a3a3a)',
+        borderBottomLeftRadius: 2,
+      };
+      if (kind === 'tool') return {
+        ...base, color: 'var(--dsw-alias-label-secondary, #888)',
+        fontStyle: 'italic', fontSize: 12, fontFamily: 'var(--ds-font-family-code, monospace)',
+      };
+      if (kind === 'divider') return {
+        ...base, maxWidth: '100%', textAlign: 'center',
+        color: 'var(--dsw-alias-label-caption, #999)', fontSize: 11,
+        background: 'transparent', border: 'none', padding: '2px 0',
+      };
       return base;
     }
 
@@ -199,6 +229,7 @@ window.__ModuleLoader__.load({
 
       const saved = useRef(loadLayout()).current;
       const [gridSize, setGridSize] = useState(saved?.gridSize ?? 2);
+      const [activeCell, setActiveCell] = useState(0);
       const [cells, setCells] = useState(() => {
         const s = saved?.cells ?? [];
         const size = (saved?.gridSize ?? 2) ** 2;
@@ -251,6 +282,16 @@ window.__ModuleLoader__.load({
       }, [gridSize, maxCells]);
 
       useEffect(() => { saveLayout(gridSize, cells, window.__dswsInSplit ?? false); }, [gridSize, cells]);
+
+      // Drop stale references: cells pointing at sessions no longer in the catalog.
+      useEffect(() => {
+        if (list?.phase !== 'ready') return;
+        const known = new Set(list.ids ?? []);
+        setCells((prev) => {
+          if (prev.every((c) => c === null || known.has(c))) return prev;
+          return prev.map((c) => (c !== null && known.has(c) ? c : null));
+        });
+      }, [list]);
 
       const cellStyle = {
         border: '1px solid var(--dsw-alias-border-l3, #444)',
@@ -320,8 +361,22 @@ window.__ModuleLoader__.load({
           Array.from({ length: total }, (_, i) => {
             const sid = cells[i];
             const sess = sid ? nonBlank.find((s) => s.id === sid) : null;
-            return h('div', { key: i, style: cellStyle },
-              h('div', { style: cellHeaderStyle },
+            const isActive = i === activeCell;
+            return h('div', {
+              key: i,
+              style: {
+                ...cellStyle,
+                borderColor: isActive ? 'var(--dsw-alias-state-business-primary, #4a9eff)' : 'var(--dsw-alias-border-l3, #444)',
+                borderWidth: isActive ? 2 : 1,
+              },
+              onMouseDown: () => setActiveCell(i),
+            },
+              h('div', {
+                style: {
+                  ...cellHeaderStyle,
+                  background: isActive ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)' : 'transparent',
+                },
+              },
                 sess
                   ? h(React.Fragment, null,
                       h('span', { style: dotStyle(sess.running) }),
