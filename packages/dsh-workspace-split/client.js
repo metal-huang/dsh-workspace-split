@@ -14,7 +14,7 @@ window.__ModuleLoader__.load({
       try { localStorage.setItem(LS_KEY, JSON.stringify({ gridSize, cells })); } catch {}
     }
 
-    // ---------- the toggle button ----------
+    // ---------- toggle button ----------
     function SplitButton() {
       return h('button', {
         title: '切换分屏视图',
@@ -28,15 +28,18 @@ window.__ModuleLoader__.load({
       }, '⊞ 分屏');
     }
 
-    // ---------- single cell: renders session events live ----------
+    // ---------- single cell: live session events + input ----------
     function CellView(props) {
       const { sessions, sessionId } = props;
       const [binding, setBinding] = useState(null);
       const [error, setError] = useState(null);
+      const [inputText, setInputText] = useState('');
+      const [sending, setSending] = useState(false);
       const refRef = useRef(null);
       const bodyRef = useRef(null);
+      const textareaRef = useRef(null);
 
-      // Retain the session and subscribe to its event window.
+      // Retain session.
       useEffect(() => {
         if (!sessionId) { setBinding(null); setError(null); return; }
         let cancelled = false;
@@ -44,14 +47,9 @@ window.__ModuleLoader__.load({
         try {
           reference = sessions.retain(sessionId, { source: 'controllerOperation' });
           refRef.current = reference;
-          reference.ready.then((b) => {
-            if (!cancelled) setBinding(b);
-          }).catch((e) => {
-            if (!cancelled) setError(String(e));
-          });
-        } catch (e) {
-          setError(String(e));
-        }
+          reference.ready.then((b) => { if (!cancelled) setBinding(b); })
+            .catch((e) => { if (!cancelled) setError(String(e)); });
+        } catch (e) { setError(String(e)); }
         return () => {
           cancelled = true;
           try { refRef.current?.release(); } catch {}
@@ -60,70 +58,131 @@ window.__ModuleLoader__.load({
         };
       }, [sessionId, sessions]);
 
-      // Subscribe to the event source once binding is ready.
+      // Subscribe to event source.
       const [events, setEvents] = useState([]);
       useEffect(() => {
         if (!binding?.eventSource) return;
         const es = binding.eventSource;
-        const update = () => {
-          const w = es.getSnapshot();
-          setEvents(w?.entries ?? []);
-        };
+        const update = () => { const w = es.getSnapshot(); setEvents(w?.entries ?? []); };
         update();
         return es.subscribe(update);
       }, [binding]);
 
-      // Auto-scroll to bottom on new events.
+      // Subscribe to session snapshot for running state.
+      const [running, setRunning] = useState(false);
+      useEffect(() => {
+        if (!binding?.session) return;
+        const sess = binding.session;
+        const update = () => { const s = sess.getSnapshot(); setRunning(s?.running ?? false); };
+        update();
+        return sess.subscribe(update);
+      }, [binding]);
+
+      // Auto-scroll.
       useEffect(() => {
         const el = bodyRef.current;
         if (el) el.scrollTop = el.scrollHeight;
       }, [events.length]);
 
-      if (!sessionId) return h('div', { style: { textAlign: 'center', marginTop: 40, color: 'var(--dsw-alias-label-caption, #999)' } }, '从上方选择会话');
-      if (error) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-state-error, #e00)' } }, `加载失败: ${error}`);
-      if (!binding) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)' } }, '加载中…');
+      // Send prompt.
+      const send = useCallback(async () => {
+        const text = inputText.trim();
+        if (!text || !binding?.session || sending) return;
+        setSending(true);
+        try {
+          await binding.session.prompt([{ type: 'text', text }], 'queue');
+          setInputText('');
+        } catch (_e) {}
+        setSending(false);
+        textareaRef.current?.focus();
+      }, [inputText, binding, sending]);
 
-      // Render the last N events as simple text rows.
-      const visible = events.slice(-50); // last 50 events max
-      return h('div', { ref: bodyRef, style: { flex: 1, overflow: 'auto', padding: 8, fontSize: 12, lineHeight: 1.5 } },
-        visible.map((entry, idx) => {
-          const ev = entry.event;
-          const type = ev?.type ?? 'unknown';
-          // Extract display text based on event type.
-          let text = '';
-          let cls = 'dsws-ev';
-          if (type === 'user/message') {
-            const blocks = ev?.data?.content ?? [];
-            text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
-            cls += ' dsws-ev-user';
-          } else if (type === 'assistant/message') {
-            const blocks = ev?.data?.message?.content ?? [];
-            text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
-            cls += ' dsws-ev-assistant';
-          } else if (type === 'assistant/live-chunk') {
-            text = ev?.data?.chunk?.text ?? '';
-            cls += ' dsws-ev-assistant dsws-ev-live';
-          } else if (type === 'tool/result') {
-            text = `[tool] ${ev?.data?.name ?? ''}`;
-            cls += ' dsws-ev-tool';
-          } else if (type === 'turn/start') {
-            text = `— 第 ${ev?.data?.turn} 轮 —`;
-            cls += ' dsws-ev-divider';
-          } else {
-            return null; // skip non-display events
-          }
-          if (!text) return null;
-          return h('div', { key: idx, className: cls, style: rowStyle(cls) }, text);
-        }),
+      const onKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      };
+
+      if (!sessionId) return h('div', { style: { textAlign: 'center', marginTop: 40, color: 'var(--dsw-alias-label-caption, #999)', flex: 1 } }, '从上方选择会话');
+      if (error) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-state-error, #e00)', flex: 1 } }, `加载失败: ${error}`);
+      if (!binding) return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '加载中…');
+
+      const visible = events.slice(-80);
+      return h(React.Fragment, null,
+        // messages area
+        h('div', { ref: bodyRef, style: { flex: 1, overflow: 'auto', padding: 8, fontSize: 12, lineHeight: 1.5, minHeight: 0 } },
+          visible.map((entry, idx) => {
+            const ev = entry.event;
+            const type = ev?.type ?? 'unknown';
+            let text = '';
+            let kind = 'other';
+            if (type === 'user/message') {
+              const blocks = ev?.data?.content ?? [];
+              text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
+              kind = 'user';
+            } else if (type === 'assistant/message') {
+              const blocks = ev?.data?.message?.content ?? [];
+              text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
+              kind = 'assistant';
+            } else if (type === 'assistant/live-chunk') {
+              text = ev?.data?.chunk?.text ?? '';
+              kind = 'assistant';
+            } else if (type === 'tool/result') {
+              text = `[tool] ${ev?.data?.name ?? ''}`;
+              kind = 'tool';
+            } else if (type === 'turn/start') {
+              text = `— 第 ${ev?.data?.turn} 轮 —`;
+              kind = 'divider';
+            } else { return null; }
+            if (!text) return null;
+            return h('div', { key: idx, style: eventStyle(kind) }, text);
+          }),
+        ),
+        // composer
+        h('div', { style: composerWrapStyle },
+          h('textarea', {
+            ref: textareaRef,
+            value: inputText,
+            onChange: (e) => setInputText(e.target.value),
+            onKeyDown,
+            placeholder: '输入消息…',
+            rows: 1,
+            style: composerInputStyle,
+          }),
+          h('button', {
+            onClick: send,
+            disabled: !inputText.trim() || sending,
+            style: { ...composerBtnStyle, opacity: (!inputText.trim() || sending) ? 0.4 : 1 },
+          }, '发送'),
+        ),
       );
     }
 
-    function rowStyle(cls) {
+    const composerWrapStyle = {
+      display: 'flex', gap: 6, padding: '6px 8px',
+      borderTop: '1px solid var(--dsw-alias-border-l3, #444)',
+      flexShrink: 0, alignItems: 'flex-end',
+    };
+    const composerInputStyle = {
+      flex: 1, resize: 'none', fontSize: 12, padding: '4px 8px',
+      border: '1px solid var(--dsw-alias-border-l3, #444)',
+      borderRadius: 4, background: 'var(--dsw-alias-bg-base, transparent)',
+      color: 'var(--dsw-alias-label-primary, inherit)',
+      fontFamily: 'inherit', outline: 'none',
+      minHeight: 28, maxHeight: 80,
+    };
+    const composerBtnStyle = {
+      padding: '4px 10px', fontSize: 12, cursor: 'pointer',
+      border: '1px solid var(--dsw-alias-border-l3, #444)',
+      borderRadius: 4, background: 'var(--dsw-alias-bg-elevated, #2a2a2a)',
+      color: 'var(--dsw-alias-label-primary, inherit)',
+      flexShrink: 0,
+    };
+
+    function eventStyle(kind) {
       const base = { padding: '4px 8px', marginBottom: 4, borderRadius: 4, wordBreak: 'break-word', whiteSpace: 'pre-wrap' };
-      if (cls.includes('dsws-ev-user')) return { ...base, background: 'var(--dsw-alias-bg-elevated, #2a2a2a)', color: 'var(--dsw-alias-label-primary, #eee)' };
-      if (cls.includes('dsws-ev-assistant')) return { ...base, color: 'var(--dsw-alias-label-primary, #eee)' };
-      if (cls.includes('dsws-ev-tool')) return { ...base, color: 'var(--dsw-alias-label-secondary, #888)', fontStyle: 'italic' };
-      if (cls.includes('dsws-ev-divider')) return { ...base, textAlign: 'center', color: 'var(--dsw-alias-label-caption, #999)', fontSize: 11 };
+      if (kind === 'user') return { ...base, background: 'var(--dsw-alias-bg-elevated, #2a2a2a)', color: 'var(--dsw-alias-label-primary, #eee)' };
+      if (kind === 'assistant') return { ...base, color: 'var(--dsw-alias-label-primary, #eee)' };
+      if (kind === 'tool') return { ...base, color: 'var(--dsw-alias-label-secondary, #888)', fontStyle: 'italic' };
+      if (kind === 'divider') return { ...base, textAlign: 'center', color: 'var(--dsw-alias-label-caption, #999)', fontSize: 11 };
       return base;
     }
 
@@ -134,7 +193,6 @@ window.__ModuleLoader__.load({
       const getSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions]);
       const list = useSyncExternalStore(subscribe, getSnapshot);
 
-      // Load persisted layout.
       const saved = useRef(loadLayout()).current;
       const [gridSize, setGridSize] = useState(saved?.gridSize ?? 2);
       const [cells, setCells] = useState(() => {
@@ -148,11 +206,33 @@ window.__ModuleLoader__.load({
       const items = list?.ids?.map((id) => list.byId[id]).filter(Boolean) ?? [];
       const nonBlank = items.filter((s) => !s.blank);
 
+      // Track running state per session for status dots.
+      const runningMap = useRef({});
+      const [, forceUpdate] = useState(0);
+      useEffect(() => {
+        const unsubs = [];
+        for (const s of nonBlank) {
+          try {
+            const info = sessions.retainInfo(s.id);
+            const unsub = info.subscribe(() => {
+              const snap = info.getSnapshot();
+              const wasRunning = runningMap.current[s.id];
+              const nowRunning = (snap?.retainedBy?.mainView ?? 0) > 0;
+              if (wasRunning !== nowRunning) {
+                runningMap.current[s.id] = nowRunning;
+                forceUpdate((n) => n + 1);
+              }
+            });
+            unsubs.push(unsub);
+          } catch {}
+        }
+        return () => unsubs.forEach((u) => { try { u(); } catch {} });
+      }, [nonBlank.length]);
+
       const setCell = (idx, sessionId) => {
         setCells((prev) => { const next = [...prev]; next[idx] = sessionId; return next; });
       };
 
-      // Resize cells array when gridSize changes.
       useEffect(() => {
         const size = gridSize * gridSize;
         setCells((prev) => {
@@ -162,7 +242,6 @@ window.__ModuleLoader__.load({
         });
       }, [gridSize]);
 
-      // Persist on change.
       useEffect(() => { saveLayout(gridSize, cells); }, [gridSize, cells]);
 
       const total = gridSize * gridSize;
@@ -174,13 +253,13 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-base, transparent)',
       };
       const cellHeaderStyle = {
-        padding: '8px 12px', fontSize: 13, fontWeight: 500,
+        padding: '6px 12px', fontSize: 13, fontWeight: 500,
         borderBottom: '1px solid var(--dsw-alias-border-l3, #444)',
         display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
         color: 'var(--dsw-alias-label-primary, inherit)',
       };
       const selectStyle = {
-        fontSize: 12, padding: '2px 6px', maxWidth: 180,
+        fontSize: 12, padding: '2px 6px', maxWidth: 160,
         background: 'var(--dsw-alias-bg-base, transparent)',
         color: 'var(--dsw-alias-label-primary, inherit)',
         border: '1px solid var(--dsw-alias-border-l3, #444)',
@@ -189,10 +268,11 @@ window.__ModuleLoader__.load({
       const dotStyle = (running) => ({
         width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
         background: running ? 'var(--dsw-alias-state-success, #4caf50)' : 'var(--dsw-alias-label-caption, #999)',
+        transition: 'background 0.3s',
       });
       const toolbarStyle = {
         display: 'flex', alignItems: 'center', gap: 12,
-        padding: '12px 20px', flexShrink: 0,
+        padding: '10px 20px', flexShrink: 0,
         borderBottom: '1px solid var(--dsw-alias-border-l3, #444)',
         color: 'var(--dsw-alias-label-primary, inherit)',
       };
@@ -211,7 +291,6 @@ window.__ModuleLoader__.load({
       };
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' } },
-        // toolbar
         h('div', { style: toolbarStyle },
           h('span', { style: { fontWeight: 600, fontSize: 15 } }, '分屏视图'),
           h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
@@ -230,7 +309,6 @@ window.__ModuleLoader__.load({
             }, '退出分屏'),
           ),
         ),
-        // grid
         h('div', { style: gridStyle },
           Array.from({ length: total }, (_, i) => {
             const sid = cells[i];
