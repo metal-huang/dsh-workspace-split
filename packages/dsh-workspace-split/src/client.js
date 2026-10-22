@@ -600,11 +600,34 @@ function CellView(props) {
     return sess.subscribe(update)
   }, [binding])
 
-  // Auto-scroll to the tail.
+  // Follow the tail only while the reader is already at the bottom. Scrolling
+  // up parks the view where it is; coming back to the bottom resumes following.
+  const followRef = useRef(true)
   useEffect(() => {
     const el = bodyRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && followRef.current) el.scrollTop = el.scrollHeight
   }, [events.length])
+
+  // On scroll: remember whether we are at the tail, and page older history in
+  // when the reader reaches the top.
+  const onScroll = useCallback(() => {
+    const el = bodyRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+    followRef.current = atBottom
+    if (el.scrollTop < 48) {
+      const sess = binding?.session
+      const snap = sess?.getSnapshot()
+      if (sess && snap?.hasMore && !snap.loadingOlder) {
+        const before = el.scrollHeight
+        sess.loadOlder().then(() => {
+          // Keep the reader's place: the prepended page adds height above.
+          const grown = bodyRef.current
+          if (grown) grown.scrollTop += grown.scrollHeight - before
+        }).catch(() => {})
+      }
+    }
+  }, [binding])
 
   const send = useCallback(async () => {
     const text = inputText.trim()
@@ -648,10 +671,13 @@ function CellView(props) {
     return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '加载中…')
   }
 
-  const visible = events.slice(-80)
+  // The binding's window already pages history, so render it whole: capping the
+  // slice here only hid messages the reader had already loaded.
+  const visible = events
   return h(React.Fragment, null,
     h('div', {
       ref: bodyRef,
+      onScroll,
       style: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'auto', padding: '10px 12px', minHeight: 0 },
     },
       visible.map((entry, idx) => {

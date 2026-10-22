@@ -7904,10 +7904,29 @@ function CellView(props) {
     update();
     return sess.subscribe(update);
   }, [binding]);
+  const followRef = useRef(true);
   useEffect(() => {
     const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && followRef.current) el.scrollTop = el.scrollHeight;
   }, [events.length]);
+  const onScroll = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    followRef.current = atBottom;
+    if (el.scrollTop < 48) {
+      const sess = binding?.session;
+      const snap = sess?.getSnapshot();
+      if (sess && snap?.hasMore && !snap.loadingOlder) {
+        const before = el.scrollHeight;
+        sess.loadOlder().then(() => {
+          const grown = bodyRef.current;
+          if (grown) grown.scrollTop += grown.scrollHeight - before;
+        }).catch(() => {
+        });
+      }
+    }
+  }, [binding]);
   const send = useCallback(async () => {
     const text4 = inputText.trim();
     if (!text4 || !binding?.session || sending) return;
@@ -7950,7 +7969,7 @@ function CellView(props) {
   if (!binding) {
     return h("div", { style: { padding: 12, color: "var(--dsw-alias-label-secondary, #888)", flex: 1 } }, "\u52A0\u8F7D\u4E2D\u2026");
   }
-  const visible = events.slice(-80);
+  const visible = events;
   return h(
     import_react.default.Fragment,
     null,
@@ -7958,6 +7977,7 @@ function CellView(props) {
       "div",
       {
         ref: bodyRef,
+        onScroll,
         style: { display: "flex", flexDirection: "column", flex: 1, overflow: "auto", padding: "10px 12px", minHeight: 0 }
       },
       visible.map((entry, idx) => {
