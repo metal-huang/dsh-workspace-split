@@ -5,13 +5,17 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const { useState, useEffect, useCallback, useSyncExternalStore, useRef } = React;
 
+    // ---------- limits (PRD: 20 global default, 12 per-window hard default; both configurable) ----------
+    const DEFAULT_MAX_CELLS = 20;
+    const DEFAULT_MAX_PER_WINDOW = 12;
+
     // ---------- localStorage persistence ----------
     const LS_KEY = 'dsws-layout';
     function loadLayout() {
       try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
     }
-    function saveLayout(gridSize, cells) {
-      try { localStorage.setItem(LS_KEY, JSON.stringify({ gridSize, cells })); } catch {}
+    function saveLayout(gridSize, cells, inSplit) {
+      try { localStorage.setItem(LS_KEY, JSON.stringify({ gridSize, cells, inSplit })); } catch {}
     }
 
     // ---------- toggle button ----------
@@ -229,22 +233,24 @@ window.__ModuleLoader__.load({
         return () => unsubs.forEach((u) => { try { u(); } catch {} });
       }, [nonBlank.length]);
 
+      // Cell count is clamped to the global limit (default 20, configurable via Config).
+      const maxCells = props.__maxCells ?? DEFAULT_MAX_CELLS;
+      const total = Math.min(gridSize * gridSize, maxCells);
+
       const setCell = (idx, sessionId) => {
         setCells((prev) => { const next = [...prev]; next[idx] = sessionId; return next; });
       };
 
       useEffect(() => {
-        const size = gridSize * gridSize;
+        const size = Math.min(gridSize * gridSize, maxCells);
         setCells((prev) => {
           const next = Array(size).fill(null);
           for (let i = 0; i < Math.min(prev.length, size); i++) next[i] = prev[i];
           return next;
         });
-      }, [gridSize]);
+      }, [gridSize, maxCells]);
 
-      useEffect(() => { saveLayout(gridSize, cells); }, [gridSize, cells]);
-
-      const total = gridSize * gridSize;
+      useEffect(() => { saveLayout(gridSize, cells, window.__dswsInSplit ?? false); }, [gridSize, cells]);
 
       const cellStyle = {
         border: '1px solid var(--dsw-alias-border-l3, #444)',
@@ -294,13 +300,14 @@ window.__ModuleLoader__.load({
         h('div', { style: toolbarStyle },
           h('span', { style: { fontWeight: 600, fontSize: 15 } }, '分屏视图'),
           h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
-            `${nonBlank.length} 个会话`),
+            `${nonBlank.length} 个会话 · ${total}/${maxCells} 格`),
           h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' } },
             h('span', { style: { fontSize: 12 } }, '网格:'),
-            [2, 3, 4].map((n) =>
+            [1, 2, 3, 4, 5].map((n) =>
               h('button', {
                 key: n, style: { ...btnStyle, fontWeight: gridSize === n ? 700 : 400 },
                 onClick: () => setGridSize(n),
+                title: `${n}×${n} = ${n * n} 格`,
               }, `${n}×${n}`)
             ),
             h('button', {
@@ -342,13 +349,23 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots', 'layout', 'sessions'],
-      apply(ctx) {
-        let inSplit = false;
+      // Config: cell limits. Users override in cordis.patch.yml.
+      apply(ctx, config) {
+        const maxCells = config?.maxCells ?? DEFAULT_MAX_CELLS;
+        // Restore split state from previous session.
+        const saved = loadLayout();
+        let inSplit = saved?.inSplit ?? false;
+        window.__dswsInSplit = inSplit;
+
         window.__dswsToggle = () => {
           inSplit = !inSplit;
+          window.__dswsInSplit = inSplit;
           try { ctx.layout.selectPanel(inSplit ? 'split' : null); } catch (_e) {}
+          // Persist immediately on toggle.
+          const cur = loadLayout() ?? {};
+          saveLayout(cur.gridSize ?? 2, cur.cells ?? [], inSplit);
         };
-        ctx.effect(() => () => { try { delete window.__dswsToggle; } catch (_e) {} }, 'workspace-split: cleanup');
+        ctx.effect(() => () => { try { delete window.__dswsToggle; delete window.__dswsInSplit; } catch (_e) {} }, 'workspace-split: cleanup');
 
         ctx.slots.inject('conversation.hero.options', () => ctx.slots.register({
           name: 'conversation.hero.options', id: 'workspace-split-btn-hero', order: 5,
@@ -362,8 +379,13 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main', key: 'split',
         }, function SplitPanel() {
-          return h(SplitMain, { __sessions: sessionsRef });
+          return h(SplitMain, { __sessions: sessionsRef, __maxCells: maxCells });
         }));
+
+        // Auto-enter split after the panel is registered.
+        if (inSplit) {
+          try { ctx.layout.selectPanel('split'); } catch (_e) {}
+        }
       },
     };
   },

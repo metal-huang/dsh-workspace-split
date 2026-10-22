@@ -1,3 +1,5 @@
 - insert:
     - id: workspace-split
       name: '@local/dsh-workspace-split'
+      config:
+        maxCells: 20
