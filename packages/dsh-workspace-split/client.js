@@ -599,13 +599,16 @@ window.__ModuleLoader__.load({
         });
       }, [list]);
 
-      // Copied from ui-conversation ConversationRoot.module.css `.header` (hairline rule,
-      // 30px title row) and `.tab` (13/16 type).
+      // Tiles butt against each other: no gap, no radius. Each tile draws its
+      // own leading and top hairline, and the grid carries the trailing and
+      // bottom ones, so neighbours share exactly one 0.5px rule instead of
+      // stacking two into a heavier line.
       const cellStyle = {
-        border: '0.5px solid var(--dsw-alias-border-l3, #444)',
-        borderRadius: 'var(--dsw-radius-panel, 12px)',
+        borderTop: '0.5px solid var(--dsw-alias-border-l3, #444)',
+        borderLeft: '0.5px solid var(--dsw-alias-border-l3, #444)',
+        boxSizing: 'border-box',
         display: 'flex', flexDirection: 'column',
-        overflow: 'hidden', minHeight: 0,
+        overflow: 'hidden', minHeight: 0, minWidth: 0,
         background: 'var(--dsw-alias-bg-base, transparent)',
       };
       const cellHeaderStyle = {
@@ -639,7 +642,10 @@ window.__ModuleLoader__.load({
         display: 'grid',
         gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
         gridTemplateRows: `repeat(${gridSize}, minmax(0, 1fr))`,
-        gap: 8, padding: 12,
+        gap: 0, padding: 0,
+        borderRight: '0.5px solid var(--dsw-alias-border-l3, #444)',
+        borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
+        boxSizing: 'border-box',
         flex: 1, minHeight: 0, overflow: 'hidden',
       };
       const btnStyle = {
@@ -679,8 +685,11 @@ window.__ModuleLoader__.load({
               key: i,
               style: {
                 ...cellStyle,
-                borderColor: isActive ? 'var(--dsw-alias-state-business-primary, #4a9eff)' : 'var(--dsw-alias-border-l3, #444)',
-                borderWidth: isActive ? 2 : 1,
+                // Inset ring marks the active tile without touching the shared
+                // dividers or shifting the tile's box.
+                boxShadow: isActive
+                  ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
+                  : 'none',
               },
               onMouseDown: () => setActiveCell(i),
             },
