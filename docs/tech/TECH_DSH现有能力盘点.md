@@ -188,13 +188,23 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 但可以在**构建时**把它们打进 `client.js`：插件产物就是一份普通 JS 文件，
 外部依赖只要在打包阶段内联进来，运行时便不需要 `require`。
 
-代价是产物体积：这类解析器未压缩约 200–400KB。本项目当前没有构建步骤
-（`client.js` 是手写的普通 JS），所以选择第三条路：照抄源码样式规则、
-自写覆盖常用语法的精简解析器，零依赖、体积小，代价是脚注、数学公式、
-任务列表勾选框这类语法不支持。
+本项目采用这条路径。客户端源码在 `packages/dsh-workspace-split/src/client.js`，
+用 esbuild 打包成 `packages/dsh-workspace-split/client.js`（产物顶部有
+`GENERATED FILE` 标记，不要直接改），构建命令 `npm run build`。
+平台模块（`react` 等 11 个）保持 external，其余全部内联，所以产物里只有
+一句 `require("react")`。
 
 选型结论：**要完整语法就引入构建步骤打包 mdast；要零构建就自写精简版。**
-当前选后者，因为格子里的会话内容以正文、列表、表格、代码块为主。
+本项目选前者，解析器包组合与原生渲染器一致：
+`mdast-util-from-markdown` + `micromark-extension-gfm` + `mdast-util-gfm`
++ `micromark-extension-math` + `mdast-util-math`。
+
+代价与边界：
+
+- 产物体积约 240 KiB（未压缩），比零构建版的几十 KB 大一个量级
+- 公式只做解析、按等宽文本显示 TeX 源码；原生用 KaTeX 渲染，
+  接入 KaTeX 需要额外携带样式与字体文件，暂不引入
+- 原始 HTML 与原生策略一致，按字面文本显示，不进 DOM
 
 ## 十、盘点结论
 
@@ -209,7 +219,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | 布局持久化 | 浏览器 localStorage（`layout.selectPanel` 是纯内存态，刷新不保留） | 是 |
 | N 宫格布局编排 | 无 | 是 |
 | 当前格标记 | 无 | 是 |
-| Markdown 渲染 | 原生 `MarkdownText` 可 require 但规范禁止依赖；自写精简版 | 是 |
+| Markdown 渲染 | 原生 `MarkdownText` 可 require 但规范禁止依赖；构建时打包 mdast 自渲染 | 是 |
 
 本项目造的是布局编排器，不是又一个会话界面。
 

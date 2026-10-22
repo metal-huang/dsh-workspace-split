@@ -30,6 +30,26 @@
 完整条文在真源仓 `engineering-standards`（本机路径不入本仓库），本仓库只在
 [SPEC_文档规范](docs/spec/SPEC_文档规范.md) 留指针与本项目选择。
 
+## 代码在哪、怎么构建
+
+```text
+packages/dsh-workspace-split/
+├── index.js          # Host 半侧，手写
+├── src/client.js     # 客户端源码，改这个
+├── client.js         # 客户端产物，GENERATED FILE，不要直接改
+├── build.mjs         # esbuild 打包脚本
+└── cordis.patch.yml  # 插件行与 Config
+```
+
+客户端有构建步骤：依赖（React 除外）全部内联进 `client.js`，
+因为浏览器侧只能 `require` 平台模块表里那 11 个包。改完源码跑：
+
+```bash
+cd packages/dsh-workspace-split
+npm install     # 首次
+npm run build
+```
+
 ## 目录结构
 
 ```text
