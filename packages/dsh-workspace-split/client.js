@@ -90,12 +90,10 @@ window.__ModuleLoader__.load({
       // Retain session once catalogued.
       useEffect(() => {
         if (!sessionId || !cataloged) { if (!sessionId) { setBinding(null); setError(null); } return; }
-        console.warn('[dsws] retain start', String(sessionId).slice(0, 8));
         let cancelled = false;
         let reference = null;
         const controller = new AbortController();
         openTimerRef.current = setTimeout(() => {
-          console.warn('[dsws] open timeout', String(sessionId).slice(0, 8));
           if (cancelled) return;
           try { controller.abort(); } catch {}
           setError(`打开会话超时（${OPEN_TIMEOUT_MS / 1000}s）`);
@@ -513,7 +511,6 @@ window.__ModuleLoader__.load({
         const saved = loadLayout();
         let inSplit = saved?.inSplit ?? false;
         window.__dswsInSplit = inSplit;
-        window.__dswsSessions = ctx.sessions;
 
         window.__dswsToggle = () => {
           inSplit = !inSplit;
