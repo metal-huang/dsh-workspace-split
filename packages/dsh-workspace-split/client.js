@@ -7658,6 +7658,245 @@ function Markdown(props) {
   const tree = parseMarkdown(props.text ?? "");
   return h("div", { style: mdStyles.root }, renderMdNode(tree, props.k));
 }
+var TURN_MARK_PITCH = 10;
+var TURN_RAIL_INSET = 6;
+var TURN_FADE_PX = 24;
+var turnRailStyles = {
+  frame: {
+    // Centered band, matching TurnNavigator.module.css: the rail floats at the
+    // vertical middle of the scrollport instead of hugging its top edge.
+    position: "absolute",
+    top: "50%",
+    transform: "translateY(-50%)",
+    right: 4,
+    width: 20,
+    maxHeight: "calc(100% - 32px)",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    pointerEvents: "auto"
+  },
+  scroller: (fadeTop, fadeBottom) => ({
+    position: "relative",
+    minHeight: 0,
+    maxHeight: "100%",
+    overflowY: "auto",
+    overflowX: "hidden",
+    overscrollBehavior: "contain",
+    scrollbarWidth: "none",
+    paddingTop: TURN_RAIL_INSET,
+    paddingBottom: TURN_RAIL_INSET,
+    maskImage: fadeTop && fadeBottom ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)` : fadeTop ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 100%)` : fadeBottom ? `linear-gradient(to bottom, #000 0, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)` : void 0
+  }),
+  mark: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    height: TURN_MARK_PITCH,
+    width: "100%",
+    padding: 0,
+    border: 0,
+    background: "transparent",
+    cursor: "pointer"
+  },
+  tick: (state) => ({
+    width: 20,
+    height: 2,
+    borderRadius: 2,
+    transformOrigin: "right center",
+    transition: "transform 140ms ease, background-color 140ms ease, opacity 140ms ease",
+    transform: `scaleX(${state === "active" ? 1 : state === "hover" ? 0.9 : state === "unloaded" ? 0.4 : 0.6})`,
+    opacity: state === "unloaded" ? 0.6 : 1,
+    background: state === "active" ? "var(--dsw-alias-label-primary, #eee)" : state === "hover" ? "var(--dsw-alias-label-tertiary, #999)" : "var(--dsw-alias-border-l4, #555)"
+  }),
+  preview: {
+    position: "absolute",
+    right: "calc(100% + 10px)",
+    width: 260,
+    maxHeight: 100,
+    overflow: "hidden",
+    padding: "10px 12px",
+    borderRadius: "var(--dsw-radius-lg, 10px)",
+    background: "var(--dsw-alias-bg-layer-1, #1e1e1e)",
+    boxShadow: "var(--dsw-elevation-panel, 0 4px 16px rgba(0,0,0,.35))",
+    pointerEvents: "none",
+    color: "var(--dsw-alias-label-primary, #eee)",
+    zIndex: 8
+  },
+  previewPrompt: {
+    font: "var(--dsw-font-xs-strong-13, inherit)",
+    fontWeight: 600,
+    fontSize: 12,
+    lineHeight: "17px",
+    overflow: "hidden",
+    display: "-webkit-box",
+    WebkitLineClamp: 1,
+    WebkitBoxOrient: "vertical"
+  },
+  previewResponse: {
+    marginTop: 4,
+    color: "var(--dsw-alias-label-caption, #888)",
+    fontSize: 11,
+    lineHeight: "16px",
+    overflow: "hidden",
+    display: "-webkit-box",
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: "vertical"
+  }
+};
+function turnRailItems(events) {
+  const byTurn = /* @__PURE__ */ new Map();
+  const ensure = (turn) => {
+    let item = byTurn.get(turn);
+    if (item === void 0) {
+      item = { turn, seq: void 0, prompt: "", response: "" };
+      byTurn.set(turn, item);
+    }
+    return item;
+  };
+  for (const entry of events) {
+    const ev = entry?.event;
+    if (ev === void 0 || ev === null) continue;
+    if (ev.type === "turn/start") {
+      const item = ensure(ev.data?.turn ?? 0);
+      if (typeof ev.seq === "number") item.seq = ev.seq;
+      continue;
+    }
+    const turn = ev.data?.turn;
+    if (typeof turn !== "number") continue;
+    if (ev.type === "user/message") {
+      const blocks = ev.data?.content ?? [];
+      const text4 = blocks.filter((b) => b?.type === "text").map((b) => b.text).join(" ");
+      if (text4 !== "" && ensure(turn).prompt === "") ensure(turn).prompt = text4.slice(0, 120);
+    } else if (ev.type === "assistant/message") {
+      const blocks = ev.data?.message?.content ?? [];
+      const text4 = blocks.filter((b) => b?.type === "text").map((b) => b.text).join(" ");
+      if (text4 !== "" && ensure(turn).response === "") ensure(turn).response = text4.slice(0, 300);
+    }
+  }
+  return [...byTurn.values()].sort((left, right) => left.turn - right.turn);
+}
+function TurnRail(props) {
+  const { items, bodyRef, session } = props;
+  const [activeTurn, setActiveTurn] = useState(null);
+  const [hoverTurn, setHoverTurn] = useState(null);
+  const [busyTurn, setBusyTurn] = useState(null);
+  const [scrolled, setScrolled] = useState({ top: false, bottom: false });
+  const [railScroll, setRailScroll] = useState(0);
+  const scrollerRef = useRef(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el === null) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const nodes = el.querySelectorAll("[data-turn]");
+      if (nodes.length === 0) return;
+      const edge = el.scrollTop + 8;
+      let current = Number(nodes[0].getAttribute("data-turn"));
+      for (const node2 of nodes) {
+        if (node2.offsetTop <= edge) current = Number(node2.getAttribute("data-turn"));
+        else break;
+      }
+      setActiveTurn((prev) => prev === current ? prev : current);
+    };
+    const onScroll = () => {
+      if (frame === 0) frame = requestAnimationFrame(measure);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    measure();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (frame !== 0) cancelAnimationFrame(frame);
+    };
+  }, [bodyRef, items.length]);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (el === null || activeTurn === null) return;
+    const mark = el.querySelector(`[data-rail-turn="${activeTurn}"]`);
+    if (mark === null) return;
+    const total = el.scrollHeight;
+    const view = el.clientHeight;
+    const top = mark.offsetTop;
+    const bottom = top + mark.offsetHeight;
+    if (top < el.scrollTop + TURN_FADE_PX || bottom > el.scrollTop + view - TURN_FADE_PX) {
+      el.scrollTop = top - view / 2 + mark.offsetHeight / 2;
+    }
+    setScrolled({ top: el.scrollTop > 1, bottom: el.scrollTop < total - view - 1 });
+  }, [activeTurn, items.length]);
+  const jump = useCallback(async (item) => {
+    const el = bodyRef.current;
+    if (el === null) return;
+    const find = () => el.querySelector(`[data-turn="${item.turn}"]`);
+    const node2 = find();
+    if (node2 !== null) {
+      el.scrollTop = node2.offsetTop - 8;
+      return;
+    }
+    if (session === void 0 || session === null || typeof item.seq !== "number") return;
+    setBusyTurn(item.turn);
+    try {
+      await session.loadThrough(item.seq);
+    } catch {
+    }
+    requestAnimationFrame(() => {
+      const late = find();
+      if (late !== null) el.scrollTop = late.offsetTop - 8;
+      setBusyTurn(null);
+    });
+  }, [bodyRef, session]);
+  if (items.length < 2) return null;
+  const hovered = hoverTurn === null ? void 0 : items.find((i) => i.turn === hoverTurn);
+  return h(
+    "div",
+    { style: turnRailStyles.frame },
+    h(
+      "div",
+      {
+        ref: scrollerRef,
+        style: turnRailStyles.scroller(scrolled.top, scrolled.bottom),
+        onScroll: (e) => setRailScroll(e.currentTarget.scrollTop)
+      },
+      h(
+        "div",
+        { style: { position: "relative" } },
+        items.map((item) => {
+          const state = item.turn === activeTurn ? "active" : item.turn === hoverTurn ? "hover" : item.seq === void 0 ? "unloaded" : "rest";
+          return h("button", {
+            key: item.turn,
+            type: "button",
+            "data-rail-turn": item.turn,
+            "aria-label": `\u7B2C ${item.turn} \u8F6E`,
+            "aria-current": item.turn === activeTurn ? "true" : void 0,
+            style: { ...turnRailStyles.mark, opacity: item.turn === busyTurn ? 0.4 : 1 },
+            onMouseEnter: () => setHoverTurn(item.turn),
+            onMouseLeave: () => setHoverTurn((prev) => prev === item.turn ? null : prev),
+            onFocus: () => setHoverTurn(item.turn),
+            onBlur: () => setHoverTurn((prev) => prev === item.turn ? null : prev),
+            onClick: () => {
+              void jump(item);
+            }
+          }, h("span", { style: turnRailStyles.tick(state) }));
+        })
+      )
+    ),
+    hovered === void 0 ? null : h(
+      "div",
+      {
+        role: "tooltip",
+        style: {
+          ...turnRailStyles.preview,
+          // Track the hovered tick: its own offset inside the scroller, minus how
+          // far that scroller has been scrolled, centered on the tick.
+          top: TURN_RAIL_INSET + items.findIndex((i) => i.turn === hovered.turn) * TURN_MARK_PITCH + TURN_MARK_PITCH / 2 - railScroll,
+          transform: "translateY(-50%)"
+        }
+      },
+      h("div", { style: turnRailStyles.previewPrompt }, hovered.prompt || `\u7B2C ${hovered.turn} \u8F6E`),
+      hovered.response === "" ? null : h("div", { style: turnRailStyles.previewResponse }, hovered.response)
+    )
+  );
+}
 function SplitButton(props) {
   const variant = props?.variant ?? "inline";
   if (variant === "sidebar") {
@@ -7770,6 +8009,160 @@ var composerBtnStyle = {
   background: "var(--dsw-alias-state-business-primary, #4a9eff)",
   color: "#fff"
 };
+var toolStyles = {
+  row: (hover, expanded) => ({
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    minWidth: 0,
+    height: "calc(24px + var(--dsh-content-font-delta, 0px))",
+    overflow: "hidden",
+    cursor: "pointer",
+    userSelect: "none",
+    color: hover || expanded ? "var(--dsw-alias-label-secondary, #999)" : "var(--dsw-alias-label-tertiary, #888)",
+    transition: "color 100ms ease"
+  }),
+  chevron: (expanded) => ({
+    flex: "none",
+    width: 12,
+    textAlign: "center",
+    fontSize: 9,
+    lineHeight: "12px",
+    transform: expanded ? "rotate(90deg)" : "none",
+    transition: "transform 120ms ease"
+  }),
+  name: {
+    flex: "none",
+    fontFamily: "var(--ds-font-family-code, monospace)",
+    fontSize: "var(--dsh-content-font-size-secondary, 13px)",
+    lineHeight: "calc(24px + var(--dsh-content-font-delta, 0px))"
+  },
+  sep: {
+    flex: "none",
+    width: 2,
+    height: 2,
+    borderRadius: 1,
+    margin: "0 2px",
+    background: "var(--dsw-alias-label-caption, #777)"
+  },
+  summary: {
+    flex: "1 1 auto",
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontSize: "var(--dsh-content-font-size-secondary, 13px)",
+    lineHeight: "calc(24px + var(--dsh-content-font-delta, 0px))"
+  },
+  errorFlag: {
+    flex: "none",
+    fontSize: 11,
+    lineHeight: "16px",
+    padding: "0 5px",
+    borderRadius: "var(--dsw-radius-sm, 4px)",
+    background: "var(--dsw-alias-state-error-primary, #e5484d)",
+    color: "#fff"
+  },
+  body: {
+    margin: "2px 0 8px 18px",
+    paddingLeft: 12,
+    borderLeft: "2px solid var(--dsw-alias-border-l2, #4a4a4a)"
+  },
+  label: {
+    fontSize: 11,
+    lineHeight: "16px",
+    color: "var(--dsw-alias-label-caption, #888)",
+    marginTop: 6
+  },
+  pre: {
+    margin: "4px 0",
+    padding: "8px 10px",
+    fontFamily: "var(--ds-font-family-code, monospace)",
+    fontSize: "var(--dsh-content-font-size-secondary, 12px)",
+    lineHeight: 1.5,
+    background: "var(--dsw-alias-markdown-code-block, rgba(128,128,128,.10))",
+    border: "0.5px solid var(--dsw-alias-border-l1, #4a4a4a)",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    maxHeight: 240,
+    overflow: "auto",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word"
+  }
+};
+function toolSummary(name, argsRaw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(argsRaw);
+  } catch {
+    return String(argsRaw ?? "").replace(/\s+/g, " ").slice(0, 120);
+  }
+  if (parsed === null || typeof parsed !== "object") return String(parsed).slice(0, 120);
+  const pick = parsed.description ?? parsed.command ?? parsed.file_path ?? parsed.path ?? parsed.pattern ?? parsed.query ?? parsed.url ?? parsed.prompt;
+  if (typeof pick === "string") return pick.replace(/\s+/g, " ").slice(0, 200);
+  const keys = Object.keys(parsed);
+  if (keys.length === 0) return "";
+  return keys.slice(0, 3).map((k) => `${k}=${JSON.stringify(parsed[k]).slice(0, 40)}`).join(" ");
+}
+function toolResultText(ev) {
+  const blocks = ev?.message?.content ?? ev?.data?.message?.content ?? [];
+  const parts = [];
+  for (const b of blocks) {
+    if (b?.type === "text") parts.push(b.text);
+    else if (b?.type === "image") parts.push("[image]");
+    else if (b?.type === "file") parts.push("[file]");
+    else if (b?.type) parts.push(`[${b.type}]`);
+  }
+  return parts.join("\n");
+}
+function ToolRow(props) {
+  const { name, argsRaw, resultText, isError, errorReason } = props;
+  const [expanded, setExpanded] = useState(false);
+  const [hover, setHover] = useState(false);
+  const summary = toolSummary(name, argsRaw);
+  let prettyArgs = argsRaw;
+  try {
+    prettyArgs = JSON.stringify(JSON.parse(argsRaw), null, 2);
+  } catch {
+  }
+  return h(
+    "div",
+    { style: { display: "flex", flexDirection: "column" } },
+    h(
+      "div",
+      {
+        style: toolStyles.row(hover, expanded),
+        onMouseEnter: () => setHover(true),
+        onMouseLeave: () => setHover(false),
+        onClick: () => setExpanded((v) => !v),
+        role: "button",
+        "aria-expanded": expanded,
+        title: expanded ? "\u6536\u8D77" : "\u5C55\u5F00"
+      },
+      h("span", { style: toolStyles.chevron(expanded) }, "\u25B6"),
+      h("span", { style: toolStyles.name }, name),
+      summary ? h("span", { style: toolStyles.sep }) : null,
+      summary ? h("span", { style: toolStyles.summary }, summary) : null,
+      isError ? h("span", { style: toolStyles.errorFlag }, "error") : null
+    ),
+    expanded ? h(
+      "div",
+      { style: toolStyles.body },
+      errorReason ? h("div", { style: { ...toolStyles.label, color: "var(--dsw-alias-state-error-primary, #e5484d)" } }, errorReason) : null,
+      prettyArgs ? h(
+        import_react.default.Fragment,
+        null,
+        h("div", { style: toolStyles.label }, "\u53C2\u6570"),
+        h("pre", { style: toolStyles.pre }, prettyArgs)
+      ) : null,
+      resultText ? h(
+        import_react.default.Fragment,
+        null,
+        h("div", { style: toolStyles.label }, isError ? "\u9519\u8BEF\u8F93\u51FA" : "\u8F93\u51FA"),
+        h("pre", { style: toolStyles.pre }, resultText)
+      ) : h("div", { style: toolStyles.label }, "\uFF08\u6682\u65E0\u8F93\u51FA\uFF09")
+    ) : null
+  );
+}
 function eventStyle(kind) {
   const base = {
     maxWidth: "82%",
@@ -7975,47 +8368,94 @@ function CellView(props) {
     return h("div", { style: { padding: 12, color: "var(--dsw-alias-label-secondary, #888)", flex: 1 } }, "\u52A0\u8F7D\u4E2D\u2026");
   }
   const visible = events;
+  const toolResults = /* @__PURE__ */ new Map();
+  const calledIds = /* @__PURE__ */ new Set();
+  for (const entry of visible) {
+    const ev = entry.event;
+    if (ev?.type === "tool/call") {
+      const id = ev.data?.callId;
+      if (id !== void 0) calledIds.add(id);
+    } else if (ev?.type === "tool/result") {
+      const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId;
+      if (id !== void 0) toolResults.set(id, ev.data);
+    }
+  }
+  const railItems = turnRailItems(visible);
   return h(
     import_react.default.Fragment,
     null,
+    // The scrollport and the turn rail share this box: the rail must not scroll
+    // with the transcript, so it sits beside the scroller, not inside it.
     h(
       "div",
-      {
-        ref: bodyRef,
-        onScroll,
-        style: { display: "flex", flexDirection: "column", flex: 1, overflow: "auto", padding: "10px 12px", minHeight: 0 }
-      },
-      visible.map((entry, idx) => {
-        const ev = entry.event;
-        const type = ev?.type ?? "unknown";
-        let text4 = "";
-        let kind = "other";
-        if (type === "user/message") {
-          const blocks = ev?.data?.content ?? [];
-          text4 = blocks.filter((b) => b.type === "text").map((b) => b.text).join("");
-          kind = "user";
-        } else if (type === "assistant/message") {
-          const blocks = ev?.data?.message?.content ?? [];
-          text4 = blocks.filter((b) => b.type === "text").map((b) => b.text).join("");
-          kind = "assistant";
-        } else if (type === "assistant/live-chunk") {
-          text4 = ev?.data?.chunk?.text ?? "";
-          kind = "assistant";
-        } else if (type === "tool/result") {
-          text4 = `[tool] ${ev?.data?.name ?? ""}`;
-          kind = "tool";
-        } else if (type === "turn/start") {
-          text4 = `\u2014 \u7B2C ${ev?.data?.turn} \u8F6E \u2014`;
-          kind = "divider";
-        } else {
-          return null;
-        }
-        if (!text4) return null;
-        if (kind === "assistant") {
-          return h("div", { key: idx, style: eventStyle(kind) }, h(Markdown, { text: text4, k: `m${idx}` }));
-        }
-        return h("div", { key: idx, style: eventStyle(kind) }, text4);
-      })
+      { style: { position: "relative", display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } },
+      h(
+        "div",
+        {
+          ref: bodyRef,
+          onScroll,
+          style: { display: "flex", flexDirection: "column", flex: 1, overflow: "auto", padding: "10px 12px", minHeight: 0 }
+        },
+        visible.map((entry, idx) => {
+          const ev = entry.event;
+          const type = ev?.type ?? "unknown";
+          if (type === "tool/call") {
+            const id = ev.data?.callId;
+            const result = id === void 0 ? void 0 : toolResults.get(id);
+            return h(ToolRow, {
+              key: idx,
+              name: ev.data?.name ?? "tool",
+              argsRaw: ev.data?.arguments ?? "",
+              resultText: result ? toolResultText(result) : "",
+              isError: Boolean(result?.message?.isError ?? result?.isError),
+              errorReason: result?.error?.reason ?? result?.error?.name ?? ""
+            });
+          }
+          if (type === "tool/result") {
+            const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId;
+            if (id !== void 0 && calledIds.has(id)) return null;
+            return h(ToolRow, {
+              key: idx,
+              name: "\u5DE5\u5177\u7ED3\u679C",
+              argsRaw: "",
+              resultText: toolResultText(ev.data),
+              isError: Boolean(ev.data?.message?.isError ?? ev.data?.isError),
+              errorReason: ev.data?.error?.reason ?? ev.data?.error?.name ?? ""
+            });
+          }
+          let text4 = "";
+          let kind = "other";
+          let anchorTurn;
+          if (type === "user/message") {
+            const blocks = ev?.data?.content ?? [];
+            text4 = blocks.filter((b) => b.type === "text").map((b) => b.text).join("");
+            kind = "user";
+          } else if (type === "assistant/message") {
+            const blocks = ev?.data?.message?.content ?? [];
+            text4 = blocks.filter((b) => b.type === "text").map((b) => b.text).join("");
+            kind = "assistant";
+          } else if (type === "assistant/live-chunk") {
+            text4 = ev?.data?.chunk?.text ?? "";
+            kind = "assistant";
+          } else if (type === "turn/start") {
+            text4 = `\u2014 \u7B2C ${ev?.data?.turn} \u8F6E \u2014`;
+            kind = "divider";
+            anchorTurn = ev?.data?.turn;
+          } else {
+            return null;
+          }
+          if (!text4) return null;
+          if (kind === "assistant") {
+            return h("div", { key: idx, style: eventStyle(kind) }, h(Markdown, { text: text4, k: `m${idx}` }));
+          }
+          return h("div", {
+            key: idx,
+            style: eventStyle(kind),
+            "data-turn": anchorTurn
+          }, text4);
+        }),
+        h(TurnRail, { items: railItems, bodyRef, session: binding.session })
+      )
     ),
     h(
       "div",

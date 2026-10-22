@@ -337,6 +337,285 @@ function Markdown(props) {
   return h('div', { style: mdStyles.root }, renderMdNode(tree, props.k))
 }
 
+// ---------- turn rail ----------
+// Ported from ui-chat TurnNavigator.module.css / TurnNavigator.tsx: a
+// fixed-pitch ladder of one tick per Turn, the active tick in the primary
+// label color, hover previews, and a click that either scrolls to the loaded
+// Turn or pages its history in through `loadThrough(seq)` first.
+
+/** Fixed pitch between neighbouring ticks; overflow scrolls inside the frame. */
+const TURN_MARK_PITCH = 10
+/** Rail padding above the first tick and below the last one. */
+const TURN_RAIL_INSET = 6
+/** Fade band the mask reserves at a scrollable end. */
+const TURN_FADE_PX = 24
+
+const turnRailStyles = {
+  frame: {
+    // Centered band, matching TurnNavigator.module.css: the rail floats at the
+    // vertical middle of the scrollport instead of hugging its top edge.
+    position: 'absolute',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    right: 4,
+    width: 20,
+    maxHeight: 'calc(100% - 32px)',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    pointerEvents: 'auto',
+  },
+  scroller: (fadeTop, fadeBottom) => ({
+    position: 'relative',
+    minHeight: 0,
+    maxHeight: '100%',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    overscrollBehavior: 'contain',
+    scrollbarWidth: 'none',
+    paddingTop: TURN_RAIL_INSET,
+    paddingBottom: TURN_RAIL_INSET,
+    maskImage: fadeTop && fadeBottom
+      ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)`
+      : fadeTop
+        ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 100%)`
+        : fadeBottom
+          ? `linear-gradient(to bottom, #000 0, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)`
+          : undefined,
+  }),
+  mark: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    height: TURN_MARK_PITCH,
+    width: '100%',
+    padding: 0,
+    border: 0,
+    background: 'transparent',
+    cursor: 'pointer',
+  },
+  tick: (state) => ({
+    width: 20,
+    height: 2,
+    borderRadius: 2,
+    transformOrigin: 'right center',
+    transition: 'transform 140ms ease, background-color 140ms ease, opacity 140ms ease',
+    transform: `scaleX(${
+      state === 'active' ? 1 : state === 'hover' ? 0.9 : state === 'unloaded' ? 0.4 : 0.6
+    })`,
+    opacity: state === 'unloaded' ? 0.6 : 1,
+    background: state === 'active'
+      ? 'var(--dsw-alias-label-primary, #eee)'
+      : state === 'hover'
+        ? 'var(--dsw-alias-label-tertiary, #999)'
+        : 'var(--dsw-alias-border-l4, #555)',
+  }),
+  preview: {
+    position: 'absolute',
+    right: 'calc(100% + 10px)',
+    width: 260,
+    maxHeight: 100,
+    overflow: 'hidden',
+    padding: '10px 12px',
+    borderRadius: 'var(--dsw-radius-lg, 10px)',
+    background: 'var(--dsw-alias-bg-layer-1, #1e1e1e)',
+    boxShadow: 'var(--dsw-elevation-panel, 0 4px 16px rgba(0,0,0,.35))',
+    pointerEvents: 'none',
+    color: 'var(--dsw-alias-label-primary, #eee)',
+    zIndex: 8,
+  },
+  previewPrompt: {
+    font: 'var(--dsw-font-xs-strong-13, inherit)',
+    fontWeight: 600,
+    fontSize: 12,
+    lineHeight: '17px',
+    overflow: 'hidden',
+    display: '-webkit-box',
+    WebkitLineClamp: 1,
+    WebkitBoxOrient: 'vertical',
+  },
+  previewResponse: {
+    marginTop: 4,
+    color: 'var(--dsw-alias-label-caption, #888)',
+    fontSize: 11,
+    lineHeight: '16px',
+    overflow: 'hidden',
+    display: '-webkit-box',
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: 'vertical',
+  },
+}
+
+/**
+ * Derive the rail ladder from the loaded window.
+ * @param events - visible session event entries.
+ * @returns one item per Turn, ascending, with prompts and response previews.
+ */
+function turnRailItems(events) {
+  const byTurn = new Map()
+  const ensure = (turn) => {
+    let item = byTurn.get(turn)
+    if (item === undefined) {
+      item = { turn, seq: undefined, prompt: '', response: '' }
+      byTurn.set(turn, item)
+    }
+    return item
+  }
+  for (const entry of events) {
+    const ev = entry?.event
+    if (ev === undefined || ev === null) continue
+    if (ev.type === 'turn/start') {
+      const item = ensure(ev.data?.turn ?? 0)
+      if (typeof ev.seq === 'number') item.seq = ev.seq
+      continue
+    }
+    const turn = ev.data?.turn
+    if (typeof turn !== 'number') continue
+    if (ev.type === 'user/message') {
+      const blocks = ev.data?.content ?? []
+      const text = blocks.filter((b) => b?.type === 'text').map((b) => b.text).join(' ')
+      if (text !== '' && ensure(turn).prompt === '') ensure(turn).prompt = text.slice(0, 120)
+    } else if (ev.type === 'assistant/message') {
+      const blocks = ev.data?.message?.content ?? []
+      const text = blocks.filter((b) => b?.type === 'text').map((b) => b.text).join(' ')
+      if (text !== '' && ensure(turn).response === '') ensure(turn).response = text.slice(0, 300)
+    }
+  }
+  return [...byTurn.values()].sort((left, right) => left.turn - right.turn)
+}
+
+/**
+ * Right-side Turn ladder for one cell.
+ * @param props - `items`, the cell's scroll element, and its session face.
+ */
+function TurnRail(props) {
+  const { items, bodyRef, session } = props
+  const [activeTurn, setActiveTurn] = useState(null)
+  const [hoverTurn, setHoverTurn] = useState(null)
+  const [busyTurn, setBusyTurn] = useState(null)
+  const [scrolled, setScrolled] = useState({ top: false, bottom: false })
+  const [railScroll, setRailScroll] = useState(0)
+  const scrollerRef = useRef(null)
+
+  // Track the Turn whose row sits at the reader's top edge.
+  useEffect(() => {
+    const el = bodyRef.current
+    if (el === null) return
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      const nodes = el.querySelectorAll('[data-turn]')
+      if (nodes.length === 0) return
+      const edge = el.scrollTop + 8
+      let current = Number(nodes[0].getAttribute('data-turn'))
+      for (const node of nodes) {
+        if (node.offsetTop <= edge) current = Number(node.getAttribute('data-turn'))
+        else break
+      }
+      setActiveTurn((prev) => (prev === current ? prev : current))
+    }
+    const onScroll = () => {
+      if (frame === 0) frame = requestAnimationFrame(measure)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    measure()
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      if (frame !== 0) cancelAnimationFrame(frame)
+    }
+  }, [bodyRef, items.length])
+
+  // Keep the active tick inside the rail's visible band.
+  useEffect(() => {
+    const el = scrollerRef.current
+    if (el === null || activeTurn === null) return
+    const mark = el.querySelector(`[data-rail-turn="${activeTurn}"]`)
+    if (mark === null) return
+    const total = el.scrollHeight
+    const view = el.clientHeight
+    const top = mark.offsetTop
+    const bottom = top + mark.offsetHeight
+    if (top < el.scrollTop + TURN_FADE_PX || bottom > el.scrollTop + view - TURN_FADE_PX) {
+      el.scrollTop = top - view / 2 + mark.offsetHeight / 2
+    }
+    setScrolled({ top: el.scrollTop > 1, bottom: el.scrollTop < total - view - 1 })
+  }, [activeTurn, items.length])
+
+  const jump = useCallback(async (item) => {
+    const el = bodyRef.current
+    if (el === null) return
+    const find = () => el.querySelector(`[data-turn="${item.turn}"]`)
+    const node = find()
+    if (node !== null) {
+      el.scrollTop = node.offsetTop - 8
+      return
+    }
+    // Turn is known but paged out: pull its history in, then scroll.
+    if (session === undefined || session === null || typeof item.seq !== 'number') return
+    setBusyTurn(item.turn)
+    try {
+      await session.loadThrough(item.seq)
+    } catch {}
+    requestAnimationFrame(() => {
+      const late = find()
+      if (late !== null) el.scrollTop = late.offsetTop - 8
+      setBusyTurn(null)
+    })
+  }, [bodyRef, session])
+
+  if (items.length < 2) return null
+  const hovered = hoverTurn === null ? undefined : items.find((i) => i.turn === hoverTurn)
+
+  return h('div', { style: turnRailStyles.frame },
+    h('div', {
+      ref: scrollerRef,
+      style: turnRailStyles.scroller(scrolled.top, scrolled.bottom),
+      onScroll: (e) => setRailScroll(e.currentTarget.scrollTop),
+    },
+      h('div', { style: { position: 'relative' } },
+        items.map((item) => {
+          const state = item.turn === activeTurn
+            ? 'active'
+            : item.turn === hoverTurn
+              ? 'hover'
+              : item.seq === undefined
+                ? 'unloaded'
+                : 'rest'
+          return h('button', {
+            key: item.turn,
+            type: 'button',
+            'data-rail-turn': item.turn,
+            'aria-label': `第 ${item.turn} 轮`,
+            'aria-current': item.turn === activeTurn ? 'true' : undefined,
+            style: { ...turnRailStyles.mark, opacity: item.turn === busyTurn ? 0.4 : 1 },
+            onMouseEnter: () => setHoverTurn(item.turn),
+            onMouseLeave: () => setHoverTurn((prev) => (prev === item.turn ? null : prev)),
+            onFocus: () => setHoverTurn(item.turn),
+            onBlur: () => setHoverTurn((prev) => (prev === item.turn ? null : prev)),
+            onClick: () => { void jump(item) },
+          }, h('span', { style: turnRailStyles.tick(state) }))
+        }),
+      ),
+    ),
+    hovered === undefined ? null : h('div', {
+      role: 'tooltip',
+      style: {
+        ...turnRailStyles.preview,
+        // Track the hovered tick: its own offset inside the scroller, minus how
+        // far that scroller has been scrolled, centered on the tick.
+        top: TURN_RAIL_INSET
+          + items.findIndex((i) => i.turn === hovered.turn) * TURN_MARK_PITCH
+          + TURN_MARK_PITCH / 2
+          - railScroll,
+        transform: 'translateY(-50%)',
+      },
+    },
+      h('div', { style: turnRailStyles.previewPrompt }, hovered.prompt || `第 ${hovered.turn} 轮`),
+      hovered.response === '' ? null : h('div', { style: turnRailStyles.previewResponse }, hovered.response),
+    ),
+  )
+}
+
 // ---------- toggle button ----------
 // variant "sidebar": compact icon button for the sidebar footer row.
 // variant "inline": labelled button for the hero options row.
@@ -453,6 +732,174 @@ const composerBtnStyle = {
   borderRadius: 'var(--dsw-radius-md, 8px)',
   background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
   color: '#fff',
+}
+
+// ---------- tool call row ----------
+// Disclosure pattern copied from ui-primitives DisclosureRow.module.css
+// (24px row, 16px leading box, 13/24 title, tertiary → secondary on hover)
+// and ui-tool ToolRow.module.css for the summary ellipsis.
+
+const toolStyles = {
+  row: (hover, expanded) => ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+    height: 'calc(24px + var(--dsh-content-font-delta, 0px))',
+    overflow: 'hidden',
+    cursor: 'pointer',
+    userSelect: 'none',
+    color: hover || expanded
+      ? 'var(--dsw-alias-label-secondary, #999)'
+      : 'var(--dsw-alias-label-tertiary, #888)',
+    transition: 'color 100ms ease',
+  }),
+  chevron: (expanded) => ({
+    flex: 'none',
+    width: 12,
+    textAlign: 'center',
+    fontSize: 9,
+    lineHeight: '12px',
+    transform: expanded ? 'rotate(90deg)' : 'none',
+    transition: 'transform 120ms ease',
+  }),
+  name: {
+    flex: 'none',
+    fontFamily: 'var(--ds-font-family-code, monospace)',
+    fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
+    lineHeight: 'calc(24px + var(--dsh-content-font-delta, 0px))',
+  },
+  sep: {
+    flex: 'none',
+    width: 2,
+    height: 2,
+    borderRadius: 1,
+    margin: '0 2px',
+    background: 'var(--dsw-alias-label-caption, #777)',
+  },
+  summary: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
+    lineHeight: 'calc(24px + var(--dsh-content-font-delta, 0px))',
+  },
+  errorFlag: {
+    flex: 'none',
+    fontSize: 11,
+    lineHeight: '16px',
+    padding: '0 5px',
+    borderRadius: 'var(--dsw-radius-sm, 4px)',
+    background: 'var(--dsw-alias-state-error-primary, #e5484d)',
+    color: '#fff',
+  },
+  body: {
+    margin: '2px 0 8px 18px',
+    paddingLeft: 12,
+    borderLeft: '2px solid var(--dsw-alias-border-l2, #4a4a4a)',
+  },
+  label: {
+    fontSize: 11,
+    lineHeight: '16px',
+    color: 'var(--dsw-alias-label-caption, #888)',
+    marginTop: 6,
+  },
+  pre: {
+    margin: '4px 0',
+    padding: '8px 10px',
+    fontFamily: 'var(--ds-font-family-code, monospace)',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    lineHeight: 1.5,
+    background: 'var(--dsw-alias-markdown-code-block, rgba(128,128,128,.10))',
+    border: '0.5px solid var(--dsw-alias-border-l1, #4a4a4a)',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    maxHeight: 240,
+    overflow: 'auto',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
+}
+
+/** One-line hint for a tool call, derived from its JSON arguments. */
+function toolSummary(name, argsRaw) {
+  let parsed
+  try {
+    parsed = JSON.parse(argsRaw)
+  } catch {
+    return String(argsRaw ?? '').replace(/\s+/g, ' ').slice(0, 120)
+  }
+  if (parsed === null || typeof parsed !== 'object') return String(parsed).slice(0, 120)
+  const pick = parsed.description
+    ?? parsed.command
+    ?? parsed.file_path
+    ?? parsed.path
+    ?? parsed.pattern
+    ?? parsed.query
+    ?? parsed.url
+    ?? parsed.prompt
+  if (typeof pick === 'string') return pick.replace(/\s+/g, ' ').slice(0, 200)
+  const keys = Object.keys(parsed)
+  if (keys.length === 0) return ''
+  return keys.slice(0, 3).map((k) => `${k}=${JSON.stringify(parsed[k]).slice(0, 40)}`).join(' ')
+}
+
+/** Result text of a tool/result event, flattened from its content blocks. */
+function toolResultText(ev) {
+  const blocks = ev?.message?.content ?? ev?.data?.message?.content ?? []
+  const parts = []
+  for (const b of blocks) {
+    if (b?.type === 'text') parts.push(b.text)
+    else if (b?.type === 'image') parts.push('[image]')
+    else if (b?.type === 'file') parts.push('[file]')
+    else if (b?.type) parts.push(`[${b.type}]`)
+  }
+  return parts.join('\n')
+}
+
+/** Expandable tool call row: name, summary, and arguments/result on demand. */
+function ToolRow(props) {
+  const { name, argsRaw, resultText, isError, errorReason } = props
+  const [expanded, setExpanded] = useState(false)
+  const [hover, setHover] = useState(false)
+  const summary = toolSummary(name, argsRaw)
+
+  let prettyArgs = argsRaw
+  try {
+    prettyArgs = JSON.stringify(JSON.parse(argsRaw), null, 2)
+  } catch {}
+
+  return h('div', { style: { display: 'flex', flexDirection: 'column' } },
+    h('div', {
+      style: toolStyles.row(hover, expanded),
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => setHover(false),
+      onClick: () => setExpanded((v) => !v),
+      role: 'button',
+      'aria-expanded': expanded,
+      title: expanded ? '收起' : '展开',
+    },
+      h('span', { style: toolStyles.chevron(expanded) }, '▶'),
+      h('span', { style: toolStyles.name }, name),
+      summary ? h('span', { style: toolStyles.sep }) : null,
+      summary ? h('span', { style: toolStyles.summary }, summary) : null,
+      isError ? h('span', { style: toolStyles.errorFlag }, 'error') : null,
+    ),
+    expanded
+      ? h('div', { style: toolStyles.body },
+          errorReason ? h('div', { style: { ...toolStyles.label, color: 'var(--dsw-alias-state-error-primary, #e5484d)' } }, errorReason) : null,
+          prettyArgs ? h(React.Fragment, null,
+            h('div', { style: toolStyles.label }, '参数'),
+            h('pre', { style: toolStyles.pre }, prettyArgs),
+          ) : null,
+          resultText ? h(React.Fragment, null,
+            h('div', { style: toolStyles.label }, isError ? '错误输出' : '输出'),
+            h('pre', { style: toolStyles.pre }, resultText),
+          ) : h('div', { style: toolStyles.label }, '（暂无输出）'),
+        )
+      : null,
+  )
 }
 
 // Copied from ui-chat MessageItem.module.css `.bubble` / `.userRow`.
@@ -679,17 +1126,65 @@ function CellView(props) {
   // The binding's window already pages history, so render it whole: capping the
   // slice here only hid messages the reader had already loaded.
   const visible = events
+
+  // Pair each tool call with the result that answers it, so one disclosure row
+  // can show arguments and output together.
+  const toolResults = new Map()
+  const calledIds = new Set()
+  for (const entry of visible) {
+    const ev = entry.event
+    if (ev?.type === 'tool/call') {
+      const id = ev.data?.callId
+      if (id !== undefined) calledIds.add(id)
+    } else if (ev?.type === 'tool/result') {
+      const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId
+      if (id !== undefined) toolResults.set(id, ev.data)
+    }
+  }
+  const railItems = turnRailItems(visible)
+
   return h(React.Fragment, null,
-    h('div', {
-      ref: bodyRef,
-      onScroll,
-      style: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'auto', padding: '10px 12px', minHeight: 0 },
-    },
-      visible.map((entry, idx) => {
-        const ev = entry.event
-        const type = ev?.type ?? 'unknown'
+    // The scrollport and the turn rail share this box: the rail must not scroll
+    // with the transcript, so it sits beside the scroller, not inside it.
+    h('div', { style: { position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } },
+      h('div', {
+        ref: bodyRef,
+        onScroll,
+        style: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'auto', padding: '10px 12px', minHeight: 0 },
+      },
+        visible.map((entry, idx) => {
+          const ev = entry.event
+          const type = ev?.type ?? 'unknown'
+
+          if (type === 'tool/call') {
+            const id = ev.data?.callId
+            const result = id === undefined ? undefined : toolResults.get(id)
+            return h(ToolRow, {
+              key: idx,
+              name: ev.data?.name ?? 'tool',
+            argsRaw: ev.data?.arguments ?? '',
+            resultText: result ? toolResultText(result) : '',
+            isError: Boolean(result?.message?.isError ?? result?.isError),
+            errorReason: result?.error?.reason ?? result?.error?.name ?? '',
+          })
+        }
+        if (type === 'tool/result') {
+          const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId
+          // Already rendered by its call row when that call is in the window.
+          if (id !== undefined && calledIds.has(id)) return null
+          return h(ToolRow, {
+            key: idx,
+            name: '工具结果',
+            argsRaw: '',
+            resultText: toolResultText(ev.data),
+            isError: Boolean(ev.data?.message?.isError ?? ev.data?.isError),
+            errorReason: ev.data?.error?.reason ?? ev.data?.error?.name ?? '',
+          })
+        }
+
         let text = ''
         let kind = 'other'
+        let anchorTurn
         if (type === 'user/message') {
           const blocks = ev?.data?.content ?? []
           text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('')
@@ -701,12 +1196,11 @@ function CellView(props) {
         } else if (type === 'assistant/live-chunk') {
           text = ev?.data?.chunk?.text ?? ''
           kind = 'assistant'
-        } else if (type === 'tool/result') {
-          text = `[tool] ${ev?.data?.name ?? ''}`
-          kind = 'tool'
         } else if (type === 'turn/start') {
           text = `— 第 ${ev?.data?.turn} 轮 —`
           kind = 'divider'
+          // The turn rail scrolls to this anchor, so it must survive an empty label.
+          anchorTurn = ev?.data?.turn
         } else {
           return null
         }
@@ -715,8 +1209,14 @@ function CellView(props) {
         if (kind === 'assistant') {
           return h('div', { key: idx, style: eventStyle(kind) }, h(Markdown, { text, k: `m${idx}` }))
         }
-        return h('div', { key: idx, style: eventStyle(kind) }, text)
+        return h('div', {
+          key: idx,
+          style: eventStyle(kind),
+          'data-turn': anchorTurn,
+        }, text)
       }),
+      h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
+      ),
     ),
     h('div', { style: composerWrapStyle },
       h('div', { style: composerCardStyle },
