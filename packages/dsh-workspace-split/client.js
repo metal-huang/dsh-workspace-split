@@ -23,18 +23,25 @@ window.__ModuleLoader__.load({
     // variant "inline": labelled button for hero / session header rows.
     function SplitButton(props) {
       const variant = props?.variant ?? 'inline';
+      // Copied from ui-sidebar SidebarRoot.module.css `.iconButton`.
       if (variant === 'sidebar') {
+        const [hover, setHover] = useState(false);
         return h('button', {
+          className: 'dsws-icon-btn',
           title: '切换分屏视图',
           'aria-label': '切换分屏视图',
           style: {
-            width: 28, height: 28, flexShrink: 0,
+            position: 'relative', flex: 'none',
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            border: 'none', borderRadius: 'var(--dsw-radius-sm, 6px)',
-            background: 'transparent', cursor: 'pointer', padding: 0,
-            color: 'var(--dsw-alias-label-secondary, #888)',
+            width: 28, height: 28,
+            border: 'none', borderRadius: 'var(--dsw-radius-sm, 6px)', padding: 0,
+            background: hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))' : 'transparent',
+            cursor: 'pointer',
+            color: hover ? 'var(--dsw-alias-label-primary, inherit)' : 'var(--dsw-alias-label-secondary, #888)',
             fontSize: 15, lineHeight: 1,
           },
+          onMouseEnter: () => setHover(true),
+          onMouseLeave: () => setHover(false),
           onClick: () => { try { window.__dswsToggle?.(); } catch (_e) {} },
         }, '⊞');
       }
@@ -138,7 +145,7 @@ window.__ModuleLoader__.load({
       const visible = events.slice(-80);
       return h(React.Fragment, null,
         // messages area
-        h('div', { ref: bodyRef, style: { flex: 1, overflow: 'auto', padding: 8, fontSize: 12, lineHeight: 1.5, minHeight: 0 } },
+        h('div', { ref: bodyRef, style: { display: 'flex', flexDirection: 'column', flex: 1, overflow: 'auto', padding: '10px 12px', minHeight: 0 } },
           visible.map((entry, idx) => {
             const ev = entry.event;
             const type = ev?.type ?? 'unknown';
@@ -168,72 +175,97 @@ window.__ModuleLoader__.load({
         ),
         // composer
         h('div', { style: composerWrapStyle },
-          h('textarea', {
-            ref: textareaRef,
-            value: inputText,
-            onChange: (e) => setInputText(e.target.value),
-            onKeyDown,
-            placeholder: '输入消息…',
-            rows: 1,
-            style: composerInputStyle,
-          }),
-          h('button', {
-            onClick: send,
-            disabled: !inputText.trim() || sending,
-            style: { ...composerBtnStyle, opacity: (!inputText.trim() || sending) ? 0.4 : 1 },
-          }, '发送'),
+          h('div', { style: composerCardStyle },
+            h('textarea', {
+              ref: textareaRef,
+              value: inputText,
+              onChange: (e) => setInputText(e.target.value),
+              onKeyDown,
+              placeholder: '输入消息…',
+              rows: 1,
+              style: composerInputStyle,
+            }),
+            h('button', {
+              onClick: send,
+              disabled: !inputText.trim() || sending,
+              style: { ...composerBtnStyle, opacity: (!inputText.trim() || sending) ? 0.4 : 1 },
+            }, '发送'),
+          ),
         ),
       );
     }
 
+    // Copied from ui-conversation InputBar.module.css `.card` / `.input`.
     const composerWrapStyle = {
-      display: 'flex', gap: 6, padding: '6px 8px',
-      borderTop: '1px solid var(--dsw-alias-border-l3, #444)',
-      flexShrink: 0, alignItems: 'flex-end',
+      display: 'flex', flexDirection: 'column', gap: 6,
+      padding: '6px 8px', flexShrink: 0,
+    };
+    const composerCardStyle = {
+      boxSizing: 'border-box', display: 'flex', alignItems: 'flex-end', gap: 8,
+      borderRadius: 'var(--dsw-radius-panel, 12px)',
+      background: 'var(--dsw-specific-input-major, var(--dsw-alias-bg-elevated, #2a2a2a))',
+      boxShadow: 'var(--dsw-elevation-soft, 0 1px 2px rgba(0,0,0,.12))',
+      padding: '6px 8px 6px 12px',
     };
     const composerInputStyle = {
-      flex: 1, resize: 'none', fontSize: 12, padding: '4px 8px',
-      border: '1px solid var(--dsw-alias-border-l3, #444)',
-      borderRadius: 4, background: 'var(--dsw-alias-bg-base, transparent)',
+      flex: 1, resize: 'none', border: 'none', outline: 'none', padding: 0,
+      fontSize: 'var(--dsh-content-font-size, 13px)',
+      lineHeight: 'calc(20px + var(--dsh-content-font-delta, 0px))',
+      fontFamily: 'var(--dsw-font-family, inherit)',
+      background: 'transparent',
       color: 'var(--dsw-alias-label-primary, inherit)',
-      fontFamily: 'inherit', outline: 'none',
-      minHeight: 28, maxHeight: 80,
+      caretColor: 'var(--dsw-alias-state-business-primary, #4a9eff)',
+      whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere',
+      minHeight: 20, maxHeight: 80,
     };
     const composerBtnStyle = {
-      padding: '4px 10px', fontSize: 12, cursor: 'pointer',
-      border: '1px solid var(--dsw-alias-border-l3, #444)',
-      borderRadius: 4, background: 'var(--dsw-alias-bg-elevated, #2a2a2a)',
-      color: 'var(--dsw-alias-label-primary, inherit)',
-      flexShrink: 0,
+      flex: 'none', padding: '3px 10px',
+      fontSize: 12, lineHeight: '18px', cursor: 'pointer',
+      border: 'none', borderRadius: 'var(--dsw-radius-md, 8px)',
+      background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
+      color: '#fff',
     };
 
+    // Copied from ui-chat MessageItem.module.css `.bubble` / `.userRow`.
+    // User messages: right-aligned filled bubble. Assistant: plain flow, no bubble.
     function eventStyle(kind) {
       const base = {
-        padding: '6px 10px', marginBottom: 6, borderRadius: 8,
-        wordBreak: 'break-word', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.55,
-        maxWidth: '88%',
+        maxWidth: '82%',
+        wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+        fontSize: 'var(--dsh-content-font-size, 13px)',
+        lineHeight: 'calc(20px + var(--dsh-content-font-delta, 0px))',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        marginBottom: 8,
       };
       if (kind === 'user') return {
-        ...base, marginLeft: 'auto', marginRight: 0,
-        background: 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)',
-        color: 'var(--dsw-alias-label-primary, #eee)',
-        borderBottomRightRadius: 2,
+        ...base,
+        alignSelf: 'flex-end',
+        background: 'var(--dsw-specific-bubble, var(--dsw-alias-interactive-bg-hover, #2f3b4a))',
+        borderRadius: 'var(--dsw-radius-xl, 16px)',
+        padding: '10px 16px',
+        boxSizing: 'border-box',
       };
       if (kind === 'assistant') return {
-        ...base, marginRight: 'auto', marginLeft: 0,
+        ...base,
+        alignSelf: 'flex-start',
         background: 'transparent',
-        color: 'var(--dsw-alias-label-primary, #eee)',
-        border: '1px solid var(--dsw-alias-border-l3, #3a3a3a)',
-        borderBottomLeftRadius: 2,
+        padding: '2px 0',
       };
       if (kind === 'tool') return {
-        ...base, color: 'var(--dsw-alias-label-secondary, #888)',
-        fontStyle: 'italic', fontSize: 12, fontFamily: 'var(--ds-font-family-code, monospace)',
+        ...base,
+        alignSelf: 'flex-start',
+        color: 'var(--dsw-alias-label-tertiary, #888)',
+        fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+        lineHeight: 'calc(18px + var(--dsh-content-font-delta-secondary, 0px))',
+        fontFamily: 'var(--dsw-font-markdown-code-block-small, monospace)',
+        padding: '2px 0',
       };
       if (kind === 'divider') return {
-        ...base, maxWidth: '100%', textAlign: 'center',
-        color: 'var(--dsw-alias-label-caption, #999)', fontSize: 11,
-        background: 'transparent', border: 'none', padding: '2px 0',
+        ...base,
+        maxWidth: '100%', alignSelf: 'stretch', textAlign: 'center',
+        color: 'var(--dsw-alias-label-caption, #999)',
+        fontSize: 'var(--dsh-content-font-size-secondary, 11px)',
+        padding: '2px 0', marginBottom: 6,
       };
       return base;
     }
@@ -311,24 +343,28 @@ window.__ModuleLoader__.load({
         });
       }, [list]);
 
+      // Copied from ui-conversation ConversationRoot.module.css `.header` (hairline rule,
+      // 30px title row) and `.tab` (13/16 type).
       const cellStyle = {
-        border: '1px solid var(--dsw-alias-border-l3, #444)',
-        borderRadius: 8, display: 'flex', flexDirection: 'column',
+        border: '0.5px solid var(--dsw-alias-border-l3, #444)',
+        borderRadius: 'var(--dsw-radius-panel, 12px)',
+        display: 'flex', flexDirection: 'column',
         overflow: 'hidden', minHeight: 0,
         background: 'var(--dsw-alias-bg-base, transparent)',
       };
       const cellHeaderStyle = {
-        padding: '6px 12px', fontSize: 13, fontWeight: 500,
-        borderBottom: '1px solid var(--dsw-alias-border-l3, #444)',
         display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+        minHeight: 30, padding: '6px 12px',
+        borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
+        fontSize: 13, lineHeight: '16px', fontWeight: 500,
         color: 'var(--dsw-alias-label-primary, inherit)',
       };
       const selectStyle = {
         fontSize: 12, padding: '2px 6px', maxWidth: 160,
-        background: 'var(--dsw-alias-bg-base, transparent)',
+        background: 'var(--dsw-specific-input-major, transparent)',
         color: 'var(--dsw-alias-label-primary, inherit)',
-        border: '1px solid var(--dsw-alias-border-l3, #444)',
-        borderRadius: 4,
+        border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
       };
       const dotStyle = (running) => ({
         width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
@@ -337,8 +373,8 @@ window.__ModuleLoader__.load({
       });
       const toolbarStyle = {
         display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 20px', flexShrink: 0,
-        borderBottom: '1px solid var(--dsw-alias-border-l3, #444)',
+        minHeight: 38, padding: '6px 20px', flexShrink: 0,
+        borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
         color: 'var(--dsw-alias-label-primary, inherit)',
       };
       const gridStyle = {
@@ -429,6 +465,7 @@ window.__ModuleLoader__.load({
         const saved = loadLayout();
         let inSplit = saved?.inSplit ?? false;
         window.__dswsInSplit = inSplit;
+        window.__dswsSessions = ctx.sessions;
 
         window.__dswsToggle = () => {
           inSplit = !inSplit;
