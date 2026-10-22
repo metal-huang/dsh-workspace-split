@@ -19,7 +19,25 @@ window.__ModuleLoader__.load({
     }
 
     // ---------- toggle button ----------
-    function SplitButton() {
+    // variant "sidebar": compact icon button for the sidebar footer row.
+    // variant "inline": labelled button for hero / session header rows.
+    function SplitButton(props) {
+      const variant = props?.variant ?? 'inline';
+      if (variant === 'sidebar') {
+        return h('button', {
+          title: '切换分屏视图',
+          'aria-label': '切换分屏视图',
+          style: {
+            width: 28, height: 28, flexShrink: 0,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            border: 'none', borderRadius: 'var(--dsw-radius-sm, 6px)',
+            background: 'transparent', cursor: 'pointer', padding: 0,
+            color: 'var(--dsw-alias-label-secondary, #888)',
+            fontSize: 15, lineHeight: 1,
+          },
+          onClick: () => { try { window.__dswsToggle?.(); } catch (_e) {} },
+        }, '⊞');
+      }
       return h('button', {
         title: '切换分屏视图',
         style: {
@@ -421,6 +439,13 @@ window.__ModuleLoader__.load({
           saveLayout(cur.gridSize ?? 2, cur.cells ?? [], inSplit);
         };
         ctx.effect(() => () => { try { delete window.__dswsToggle; delete window.__dswsInSplit; } catch (_e) {} }, 'workspace-split: cleanup');
+
+        // Primary entry: sidebar footer row, beside the account menu.
+        ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+          name: 'sidebar.footer.action', id: 'workspace-split-sidebar', order: 5,
+        }, function SidebarSplitButton() {
+          return h(SplitButton, { variant: 'sidebar' });
+        }));
 
         ctx.slots.inject('conversation.hero.options', () => ctx.slots.register({
           name: 'conversation.hero.options', id: 'workspace-split-btn-hero', order: 5,
