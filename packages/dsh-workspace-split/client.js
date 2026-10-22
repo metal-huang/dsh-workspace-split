@@ -7377,7 +7377,9 @@ function mathFromMarkdown() {
 // src/client.js
 var h = import_react.default.createElement;
 var { useState, useEffect, useCallback, useSyncExternalStore, useRef } = import_react.default;
-var DEFAULT_MAX_CELLS = 20;
+var DEFAULT_MAX_CELLS = 10;
+var DEFAULT_CONFIRM_CELLS = 6;
+var PICKER_MAX = 10;
 var OPEN_TIMEOUT_MS = 15e3;
 var openChain = Promise.resolve();
 function enqueueOpen(task) {
@@ -7395,11 +7397,36 @@ function loadLayout() {
     return null;
   }
 }
-function saveLayout(gridSize, cells, inSplit) {
+function saveLayout(rows, cols, cells, inSplit) {
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ gridSize, cells, inSplit }));
+    localStorage.setItem(LS_KEY, JSON.stringify({ rows, cols, cells, inSplit }));
   } catch {
   }
+}
+function toSpan(value, fallback) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 ? n : fallback;
+}
+function savedGeometry(saved) {
+  if (Number.isInteger(saved?.rows) && Number.isInteger(saved?.cols)) {
+    return { rows: toSpan(saved.rows, 2), cols: toSpan(saved.cols, 2) };
+  }
+  const n = Math.min(toSpan(saved?.gridSize, 2), PICKER_MAX);
+  return { rows: n, cols: n };
+}
+function fitGeometry(rows, cols, maxCells) {
+  let r = Math.min(toSpan(rows, 1), PICKER_MAX);
+  let c = Math.min(toSpan(cols, 1), PICKER_MAX);
+  while (r * c > maxCells) {
+    if (r >= c && r > 1) r -= 1;
+    else if (c > 1) c -= 1;
+    else break;
+  }
+  return { rows: r, cols: c };
+}
+function configLimit(value, fallback) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 ? n : fallback;
 }
 function normalizeCell(value) {
   if (value === null || value === void 0) return null;
@@ -8491,6 +8518,393 @@ function CellView(props) {
     )
   );
 }
+var pickerStyles = {
+  wrap: { position: "relative", display: "inline-flex" },
+  trigger: (open) => ({
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "2px 8px",
+    fontSize: 12,
+    lineHeight: "18px",
+    cursor: "pointer",
+    border: "0.5px solid var(--dsw-alias-border-l2, #555)",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    background: open ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : "transparent",
+    color: "var(--dsw-alias-label-primary, inherit)"
+  }),
+  caret: { fontSize: 8, opacity: 0.7 },
+  panel: {
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    right: 0,
+    zIndex: 60,
+    width: 240,
+    boxSizing: "border-box",
+    padding: "12px 12px 10px",
+    border: "0.5px solid var(--dsw-alias-border-l2, #555)",
+    borderRadius: "var(--dsw-radius-lg, 10px)",
+    background: "var(--dsw-alias-bg-layer-1, #1e1e1e)",
+    boxShadow: "var(--dsw-elevation-panel, 0 4px 16px rgba(0,0,0,.35))",
+    color: "var(--dsw-alias-label-primary, inherit)"
+  },
+  caption: { fontSize: 13, fontWeight: 600, lineHeight: "20px" },
+  captionMeta: {
+    fontSize: 12,
+    fontWeight: 400,
+    color: "var(--dsw-alias-label-secondary, #888)"
+  },
+  hint: (tone) => ({
+    marginTop: 8,
+    minHeight: 16,
+    fontSize: 11,
+    lineHeight: "16px",
+    color: tone === "warn" ? "var(--dsw-alias-state-warning, #e6a23c)" : "var(--dsw-alias-label-caption, #999)"
+  }),
+  grid: {
+    display: "grid",
+    gridTemplateColumns: `repeat(${PICKER_MAX}, 18px)`,
+    gridAutoRows: "18px",
+    gap: 4,
+    marginTop: 10,
+    width: "max-content",
+    outlineOffset: 2
+  },
+  cell: (state) => {
+    const base = {
+      width: 18,
+      height: 18,
+      padding: 0,
+      boxSizing: "border-box",
+      borderRadius: 3,
+      border: "0.5px solid var(--dsw-alias-border-l2, #555)",
+      background: "transparent",
+      cursor: "pointer",
+      transition: "background-color 90ms ease, border-color 90ms ease"
+    };
+    if (state === "blocked") {
+      return {
+        ...base,
+        cursor: "not-allowed",
+        borderColor: "var(--dsw-alias-state-warning, #e6a23c)",
+        background: "rgba(230, 162, 60, 0.10)"
+      };
+    }
+    if (state === "confirm") {
+      return {
+        ...base,
+        borderColor: "var(--dsw-alias-state-warning, #e6a23c)",
+        background: "rgba(230, 162, 60, 0.45)"
+      };
+    }
+    if (state === "active") {
+      return {
+        ...base,
+        borderColor: "var(--dsw-alias-state-business-primary, #4a9eff)",
+        background: "var(--dsw-alias-state-business-primary, #4a9eff)"
+      };
+    }
+    return base;
+  }
+};
+var pickerDialogStyles = {
+  backdrop: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 1e3,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    background: "rgba(0, 0, 0, 0.45)"
+  },
+  card: {
+    width: 380,
+    maxWidth: "100%",
+    boxSizing: "border-box",
+    padding: "18px 20px 16px",
+    border: "0.5px solid var(--dsw-alias-border-l2, #555)",
+    borderRadius: "var(--dsw-radius-lg, 10px)",
+    background: "var(--dsw-alias-bg-layer-1, #1e1e1e)",
+    boxShadow: "var(--dsw-elevation-panel, 0 4px 16px rgba(0,0,0,.35))",
+    color: "var(--dsw-alias-label-primary, inherit)"
+  },
+  title: { fontSize: 15, fontWeight: 600, lineHeight: "22px" },
+  body: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: "20px",
+    color: "var(--dsw-alias-label-secondary, #999)"
+  },
+  note: {
+    marginTop: 10,
+    padding: "8px 10px",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    background: "rgba(230, 162, 60, 0.12)",
+    color: "var(--dsw-alias-state-warning, #e6a23c)",
+    fontSize: 12,
+    lineHeight: "18px"
+  },
+  code: {
+    margin: "8px 0 0",
+    padding: "6px 8px",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    background: "var(--dsw-alias-markdown-code-block, rgba(128,128,128,.10))",
+    color: "var(--dsw-alias-label-primary, inherit)",
+    fontFamily: "var(--ds-font-family-code, monospace)",
+    fontSize: 12,
+    lineHeight: "18px",
+    whiteSpace: "pre-wrap"
+  },
+  actions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 },
+  button: (primary) => ({
+    padding: "4px 12px",
+    fontSize: 13,
+    lineHeight: "20px",
+    cursor: "pointer",
+    border: "0.5px solid var(--dsw-alias-border-l2, #555)",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    background: primary ? "var(--dsw-alias-state-business-primary, #4a9eff)" : "transparent",
+    color: primary ? "#fff" : "var(--dsw-alias-label-primary, inherit)"
+  })
+};
+function GridDialog(props) {
+  const cancelRef = useRef(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKey = (event) => {
+      if (event.key === "Escape") props.onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [props.onCancel]);
+  return h(
+    "div",
+    {
+      style: pickerDialogStyles.backdrop,
+      onMouseDown: (event) => {
+        if (event.target === event.currentTarget) props.onCancel();
+      }
+    },
+    h(
+      "div",
+      {
+        role: "dialog",
+        "aria-modal": "true",
+        "aria-label": props.title,
+        style: pickerDialogStyles.card
+      },
+      h("div", { style: pickerDialogStyles.title }, props.title),
+      h("div", { style: pickerDialogStyles.body }, props.body),
+      props.note === void 0 ? null : h("div", { style: pickerDialogStyles.note }, props.note),
+      props.code === void 0 ? null : h("pre", { style: pickerDialogStyles.code }, props.code),
+      h(
+        "div",
+        { style: pickerDialogStyles.actions },
+        h("button", {
+          ref: cancelRef,
+          type: "button",
+          style: pickerDialogStyles.button(false),
+          onClick: props.onCancel
+        }, "\u53D6\u6D88"),
+        h("button", {
+          type: "button",
+          style: pickerDialogStyles.button(true),
+          onClick: props.onConfirm
+        }, props.confirmLabel)
+      )
+    )
+  );
+}
+function GridPickerDialog(props) {
+  const { dialog, maxCells, confirmCells, onCancel, onConfirm } = props;
+  const count = dialog.rows * dialog.cols;
+  if (dialog.kind === "unlock") {
+    return h(GridDialog, {
+      title: `\u9700\u8981\u89E3\u9501 ${count} \u683C`,
+      body: `\u5355\u4E2A\u754C\u9762\u9ED8\u8BA4\u6700\u591A ${maxCells} \u683C\u3002\u8981\u4F7F\u7528 ${count} \u683C\uFF0C\u9700\u8981\u5148\u5728\u63D2\u4EF6\u914D\u7F6E\u91CC\u89E3\u9501\u4E0A\u9650\u3002`,
+      note: "\u6253\u5F00 cordis.patch.yml\uFF0C\u628A config.maxCells \u8C03\u5230\u4E0B\u9762\u7684\u6570\u503C\uFF0C\u4FDD\u5B58\u540E\u91CD\u65B0\u52A0\u8F7D\u63D2\u4EF6\u3002",
+      code: `config:
+  maxCells: ${count}`,
+      confirmLabel: "\u77E5\u9053\u4E86",
+      onCancel,
+      onConfirm
+    });
+  }
+  return h(GridDialog, {
+    title: `\u6253\u5F00 ${count} \u4E2A\u683C\u5B50\uFF1F`,
+    body: `\u5355\u5C4F\u8D85\u8FC7 ${confirmCells} \u4E2A\u4F1A\u8BDD\u65F6\uFF0C\u6BCF\u4E2A\u683C\u5B50\u90FD\u4F1A\u6301\u6709\u4E00\u4E2A\u4F1A\u8BDD\uFF0C\u540C\u65F6\u8F93\u51FA\u53EF\u80FD\u9020\u6210\u5361\u987F\u3002`,
+    note: `\u786E\u8BA4\u540E\u4ECD\u5C06\u4F7F\u7528 ${count} \u683C\uFF0C\u53EF\u4EE5\u968F\u65F6\u6539\u56DE\u66F4\u5C0F\u7684\u7F51\u683C\u3002`,
+    confirmLabel: "\u4ECD\u7136\u7EE7\u7EED",
+    onCancel,
+    onConfirm
+  });
+}
+function GridChoiceGrid(props) {
+  const { preview, maxCells, confirmCells, onPreview, onChoose } = props;
+  const gridRef = useRef(null);
+  const previewCount = preview.rows * preview.cols;
+  const tone = previewCount > maxCells ? "blocked" : previewCount > confirmCells ? "confirm" : "active";
+  useEffect(() => {
+    gridRef.current?.focus();
+  }, []);
+  const onKeyDown = (event) => {
+    const delta = {
+      ArrowUp: [-1, 0],
+      ArrowDown: [1, 0],
+      ArrowLeft: [0, -1],
+      ArrowRight: [0, 1]
+    }[event.key];
+    if (delta !== void 0) {
+      event.preventDefault();
+      onPreview({
+        rows: Math.min(PICKER_MAX, Math.max(1, preview.rows + delta[0])),
+        cols: Math.min(PICKER_MAX, Math.max(1, preview.cols + delta[1]))
+      });
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onChoose(preview.rows, preview.cols);
+    }
+  };
+  const cells = [];
+  for (let r = 1; r <= PICKER_MAX; r += 1) {
+    for (let c = 1; c <= PICKER_MAX; c += 1) {
+      const count = r * c;
+      const inside = r <= preview.rows && c <= preview.cols;
+      const state = inside ? tone : "idle";
+      cells.push(h("button", {
+        key: `${r}.${c}`,
+        type: "button",
+        tabIndex: -1,
+        "aria-label": `${r} \u884C \xD7 ${c} \u5217\uFF0C\u5171 ${count} \u683C`,
+        style: pickerStyles.cell(state),
+        onMouseEnter: () => onPreview({ rows: r, cols: c }),
+        onClick: () => onChoose(r, c)
+      }));
+    }
+  }
+  return h("div", {
+    ref: gridRef,
+    role: "group",
+    "aria-label": "\u9009\u62E9\u884C\u6570\u4E0E\u5217\u6570",
+    tabIndex: 0,
+    style: pickerStyles.grid,
+    onKeyDown
+  }, cells);
+}
+function pickerHint(blocked, confirm, maxCells, confirmCells) {
+  if (blocked) return { tone: "warn", text: `\u8D85\u8FC7\u4E0A\u9650 ${maxCells} \u683C\uFF0C\u9700\u5728\u914D\u7F6E\u4E2D\u89E3\u9501` };
+  if (confirm) return { tone: "warn", text: `\u8D85\u8FC7 ${confirmCells} \u683C\uFF0C\u786E\u8BA4\u540E\u7EE7\u7EED` };
+  return { tone: "muted", text: `\u5EFA\u8BAE\u4E0D\u8D85\u8FC7 ${confirmCells} \u683C` };
+}
+function GridPicker(props) {
+  const { rows, cols, maxCells, confirmCells, onApply } = props;
+  const [open, setOpen] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [dialog, setDialog] = useState(null);
+  const wrapRef = useRef(null);
+  const triggerRef = useRef(null);
+  const shown = preview ?? { rows, cols };
+  const count = shown.rows * shown.cols;
+  const blocked = count > maxCells;
+  const confirm = !blocked && count > confirmCells;
+  const hint = pickerHint(blocked, confirm, maxCells, confirmCells);
+  const close = useCallback((refocus) => {
+    setOpen(false);
+    setPreview(null);
+    if (refocus) triggerRef.current?.focus();
+  }, []);
+  useEffect(() => {
+    if (!open) return void 0;
+    const onPointerDown = (event) => {
+      if (wrapRef.current?.contains(event.target)) return;
+      close(false);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape" && dialog === null) close(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, dialog, close]);
+  const commit = useCallback((nextRows, nextCols) => {
+    onApply(nextRows, nextCols);
+    setDialog(null);
+    close(true);
+  }, [onApply, close]);
+  const choose = useCallback((nextRows, nextCols) => {
+    const nextCount = nextRows * nextCols;
+    if (nextCount > maxCells) {
+      setDialog({ kind: "unlock", rows: nextRows, cols: nextCols });
+      return;
+    }
+    if (nextCount > confirmCells && nextCount > rows * cols) {
+      setDialog({ kind: "confirm", rows: nextRows, cols: nextCols });
+      return;
+    }
+    commit(nextRows, nextCols);
+  }, [maxCells, confirmCells, rows, cols, commit]);
+  const dialogNode = dialog === null ? null : h(GridPickerDialog, {
+    dialog,
+    maxCells,
+    confirmCells,
+    onCancel: () => setDialog(null),
+    onConfirm: () => {
+      if (dialog.kind === "confirm") commit(dialog.rows, dialog.cols);
+      else setDialog(null);
+    }
+  });
+  return h(
+    "div",
+    { ref: wrapRef, style: pickerStyles.wrap },
+    h(
+      "button",
+      {
+        ref: triggerRef,
+        type: "button",
+        style: pickerStyles.trigger(open),
+        "aria-haspopup": "dialog",
+        "aria-expanded": open,
+        title: `\u5F53\u524D ${rows} \u884C \xD7 ${cols} \u5217\uFF0C\u70B9\u51FB\u9009\u62E9\u7F51\u683C\u5927\u5C0F`,
+        onClick: () => {
+          setOpen((value) => !value);
+          setPreview(null);
+          setDialog(null);
+        }
+      },
+      `\u7F51\u683C ${rows}\xD7${cols}`,
+      h("span", { style: pickerStyles.caret }, "\u25BE")
+    ),
+    open ? h(
+      "div",
+      {
+        role: "dialog",
+        "aria-label": "\u9009\u62E9\u7F51\u683C\u5927\u5C0F",
+        style: pickerStyles.panel
+      },
+      h(
+        "div",
+        { style: pickerStyles.caption },
+        `${shown.rows} \u884C \xD7 ${shown.cols} \u5217`,
+        h("span", { style: pickerStyles.captionMeta }, ` \xB7 ${count} \u683C`)
+      ),
+      h(GridChoiceGrid, {
+        preview: shown,
+        maxCells,
+        confirmCells,
+        onPreview: setPreview,
+        onChoose: choose
+      }),
+      h("div", { style: pickerStyles.hint(hint.tone) }, hint.text)
+    ) : null,
+    dialogNode
+  );
+}
 function SplitMain(props) {
   const sessions = props.__sessions;
   const workspaces = props.__workspaces;
@@ -8501,12 +8915,18 @@ function SplitMain(props) {
   const wsSnapshot = useCallback(() => workspaces.list.getSnapshot(), [workspaces]);
   const wsState = useSyncExternalStore(wsSubscribe, wsSnapshot);
   const saved = useRef(loadLayout()).current;
-  const [gridSize, setGridSize] = useState(saved?.gridSize ?? 2);
+  const maxCells = props.__maxCells ?? DEFAULT_MAX_CELLS;
+  const confirmCells = props.__confirmCells ?? DEFAULT_CONFIRM_CELLS;
+  const [geometry, setGeometry] = useState(() => {
+    const start = savedGeometry(saved);
+    return fitGeometry(start.rows, start.cols, maxCells);
+  });
+  const { rows, cols } = geometry;
   const [activeCell, setActiveCell] = useState(0);
   const [dragOver, setDragOver] = useState(-1);
   const [cells, setCells] = useState(() => {
     const s = saved?.cells ?? [];
-    const size = (saved?.gridSize ?? 2) ** 2;
+    const size = geometry.rows * geometry.cols;
     const arr = Array(size).fill(null);
     for (let i = 0; i < Math.min(s.length, size); i++) arr[i] = normalizeCell(s[i]);
     return arr;
@@ -8541,8 +8961,10 @@ function SplitMain(props) {
       }
     });
   }, [nonBlank.length]);
-  const maxCells = props.__maxCells ?? DEFAULT_MAX_CELLS;
-  const total = Math.min(gridSize * gridSize, maxCells);
+  const total = rows * cols;
+  const applyGeometry = useCallback((nextRows, nextCols) => {
+    setGeometry(fitGeometry(nextRows, nextCols, maxCells));
+  }, [maxCells]);
   const setCell = (idx, cell) => {
     setCells((prev) => {
       const next = [...prev];
@@ -8571,16 +8993,18 @@ function SplitMain(props) {
     return { t: "workspace", ws: workspaceId, id: first?.id ?? null };
   }, [list2, workspaceItems, sessionsOfWorkspace]);
   useEffect(() => {
-    const size = Math.min(gridSize * gridSize, maxCells);
+    const size = rows * cols;
     setCells((prev) => {
+      if (prev.length === size) return prev;
       const next = Array(size).fill(null);
       for (let i = 0; i < Math.min(prev.length, size); i++) next[i] = prev[i];
       return next;
     });
-  }, [gridSize, maxCells]);
+    setActiveCell((prev) => Math.min(prev, size - 1));
+  }, [rows, cols]);
   useEffect(() => {
-    saveLayout(gridSize, cells, window.__dswsInSplit ?? false);
-  }, [gridSize, cells]);
+    saveLayout(rows, cols, cells, window.__dswsInSplit ?? false);
+  }, [rows, cols, cells]);
   useEffect(() => {
     if (list2?.phase !== "ready") return;
     const known = new Set(list2.ids ?? []);
@@ -8647,8 +9071,8 @@ function SplitMain(props) {
   };
   const gridStyle = {
     display: "grid",
-    gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
-    gridTemplateRows: `repeat(${gridSize}, minmax(0, 1fr))`,
+    gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+    gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
     gap: 0,
     padding: 0,
     borderRight: "0.5px solid var(--dsw-alias-border-l3, #444)",
@@ -8683,15 +9107,13 @@ function SplitMain(props) {
       h(
         "div",
         { style: { marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" } },
-        h("span", { style: { fontSize: 12 } }, "\u7F51\u683C:"),
-        [1, 2, 3, 4, 5].map(
-          (n) => h("button", {
-            key: n,
-            style: { ...btnStyle, fontWeight: gridSize === n ? 700 : 400 },
-            onClick: () => setGridSize(n),
-            title: `${n}\xD7${n} = ${n * n} \u683C`
-          }, `${n}\xD7${n}`)
-        ),
+        h(GridPicker, {
+          rows,
+          cols,
+          maxCells,
+          confirmCells,
+          onApply: applyGeometry
+        }),
         h("button", {
           style: btnStyle,
           onClick: () => {
@@ -8795,7 +9217,11 @@ function SplitMain(props) {
 }
 var inject = ["slots", "layout", "sessions", "workspaces"];
 function apply(ctx, config) {
-  const maxCells = config?.maxCells ?? DEFAULT_MAX_CELLS;
+  const maxCells = configLimit(config?.maxCells, DEFAULT_MAX_CELLS);
+  const confirmCells = Math.min(
+    configLimit(config?.confirmOverCells, DEFAULT_CONFIRM_CELLS),
+    maxCells
+  );
   const saved = loadLayout();
   let inSplit = saved?.inSplit ?? false;
   window.__dswsInSplit = inSplit;
@@ -8807,7 +9233,9 @@ function apply(ctx, config) {
     } catch (_e) {
     }
     const cur = loadLayout() ?? {};
-    saveLayout(cur.gridSize ?? 2, cur.cells ?? [], inSplit);
+    const start = savedGeometry(cur);
+    const geo = fitGeometry(start.rows, start.cols, maxCells);
+    saveLayout(geo.rows, geo.cols, cur.cells ?? [], inSplit);
   };
   ctx.effect(() => () => {
     try {
@@ -8837,7 +9265,8 @@ function apply(ctx, config) {
     return h(SplitMain, {
       __sessions: sessionsRef,
       __workspaces: workspacesRef,
-      __maxCells: maxCells
+      __maxCells: maxCells,
+      __confirmCells: confirmCells
     });
   }));
   if (inSplit) {

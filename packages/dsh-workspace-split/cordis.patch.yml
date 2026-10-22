@@ -2,4 +2,7 @@
     - id: workspace-split
       name: '@local/dsh-workspace-split'
       config:
-        maxCells: 20
+        # 单个界面默认最多 10 格；超过 10 格需在这里调大 maxCells 解锁。
+        maxCells: 10
+        # 超过 6 格时先弹确认框提醒可能卡顿。
+        confirmOverCells: 6
