@@ -8,6 +8,11 @@ build/
 out/
 *.tsbuildinfo
 
+# 门禁报告与本地标记（基线文件在 gate/*.json，必须入库）
+gate-reports/
+gate/reports/
+.gate/
+
 # 编辑器与系统
 .vscode/
 .idea/

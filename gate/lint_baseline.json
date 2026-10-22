@@ -1,0 +1,8 @@
+{
+  "max_warnings": 9,
+  "tool_version": "9.39.4",
+  "scan_args": [
+    "eslint",
+    "."
+  ]
+}

@@ -1,0 +1,1 @@
+node gate/commit_msg.mjs "$1"

@@ -1,0 +1,22 @@
+# 构建产物：由 packages/dsh-workspace-split/build.mjs 生成，不要格式化
+packages/*/client.js
+
+# 依赖
+node_modules/
+
+# 门禁自身产物（报告、缓存）
+gate/reports/
+.gate/
+coverage/
+
+# 文档不纳入格式化门禁（文档规范由 docs/spec 约束）
+docs/
+*.md
+
+# 锁文件
+package-lock.json
+pnpm-lock.yaml
+
+# 编辑器与系统
+.vscode/
+.idea/

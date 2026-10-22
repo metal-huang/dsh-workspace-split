@@ -1,0 +1,29 @@
+{
+  "name": "dsh-workspace-split-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Gate toolchain root for the multi-session split-view plugin.",
+  "scripts": {
+    "prepare": "husky",
+    "lint": "node gate/lint_runner.mjs",
+    "format": "prettier --write \"packages/*/src/**/*.{js,mjs}\" \"packages/*/*.{js,mjs}\" \"gate/**/*.mjs\" \"test/**/*.js\"",
+    "format:check": "node gate/format_check.mjs",
+    "dup:check": "node gate/dup_check.mjs",
+    "check:fast": "npm run lint && npm run dup:check && npm run format:check",
+    "test": "node --test \"test/**/*.test.js\"",
+    "check": "npm run check:fast && npm test",
+    "build": "node gate/build_plugin.mjs",
+    "check:full": "npm run check && npm run build",
+    "ratchet:tighten": "node gate/ratchet_tighten.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "globals": "^15.0.0",
+    "husky": "^9.1.0",
+    "jscpd": "^5.0.0",
+    "prettier": "^3.3.0"
+  }
+}

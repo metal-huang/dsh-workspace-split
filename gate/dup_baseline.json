@@ -1,0 +1,15 @@
+{
+  "clones": 2,
+  "lines": 17,
+  "percentage": 0.83,
+  "tool_version": "5",
+  "scan_args": [
+    "jscpd",
+    "packages/dsh-workspace-split/src",
+    "packages/dsh-workspace-split/index.js",
+    "packages/dsh-workspace-split/build.mjs",
+    "gate",
+    "--min-tokens",
+    "50"
+  ]
+}

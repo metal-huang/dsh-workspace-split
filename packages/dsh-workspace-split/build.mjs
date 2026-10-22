@@ -10,10 +10,11 @@
  */
 
 import { build } from 'esbuild'
-import { readFile, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 
 const ID = '@local/dsh-workspace-split'
-const OUT = 'client.js'
+/** Optional argv[2] lets the gate rebuild to a scratch path and compare. */
+const OUT = process.argv[2] ?? 'client.js'
 
 /** Platform modules the loader's `require` resolves; keep them out of the bundle. */
 const PLATFORM_EXTERNALS = [
