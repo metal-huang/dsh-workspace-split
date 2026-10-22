@@ -371,6 +371,11 @@ function SplitButton(props) {
         marginLeft: 'auto',
         marginRight: 4,
         transform: 'translateY(40px)',
+        // A transform moves paint, not layout: the account row (a later,
+        // positioned sibling subtree) would otherwise paint over this control
+        // and swallow every click. A positive stack level keeps the button
+        // above that row while leaving the row's own layout untouched.
+        zIndex: 1,
       },
       onMouseEnter: () => setHover(true),
       onMouseLeave: () => setHover(false),
