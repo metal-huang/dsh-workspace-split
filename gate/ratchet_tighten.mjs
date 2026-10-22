@@ -113,16 +113,20 @@ if (dupMatch === null) {
     lines: Number(dupMatch[2]),
     percentage: Number(dupMatch[3]),
   }
-  // Each dimension only decreases; clones is the dimension tightening trusts.
-  const next = {
-    clones: SEED ? measured.clones : Math.min(measured.clones, stored?.clones ?? measured.clones),
-    lines: SEED ? measured.lines : Math.min(measured.lines, stored?.lines ?? measured.lines),
-    percentage: SEED
-      ? measured.percentage
-      : Math.min(measured.percentage, stored?.percentage ?? measured.percentage),
-    tool_version: '5',
-    scan_args: ['jscpd', ...DUP_SCAN, '--min-tokens', '50'],
-  }
+  // Clones is the only dimension that tightens on its own: lines and
+  // percentage drift with the total line count, so a percentage that fell
+  // because the codebase grew would bounce straight back on the next edit.
+  // All three are re-recorded together, and only when clones genuinely drops.
+  const tighter = SEED || stored === undefined || measured.clones < stored.clones
+  const next = tighter
+    ? { ...measured, tool_version: '5', scan_args: ['jscpd', ...DUP_SCAN, '--min-tokens', '50'] }
+    : {
+        clones: stored.clones,
+        lines: stored.lines,
+        percentage: stored.percentage,
+        tool_version: '5',
+        scan_args: ['jscpd', ...DUP_SCAN, '--min-tokens', '50'],
+      }
   save({
     file: DUP_FILE,
     value: next,

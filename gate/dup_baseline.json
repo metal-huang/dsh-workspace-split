@@ -1,7 +1,7 @@
 {
   "clones": 2,
   "lines": 17,
-  "percentage": 0.83,
+  "percentage": 0.72,
   "tool_version": "5",
   "scan_args": [
     "jscpd",
