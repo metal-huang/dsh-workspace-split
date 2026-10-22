@@ -50,6 +50,11 @@ window.__ModuleLoader__.load({
             cursor: 'pointer',
             color: hover ? 'var(--dsw-alias-label-primary, inherit)' : 'var(--dsw-alias-label-secondary, #888)',
             fontSize: 15, lineHeight: 1,
+            // The footer action slot owns a 28px row above the account row;
+            // push this control to that row's trailing edge and drop it one row
+            // down so it reads as part of the account row itself.
+            marginLeft: 'auto', marginRight: 4,
+            transform: 'translateY(40px)',
           },
           onMouseEnter: () => setHover(true),
           onMouseLeave: () => setHover(false),
@@ -213,6 +218,11 @@ window.__ModuleLoader__.load({
               kind = 'divider';
             } else { return null; }
             if (!text) return null;
+            // Assistant narration is Markdown; user prompts and status rows stay literal.
+            if (kind === 'assistant') {
+              return h('div', { key: idx, style: eventStyle(kind) },
+                h(Markdown, { text, k: `m${idx}` }));
+            }
             return h('div', { key: idx, style: eventStyle(kind) }, text);
           }),
         ),
@@ -269,6 +279,207 @@ window.__ModuleLoader__.load({
       color: '#fff',
     };
 
+    // ---------- minimal Markdown renderer ----------
+    // Styles copied from ui-primitives MarkdownText.module.css (`.markdown`,
+    // `.tableScroll`, `th`, `td`, inline code). The native renderer is an mdast
+    // pipeline that a plugin cannot import, so this covers the block and inline
+    // shapes a transcript actually carries and styles them with the same tokens.
+
+    const mdRootStyle = {
+      minWidth: 0, overflowWrap: 'anywhere',
+      color: 'var(--dsw-alias-label-primary, inherit)',
+    };
+
+    function inlineMarkdown(text, keyPrefix) {
+      // Split on `code`, **strong**, and [label](url); everything else stays text.
+      const out = [];
+      const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\([^)]+\))/g;
+      let last = 0, m, i = 0;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) out.push(text.slice(last, m.index));
+        const token = m[0];
+        if (token.startsWith('`')) {
+          out.push(h('code', {
+            key: `${keyPrefix}-c${i++}`,
+            style: {
+              display: 'inline', fontFamily: 'var(--ds-font-family-code, monospace)',
+              fontSize: '0.875em',
+              background: 'var(--dsw-alias-markdown-inline-code, rgba(128,128,128,.16))',
+              border: '0.5px solid var(--dsw-alias-border-l1, #555)',
+              borderRadius: 'var(--dsw-radius-sm, 4px)',
+              padding: '0 5px',
+            },
+          }, token.slice(1, -1)));
+        } else if (token.startsWith('**')) {
+          out.push(h('strong', { key: `${keyPrefix}-s${i++}`, style: { fontWeight: 600 } }, token.slice(2, -2)));
+        } else {
+          const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
+          out.push(h('a', {
+            key: `${keyPrefix}-a${i++}`,
+            href: mm?.[2], target: '_blank', rel: 'noreferrer',
+            style: { color: 'var(--dsw-alias-link, #4a9eff)', fontWeight: 500, textDecoration: 'none' },
+          }, mm?.[1] ?? token));
+        }
+        last = m.index + token.length;
+      }
+      if (last < text.length) out.push(text.slice(last));
+      return out.length ? out : [text];
+    }
+
+    /** Render a Markdown table block (rows already split on `|`). */
+    function mdTable(rows, key) {
+      const cells = (line) => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+      const header = cells(rows[0]);
+      const body = rows.slice(2).map(cells);
+      const cellStyle = {
+        padding: '10px 16px',
+        borderBottom: '0.5px solid var(--dsw-alias-border-l2, #4a4a4a)',
+        textAlign: 'start',
+        verticalAlign: 'top',
+      };
+      const headStyle = {
+        ...cellStyle,
+        borderBottom: '0.5px solid var(--dsw-alias-border-l3, #5a5a5a)',
+        font: 'var(--dsw-font-markdown-table-head, inherit)',
+        fontWeight: 600,
+      };
+      return h('div', { key, style: { maxWidth: '100%', overflowX: 'auto', overscrollBehaviorX: 'contain', margin: '16px 0' } },
+        h('table', { style: { borderCollapse: 'collapse', width: 'max-content', maxWidth: 'max-content' } },
+          h('thead', null,
+            h('tr', null, header.map((c, i) => h('th', { key: i, style: headStyle }, inlineMarkdown(c, `${key}-h${i}`)))),
+          ),
+          h('tbody', null,
+            body.map((row, r) =>
+              h('tr', { key: r }, row.map((c, i) => h('td', { key: i, style: cellStyle }, inlineMarkdown(c, `${key}-r${r}c${i}`)))),
+            ),
+          ),
+        ),
+      );
+    }
+
+    /** Render one Markdown document into block elements. */
+    function markdownBlocks(text, key) {
+      const lines = String(text ?? '').split('\n');
+      const blocks = [];
+      let i = 0;
+      const pStyle = { margin: '16px 0', whiteSpace: 'pre-wrap', lineHeight: 'inherit' };
+
+      while (i < lines.length) {
+        const line = lines[i];
+
+        // fenced code
+        const fence = /^\s*```(\S*)/.exec(line);
+        if (fence) {
+          const buf = [];
+          i++;
+          while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+          i++;
+          blocks.push(h('pre', {
+            key: `${key}-pre${blocks.length}`,
+            style: {
+              margin: '16px 0', padding: '10px 12px',
+              fontFamily: 'var(--ds-font-family-code, monospace)',
+              fontSize: '0.875em', lineHeight: 1.5,
+              background: 'var(--dsw-alias-markdown-code-block, rgba(128,128,128,.10))',
+              border: '0.5px solid var(--dsw-alias-border-l1, #4a4a4a)',
+              borderRadius: 'var(--dsw-radius-md, 8px)',
+              overflow: 'auto', whiteSpace: 'pre',
+            },
+          }, buf.join('\n')));
+          continue;
+        }
+
+        // table: header row followed by a delimiter row
+        if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+          const buf = [lines[i++]];
+          buf.push(lines[i++]);
+          while (i < lines.length && /^\s*\|/.test(lines[i])) buf.push(lines[i++]);
+          blocks.push(mdTable(buf, `${key}-t${blocks.length}`));
+          continue;
+        }
+
+        // heading
+        const hd = /^(#{1,6})\s+(.*)$/.exec(line);
+        if (hd) {
+          const level = hd[1].length;
+          blocks.push(h('div', {
+            key: `${key}-h${blocks.length}`,
+            style: {
+              font: `var(--dsw-font-markdown-h${Math.min(level, 4)}, inherit)`,
+              fontWeight: 600,
+              margin: level >= 4 ? '16px 0 8px' : '32px 0 16px',
+            },
+          }, inlineMarkdown(hd[2], `${key}-hd${blocks.length}`)));
+          i++;
+          continue;
+        }
+
+        // horizontal rule
+        if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) {
+          blocks.push(h('hr', {
+            key: `${key}-hr${blocks.length}`,
+            style: { border: 'none', height: '0.5px', margin: '32px 0', background: 'var(--dsw-alias-border-l2, #4a4a4a)' },
+          }));
+          i++;
+          continue;
+        }
+
+        // blockquote
+        if (/^\s*>/.test(line)) {
+          const buf = [];
+          while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
+          blocks.push(h('blockquote', {
+            key: `${key}-q${blocks.length}`,
+            style: {
+              borderLeft: '2px solid var(--dsw-alias-label-caption, #888)',
+              margin: '16px 0 0', paddingLeft: 14,
+              color: 'var(--dsw-alias-label-secondary, #999)',
+            },
+          }, markdownBlocks(buf.join('\n'), `${key}-q${blocks.length}`)));
+          continue;
+        }
+
+        // list
+        if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+          const ordered = /^\s*\d+\./.test(line);
+          const items = [];
+          while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, ''));
+            i++;
+          }
+          blocks.push(h(ordered ? 'ol' : 'ul', {
+            key: `${key}-l${blocks.length}`,
+            style: { margin: '16px 0', paddingLeft: 18 },
+          }, items.map((it, n) =>
+            h('li', { key: n, style: n > 0 ? { marginTop: 6 } : null }, inlineMarkdown(it, `${key}-li${n}`)),
+          )));
+          continue;
+        }
+
+        // blank line
+        if (/^\s*$/.test(line)) { i++; continue; }
+
+        // paragraph: consecutive non-blank, non-block lines
+        const buf = [];
+        while (
+          i < lines.length
+          && !/^\s*$/.test(lines[i])
+          && !/^\s*```/.test(lines[i])
+          && !/^(#{1,6})\s+/.test(lines[i])
+          && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i])
+          && !/^\s*>/.test(lines[i])
+          && !/^\s*(-{3,}|\*{3,})\s*$/.test(lines[i])
+          && !(/^\s*\|.*\|\s*$/.test(lines[i]) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1]))
+        ) buf.push(lines[i++]);
+        if (buf.length) blocks.push(h('p', { key: `${key}-p${blocks.length}`, style: pStyle }, inlineMarkdown(buf.join('\n'), `${key}-p${blocks.length}`)));
+      }
+      return blocks;
+    }
+
+    function Markdown(props) {
+      return h('div', { style: mdRootStyle }, markdownBlocks(props.text, props.k));
+    }
+
     // Copied from ui-chat MessageItem.module.css `.bubble` / `.userRow`.
     // User messages: right-aligned filled bubble. Assistant: plain flow, no bubble.
     function eventStyle(kind) {
@@ -290,7 +501,9 @@ window.__ModuleLoader__.load({
       };
       if (kind === 'assistant') return {
         ...base,
-        alignSelf: 'flex-start',
+        alignSelf: 'stretch',
+        maxWidth: '100%',
+        whiteSpace: 'normal',
         background: 'transparent',
         padding: '2px 0',
       };
@@ -522,7 +735,7 @@ window.__ModuleLoader__.load({
         };
         ctx.effect(() => () => { try { delete window.__dswsToggle; delete window.__dswsInSplit; } catch (_e) {} }, 'workspace-split: cleanup');
 
-        // Primary entry: sidebar footer row, beside the account menu.
+        // Primary entry: sidebar footer row, on the account row's trailing edge.
         ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
           name: 'sidebar.footer.action', id: 'workspace-split-sidebar', order: 5,
         }, function SidebarSplitButton() {
@@ -531,10 +744,6 @@ window.__ModuleLoader__.load({
 
         ctx.slots.inject('conversation.hero.options', () => ctx.slots.register({
           name: 'conversation.hero.options', id: 'workspace-split-btn-hero', order: 5,
-        }, SplitButton));
-
-        ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
-          name: 'conversation.session.header.actions', id: 'workspace-split-btn', order: 5,
         }, SplitButton));
 
         const sessionsRef = ctx.sessions;
