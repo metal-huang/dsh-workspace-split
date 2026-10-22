@@ -1,0 +1,3 @@
+- insert:
+    - id: workspace-split
+      name: '@local/dsh-workspace-split'
