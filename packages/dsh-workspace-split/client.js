@@ -7758,6 +7758,7 @@ function Markdown(props) {
 var TURN_MARK_PITCH = 10;
 var TURN_RAIL_INSET = 6;
 var TURN_FADE_PX = 24;
+var TURN_RAIL_MIN_WIDTH = 420;
 var turnRailStyles = {
   frame: {
     // Centered band, matching TurnNavigator.module.css: the rail floats at the
@@ -7880,7 +7881,18 @@ function TurnRail(props) {
   const [busyTurn, setBusyTurn] = useState(null);
   const [scrolled, setScrolled] = useState({ top: false, bottom: false });
   const [railScroll, setRailScroll] = useState(0);
+  const [tooNarrow, setTooNarrow] = useState(false);
   const scrollerRef = useRef(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el === null || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      setTooNarrow(width > 0 && width < TURN_RAIL_MIN_WIDTH);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [bodyRef]);
   useEffect(() => {
     const el = bodyRef.current;
     if (el === null) return;
@@ -7942,7 +7954,7 @@ function TurnRail(props) {
       setBusyTurn(null);
     });
   }, [bodyRef, session]);
-  if (items.length < 2) return null;
+  if (items.length < 2 || tooNarrow) return null;
   const hovered = hoverTurn === null ? void 0 : items.find((i) => i.turn === hoverTurn);
   return h(
     "div",
@@ -9174,7 +9186,7 @@ function SplitMain(props) {
   const selectStyle = {
     fontSize: 12,
     padding: "2px 6px",
-    maxWidth: 160,
+    maxWidth: "52%",
     background: "var(--dsw-specific-input-major, transparent)",
     color: "var(--dsw-alias-label-primary, inherit)",
     border: "0.5px solid var(--dsw-alias-border-l2, #555)",
@@ -9312,12 +9324,22 @@ function SplitMain(props) {
               import_react.default.Fragment,
               null,
               h("span", { style: dotStyle(sess.running) }),
-              h("span", null, sess.displayTitle || sess.title || sess.id.slice(0, 8))
-            ) : h("span", { style: { color: "var(--dsw-alias-label-caption, #999)" } }, `\u683C ${i + 1}`),
+              // One line with an ellipsis: at six columns a wrapping title
+              // eats the whole header and pushes the transcript down.
+              h("span", {
+                style: {
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap"
+                }
+              }, sess.displayTitle || sess.title || sess.id.slice(0, 8))
+            ) : h("span", { style: { color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u683C ${i + 1}`),
             h(
               "select",
               {
-                style: { ...selectStyle, marginLeft: "auto" },
+                style: { ...selectStyle, marginLeft: "auto", flex: "0 1 auto", minWidth: 0 },
                 value: sid ?? "",
                 onChange: (e) => {
                   const id = e.target.value || null;

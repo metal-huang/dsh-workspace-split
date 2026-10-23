@@ -483,6 +483,8 @@ const TURN_MARK_PITCH = 10
 const TURN_RAIL_INSET = 6
 /** Fade band the mask reserves at a scrollable end. */
 const TURN_FADE_PX = 24
+/** Below this cell width the rail would crowd the transcript, so it hides. */
+const TURN_RAIL_MIN_WIDTH = 420
 
 const turnRailStyles = {
   frame: {
@@ -629,7 +631,21 @@ function TurnRail(props) {
   const [busyTurn, setBusyTurn] = useState(null)
   const [scrolled, setScrolled] = useState({ top: false, bottom: false })
   const [railScroll, setRailScroll] = useState(0)
+  const [tooNarrow, setTooNarrow] = useState(false)
   const scrollerRef = useRef(null)
+
+  // The native rail hides under a 900px container; a cell gets proportionally
+  // less, so drop it before it crowds the transcript it is meant to index.
+  useEffect(() => {
+    const el = bodyRef.current
+    if (el === null || typeof ResizeObserver !== 'function') return
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0
+      setTooNarrow(width > 0 && width < TURN_RAIL_MIN_WIDTH)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [bodyRef])
 
   // Track the Turn whose row sits at the reader's top edge.
   useEffect(() => {
@@ -697,7 +713,7 @@ function TurnRail(props) {
     })
   }, [bodyRef, session])
 
-  if (items.length < 2) return null
+  if (items.length < 2 || tooNarrow) return null
   const hovered = hoverTurn === null ? undefined : items.find((i) => i.turn === hoverTurn)
 
   return h('div', { style: turnRailStyles.frame },
@@ -2033,7 +2049,7 @@ function SplitMain(props) {
   const selectStyle = {
     fontSize: 12,
     padding: '2px 6px',
-    maxWidth: 160,
+    maxWidth: '52%',
     background: 'var(--dsw-specific-input-major, transparent)',
     color: 'var(--dsw-alias-label-primary, inherit)',
     border: '0.5px solid var(--dsw-alias-border-l2, #555)',
@@ -2162,11 +2178,21 @@ function SplitMain(props) {
             sess
               ? h(React.Fragment, null,
                   h('span', { style: dotStyle(sess.running) }),
-                  h('span', null, sess.displayTitle || sess.title || sess.id.slice(0, 8)),
+                  // One line with an ellipsis: at six columns a wrapping title
+                  // eats the whole header and pushes the transcript down.
+                  h('span', {
+                    style: {
+                      flex: '1 1 auto',
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    },
+                  }, sess.displayTitle || sess.title || sess.id.slice(0, 8)),
                 )
-              : h('span', { style: { color: 'var(--dsw-alias-label-caption, #999)' } }, `格 ${i + 1}`),
+              : h('span', { style: { color: 'var(--dsw-alias-label-caption, #999)', whiteSpace: 'nowrap' } }, `格 ${i + 1}`),
             h('select', {
-              style: { ...selectStyle, marginLeft: 'auto' },
+              style: { ...selectStyle, marginLeft: 'auto', flex: '0 1 auto', minWidth: 0 },
               value: sid ?? '',
               onChange: (e) => {
                 const id = e.target.value || null
