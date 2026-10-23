@@ -35,7 +35,7 @@
 ## 安装
 
 ```bash
-dsh plugin add dsh-workspace-split
+dsh plugin add @metal-huang/dsh-workspace-split
 ```
 
 装完重启应用（或在网页里刷新）。开关出现在侧边栏底部、账号旁边。
@@ -44,7 +44,7 @@ dsh plugin add dsh-workspace-split
 <summary>从本地检出安装</summary>
 
 ```bash
-git clone https://github.com/dsh-workspace-split/dsh-workspace-split.git
+git clone https://github.com/metal-huang/dsh-workspace-split.git
 cd dsh-workspace-split
 npm install
 cd packages/dsh-workspace-split && npm install && npm run build

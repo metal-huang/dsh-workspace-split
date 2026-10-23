@@ -22,6 +22,9 @@ import { t } from './i18n.js'
 // ---------- cell text scaling ----------
 import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
 
+// ---------- transcript folding ----------
+import { buildTranscript } from './transcript.js'
+
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
 // extra tile retains another live Session, so seven to ten ask for a
@@ -1447,19 +1450,6 @@ function toolSummary(name, argsRaw) {
     .join(' ')
 }
 
-/** Result text of a tool/result event, flattened from its content blocks. */
-function toolResultText(ev) {
-  const blocks = ev?.message?.content ?? ev?.data?.message?.content ?? []
-  const parts = []
-  for (const b of blocks) {
-    if (b?.type === 'text') parts.push(b.text)
-    else if (b?.type === 'image') parts.push('[image]')
-    else if (b?.type === 'file') parts.push('[file]')
-    else if (b?.type) parts.push(`[${b.type}]`)
-  }
-  return parts.join('\n')
-}
-
 /** Expandable tool call row: name, summary, and arguments/result on demand. */
 function ToolRow(props) {
   const { name, argsRaw, resultText, isError, errorReason } = props
@@ -1781,23 +1771,12 @@ function CellView(props) {
   }
 
   // The binding's window already pages history, so render it whole: capping the
-  // slice here only hid messages the reader had already loaded.
+  // slice here only hid messages the reader had already loaded. The window is
+  // folded into rows because a live Assistant attempt arrives as one transient
+  // entry per token; drawing those one-to-one put every token in its own
+  // paragraph (see transcript.js).
   const visible = events
-
-  // Pair each tool call with the result that answers it, so one disclosure row
-  // can show arguments and output together.
-  const toolResults = new Map()
-  const calledIds = new Set()
-  for (const entry of visible) {
-    const ev = entry.event
-    if (ev?.type === 'tool/call') {
-      const id = ev.data?.callId
-      if (id !== undefined) calledIds.add(id)
-    } else if (ev?.type === 'tool/result') {
-      const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId
-      if (id !== undefined) toolResults.set(id, ev.data)
-    }
-  }
+  const rows = buildTranscript(visible, t)
   const railItems = turnRailItems(visible)
 
   return h(
@@ -1834,81 +1813,25 @@ function CellView(props) {
             minWidth: 0,
           },
         },
-        visible.map((entry, idx) => {
-          const ev = entry.event
-          const type = ev?.type ?? 'unknown'
-
-          if (type === 'tool/call') {
-            const id = ev.data?.callId
-            const result = id === undefined ? undefined : toolResults.get(id)
-            return h(ToolRow, {
-              key: idx,
-              name: ev.data?.name ?? 'tool',
-              argsRaw: ev.data?.arguments ?? '',
-              resultText: result ? toolResultText(result) : '',
-              isError: Boolean(result?.message?.isError ?? result?.isError),
-              errorReason: result?.error?.reason ?? result?.error?.name ?? '',
-            })
-          }
-          if (type === 'tool/result') {
-            const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId
-            // Already rendered by its call row when that call is in the window.
-            if (id !== undefined && calledIds.has(id)) return null
-            return h(ToolRow, {
-              key: idx,
-              name: t('toolrow.result.name'),
-              argsRaw: '',
-              resultText: toolResultText(ev.data),
-              isError: Boolean(ev.data?.message?.isError ?? ev.data?.isError),
-              errorReason: ev.data?.error?.reason ?? ev.data?.error?.name ?? '',
-            })
-          }
-
-          let text = ''
-          let kind = 'other'
-          let anchorTurn
-          if (type === 'user/message') {
-            const blocks = ev?.data?.content ?? []
-            text = blocks
-              .filter((b) => b.type === 'text')
-              .map((b) => b.text)
-              .join('')
-            kind = 'user'
-          } else if (type === 'assistant/message') {
-            const blocks = ev?.data?.message?.content ?? []
-            text = blocks
-              .filter((b) => b.type === 'text')
-              .map((b) => b.text)
-              .join('')
-            kind = 'assistant'
-          } else if (type === 'assistant/live-chunk') {
-            text = ev?.data?.chunk?.text ?? ''
-            kind = 'assistant'
-          } else if (type === 'turn/start') {
-            text = t('turn.divider', { n: ev?.data?.turn })
-            kind = 'divider'
-            // The turn rail scrolls to this anchor, so it must survive an empty label.
-            anchorTurn = ev?.data?.turn
-          } else {
-            return null
-          }
-          if (!text) return null
+        rows.map((row) => {
+          if (row.kind === 'tool') return h(ToolRow, { key: row.key, ...row.tool })
           // Assistant narration is Markdown; user prompts and status rows stay literal.
-          if (kind === 'assistant') {
+          if (row.kind === 'assistant') {
             return h(
               'div',
-              { key: idx, style: eventStyle(kind) },
-              h(Markdown, { text, k: `m${idx}` }),
+              { key: row.key, style: eventStyle('assistant') },
+              h(Markdown, { text: row.text, k: row.key }),
             )
           }
           return h(
             'div',
             {
-              key: idx,
-              style: eventStyle(kind),
-              'data-turn': anchorTurn,
+              key: row.key,
+              style: eventStyle(row.kind),
+              // The turn rail scrolls to this anchor, so a divider keeps its turn.
+              'data-turn': row.kind === 'divider' ? row.turn : undefined,
             },
-            text,
+            row.text,
           )
         }),
         h(TurnRail, { items: railItems, bodyRef, session: binding.session }),

@@ -34,3 +34,6 @@ pnpm-debug.log*
 
 # 本地覆盖配置
 *.local
+
+# 临时工作目录
+.tmp/

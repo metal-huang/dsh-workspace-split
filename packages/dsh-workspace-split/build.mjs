@@ -13,7 +13,7 @@ import { build } from 'esbuild'
 import { writeFile } from 'node:fs/promises'
 
 /** Must match the package name: the loader keys plugins by it. */
-const ID = 'dsh-workspace-split'
+const ID = '@metal-huang/dsh-workspace-split'
 /** Optional argv[2] lets the gate rebuild to a scratch path and compare. */
 const OUT = process.argv[2] ?? 'client.js'
 

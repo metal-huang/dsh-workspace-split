@@ -40,7 +40,7 @@ active tile. It reads sessions through the public `ctx.sessions` API.
 ## Install
 
 ```bash
-dsh plugin add dsh-workspace-split
+dsh plugin add @metal-huang/dsh-workspace-split
 ```
 
 Then restart the app (or reload the web page). The toggle appears at the bottom
@@ -50,7 +50,7 @@ of the sidebar, next to your account.
 <summary>Installing from a local checkout</summary>
 
 ```bash
-git clone https://github.com/dsh-workspace-split/dsh-workspace-split.git
+git clone https://github.com/metal-huang/dsh-workspace-split.git
 cd dsh-workspace-split
 npm install
 cd packages/dsh-workspace-split && npm install && npm run build

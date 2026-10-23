@@ -1,0 +1,376 @@
+/**
+ * Fold one session event window into the rows a split cell renders.
+ *
+ * DSH streams an Assistant attempt as many transient `assistant/live-chunk`
+ * entries, one per model token. Rendering them one-to-one (what this plugin did
+ * before) gave every token its own paragraph: a reply in a split cell showed up
+ * as one character per line, because each row already carries the transcript's
+ * paragraph rhythm. The harness's own chat does not render those rows — it folds
+ * them into the step they belong to (`assistant-step` projection in ui-chat), so
+ * a live attempt reads as one growing message.
+ *
+ * This module performs the same fold for the split transcript:
+ *
+ * - live chunks accumulate per Turn/Step and per block index, and the step owns
+ *   exactly one row, updated in place as text arrives;
+ * - a durable `assistant/message` supersedes the fold for that step (normally the
+ *   event source has already retired the transient rows);
+ * - `llm/retry` drops the partial text of the attempt it abandons;
+ * - an `assistant/attempt` — an attempt that settled without a surface message —
+ *   still shows the text it streamed, matching the harness's interrupted node.
+ *
+ * Kept free of React and DOM so the rules can be tested directly.
+ */
+
+/** Only used when a caller forgets the translator: keys are better than a crash. */
+const keyOnly = (key) => key
+
+// ---------- text ----------
+
+/**
+ * Narration of an Assistant message or a user prompt.
+ * @param content - content blocks.
+ * @returns the joined text blocks.
+ */
+function contentText(content) {
+  const blocks = Array.isArray(content) ? content : []
+  return blocks
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+}
+
+/**
+ * Text one compact stream record contributes.
+ *
+ * A settlement stores its model stream compacted: text deltas are packed into
+ * `text-chunks` runs, everything else stays a raw `chunk`. Only the text deltas
+ * count as narration, which is the rule `joinAssistantStreamText` applies in the
+ * harness.
+ * @param record - one `AssistantStreamRecord`.
+ * @returns its text contribution, or ''.
+ */
+function recordText(record) {
+  if (record?.type === 'text-chunks') return (record.texts ?? []).join('')
+  if (record?.type !== 'chunk') return ''
+  if (record.chunk?.type !== 'text-delta') return ''
+  return record.chunk.text ?? ''
+}
+
+/**
+ * Text streamed by one durable attempt.
+ * @param records - compact stream records from `assistant/attempt`.
+ * @returns joined text deltas, in stream order.
+ */
+export function streamText(records) {
+  const list = Array.isArray(records) ? records : []
+  return list.map(recordText).join('')
+}
+
+// ---------- live chunk folding ----------
+
+/** Key the fold's streaming state by the attempt it belongs to. */
+function streamKey(turn, step) {
+  return `${turn}:${step}`
+}
+
+/**
+ * Append to the block at `index`, keeping the previous text of the same kind.
+ * A block index that changes kind starts over: deltas only extend their own kind.
+ * @param blocks - the attempt's block map, mutated in place.
+ * @param index - block index inside the attempt.
+ * @param kind - block kind the delta belongs to.
+ * @param text - delta text.
+ */
+function accumulate(blocks, index, kind, text) {
+  const previous = blocks.get(index)
+  const base = previous?.kind === kind ? previous.text : ''
+  blocks.set(index, { kind, text: base + text })
+}
+
+/** Block map entry for an assembled block. */
+function blockState(block) {
+  const kind = block?.type ?? ''
+  return { kind, text: kind === 'text' ? (block.text ?? '') : '' }
+}
+
+/**
+ * Writers for the chunk kinds the transcript folds, mirroring `updateChunk` in
+ * ui-chat. `usage` and `finish` carry no narration and are not listed.
+ */
+const CHUNK_WRITERS = new Map([
+  [
+    'block-start',
+    (blocks, index, chunk) => blocks.set(index, { kind: chunk.blockType ?? '', text: '' }),
+  ],
+  ['text-delta', (blocks, index, chunk) => accumulate(blocks, index, 'text', chunk.text ?? '')],
+  [
+    'reasoning-delta',
+    (blocks, index, chunk) => accumulate(blocks, index, 'reasoning', chunk.text ?? ''),
+  ],
+  ['tool-call-delta', (blocks, index) => blocks.set(index, { kind: 'tool-call', text: '' })],
+  // The assembled block is authoritative for its index and may replace a delta
+  // run that was started but never completed (an interrupted block).
+  ['block-end', (blocks, index, chunk) => blocks.set(index, blockState(chunk.block))],
+])
+
+/**
+ * Apply one live chunk to the attempt's block map.
+ * Block indexes correlate interleaved deltas, so a Tool call in the middle of a
+ * step does not disturb the narration blocks around it.
+ * @param blocks - the attempt's block map, mutated in place.
+ * @param chunk - one `StreamChunk` from a live-chunk entry.
+ */
+function applyChunk(blocks, chunk) {
+  if (chunk === null || typeof chunk !== 'object') return
+  const index = Number.isInteger(chunk.index) ? chunk.index : 0
+  const write = CHUNK_WRITERS.get(chunk.type)
+  if (write === undefined) return
+  write(blocks, index, chunk)
+}
+
+/** Narration of one attempt: its text blocks, in block order, as paragraphs. */
+function blockText(blocks) {
+  return [...blocks.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .filter(([, block]) => block.kind === 'text' && block.text.trim() !== '')
+    .map(([, block]) => block.text)
+    .join('\n\n')
+}
+
+// ---------- rows ----------
+
+/**
+ * Result text of a tool/result event, flattened from its content blocks.
+ * @param ev - the event's `data`.
+ * @returns readable result text.
+ */
+export function toolResultText(ev) {
+  const blocks = ev?.message?.content ?? ev?.data?.message?.content
+  const list = Array.isArray(blocks) ? blocks : []
+  return list.map(blockLabel).join('\n')
+}
+
+/** One content block's readable label for the tool row. */
+function blockLabel(block) {
+  if (block?.type === 'text') return block.text
+  if (block === undefined || block === null) return ''
+  if (block.type === 'image') return '[image]'
+  if (block.type === 'file') return '[file]'
+  if (block.type === undefined) return ''
+  return `[${block.type}]`
+}
+
+/**
+ * One disclosure row for a tool call, carrying the result that answers it.
+ * @param key - React key for the row.
+ * @param call - name and raw arguments.
+ * @param result - the answering result's `data`, when the window has it.
+ */
+function toolRow(key, call, result) {
+  return {
+    key,
+    kind: 'tool',
+    tool: {
+      name: call.name,
+      argsRaw: call.argsRaw ?? '',
+      resultText: result === undefined ? '' : toolResultText(result),
+      isError: resultFailed(result),
+      errorReason: failureReason(result),
+    },
+  }
+}
+
+/** Whether a tool result marks itself as a failure. */
+function resultFailed(result) {
+  return Boolean(result?.message?.isError ?? result?.isError)
+}
+
+/** User-facing reason of a failed tool result. */
+function failureReason(result) {
+  return result?.error?.reason ?? result?.error?.name ?? ''
+}
+
+/** Pair tool results with the calls that answer them, in one pass. */
+function pairToolResults(list) {
+  const results = new Map()
+  const calls = new Set()
+  for (const entry of list) {
+    const ev = entry?.event
+    if (ev?.type === 'tool/call') {
+      if (ev.data?.callId !== undefined) calls.add(ev.data.callId)
+    } else if (ev?.type === 'tool/result') {
+      results.set(resultCallId(ev), ev.data)
+    }
+  }
+  return { results, calls }
+}
+
+/** Call id a tool/result event answers. */
+function resultCallId(ev) {
+  return ev?.data?.message?.toolCallId ?? ev?.data?.toolCallId
+}
+
+/**
+ * Live chunk: extend the attempt it belongs to, creating its row on first text.
+ * @param ev - one `assistant/live-chunk` event.
+ * @param ctx - shared build state.
+ */
+function onLiveChunk(ev, ctx) {
+  const turn = ev.data?.turn
+  const step = ev.data?.step
+  const key = streamKey(turn, step)
+  let stream = ctx.streams.get(key)
+  if (stream === undefined) {
+    stream = { row: undefined, blocks: new Map() }
+    ctx.streams.set(key, stream)
+  }
+  applyChunk(stream.blocks, ev.data?.chunk)
+  const text = blockText(stream.blocks)
+  if (text === '') return
+  if (stream.row !== undefined) {
+    stream.row.text = text
+    return
+  }
+  stream.row = { key: `live-${key}`, kind: 'assistant', text, turn, streaming: true }
+  ctx.rows.push(stream.row)
+}
+
+/**
+ * Drop the folded rows of abandoned attempts.
+ *
+ * A retry restarts the step in the harness, so the abandoned attempt's partial
+ * text disappears rather than staying above the retried answer. A retry without
+ * attempt identity can only belong to whatever is streaming now.
+ * @param ev - one `llm/retry` event.
+ * @param ctx - shared build state.
+ */
+function onRetry(ev, ctx) {
+  const turn = ev.data?.turn
+  const step = ev.data?.step
+  const target = turn === undefined && step === undefined ? undefined : streamKey(turn, step)
+  for (const [attempt, stream] of ctx.streams) {
+    if (target !== undefined && attempt !== target) continue
+    const at = ctx.rows.indexOf(stream.row)
+    if (at >= 0) ctx.rows.splice(at, 1)
+    ctx.streams.delete(attempt)
+  }
+}
+
+/** `assistant/attempt`: an attempt that settled without a surface message. */
+function onAttempt(ev, ctx) {
+  const text = streamText(ev.data?.stream)
+  if (text.trim() === '') return
+  ctx.rows.push({
+    key: `attempt-${streamKey(ev.data?.turn, ev.data?.step)}`,
+    kind: 'assistant',
+    text,
+    turn: ev.data?.turn,
+  })
+}
+
+/**
+ * Durable Assistant message: the settlement is authoritative, and it owns the
+ * row the live chunks already occupy so the answer does not jump down the list.
+ */
+function onMessage(ev, ctx) {
+  const text = contentText(ev.data?.message?.content)
+  const key = streamKey(ev.data?.turn, ev.data?.step)
+  if (settle(ctx.streams.get(key), text)) {
+    ctx.streams.delete(key)
+    return
+  }
+  if (text === '') return
+  ctx.rows.push({
+    key: `message-${ev.seq ?? key}`,
+    kind: 'assistant',
+    text,
+    turn: ev.data?.turn,
+  })
+}
+
+/**
+ * Hand one settlement to the row the attempt already owns, when it has one.
+ * @param stream - the attempt's fold state, if still open.
+ * @param text - settled message text.
+ * @returns whether the settlement took over an existing row.
+ */
+function settle(stream, text) {
+  if (stream === undefined || stream.row === undefined) return false
+  if (text !== '') stream.row.text = text
+  stream.row.streaming = false
+  return true
+}
+
+/** Turn divider: the turn rail scrolls to this anchor. */
+function onTurnStart(ev, ctx) {
+  const turn = ev.data?.turn
+  if (turn === undefined) return
+  ctx.rows.push({
+    key: `turn-${turn}`,
+    kind: 'divider',
+    text: ctx.t('turn.divider', { n: turn }),
+    turn,
+  })
+}
+
+/** User prompt: literal text, in the bubble style. */
+function onUserMessage(ev, ctx) {
+  const text = contentText(ev.data?.content)
+  if (text === '') return
+  ctx.rows.push({
+    key: `user-${ev.seq ?? ctx.rows.length}`,
+    kind: 'user',
+    text,
+    turn: ev.data?.turn,
+  })
+}
+
+/** Tool call row, carrying its result when the answering event is loaded. */
+function onToolCall(ev, ctx) {
+  const id = ev.data?.callId
+  const call = { name: ev.data?.name ?? 'tool', argsRaw: ev.data?.arguments }
+  ctx.rows.push(toolRow(`call-${id ?? ctx.rows.length}`, call, ctx.tools.results.get(id)))
+}
+
+/** Orphan tool result: its call is outside the loaded window. */
+function onToolResult(ev, ctx) {
+  const id = resultCallId(ev)
+  // Drawn by its call row when that call is in the window.
+  if (ctx.tools.calls.has(id)) return
+  const call = { name: ctx.t('toolrow.result.name'), argsRaw: '' }
+  ctx.rows.push(toolRow(`result-${id ?? ctx.rows.length}`, call, ev.data))
+}
+
+/** Event type -> row builder. A Map keeps prototype keys out of the dispatch. */
+const HANDLERS = new Map([
+  ['assistant/live-chunk', onLiveChunk],
+  ['llm/retry', onRetry],
+  ['assistant/attempt', onAttempt],
+  ['assistant/message', onMessage],
+  ['turn/start', onTurnStart],
+  ['user/message', onUserMessage],
+  ['tool/call', onToolCall],
+  ['tool/result', onToolResult],
+])
+
+/**
+ * Build the render rows for one cell's event window.
+ *
+ * Order is the window's own order: the first live chunk of an attempt takes the
+ * row where that attempt started, and later chunks update it in place.
+ * @param entries - session event entries (`{ event }`), including transient rows.
+ * @param t - translation function, injectable for tests.
+ * @returns rows of `{ key, kind, text, turn, streaming, tool }`.
+ */
+export function buildTranscript(entries, t = keyOnly) {
+  const list = Array.isArray(entries) ? entries : []
+  const ctx = { rows: [], streams: new Map(), tools: pairToolResults(list), t }
+  for (const entry of list) {
+    const ev = entry?.event
+    if (ev === undefined || ev === null) continue
+    const handle = HANDLERS.get(ev.type)
+    if (handle !== undefined) handle(ev, ctx)
+  }
+  return ctx.rows
+}
