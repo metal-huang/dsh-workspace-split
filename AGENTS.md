@@ -1,51 +1,67 @@
 # AGENTS.md
 
-给在本仓库工作的 Agent 的硬规则。文档规范与阅读顺序见 [CLAUDE.md](CLAUDE.md)。
+Rules for AI coding agents working in this repository. Humans are welcome to read
+it too: nothing here is agent-specific except the tone.
 
-## 门禁总账
+产品与设计文档的阅读顺序见 [CLAUDE.md](CLAUDE.md)，用户文档见
+[README](README.md) / [README 中文](README.zh-CN.md)。
 
-最近一次全量 `npm run check` 的数字：
+## 仓库长什么样
 
-| 项 | 数值 | 上限 |
-|---|---|---|
-| ESLint error | 0 | 0（硬） |
-| ESLint warning | 11 | 11（棘轮，只降不升） |
-| 重复代码 | 2 块 / 17 行 / 0.72% | 块数与行数不得超，重复率仅提示 |
-| 格式 | 2 个文件冻结，其余必须干净 | 冻结清单只减不增 |
-| 测试 | 12 项通过 | 不得减少 |
+```text
+packages/dsh-workspace-split/
+├── index.js          # Host 半侧（手写）：持久化，走 ctx.storageDomain
+├── src/
+│   ├── client.js     # 客户端源码（手写，2600+ 行）：布局、格子、渲染
+│   ├── zoom.js       # 格子文字缩放的纯函数（有测试）
+│   ├── i18n.js       # 取词函数
+│   ├── messages.js   # 中文词表
+│   └── locale/en.json# 英文覆盖
+├── client.js         # 客户端产物（GENERATED，不要手改）
+├── build.mjs         # esbuild 打包脚本
+└── cordis.patch.yml  # 插件行
+```
 
-数字会随收紧变化，判断依据看**基线文件**，不要照抄本表。
+客户端有构建步骤，因为浏览器侧只能 `require` 平台模块表里那 11 个包，
+其余依赖（mdast、KaTeX 等）必须在构建时内联进 `client.js`。
 
-## 基线在哪、怎么收紧
+## 三条不能破的
 
-| 基线 | 文件 | 收紧方式 |
-|---|---|---|
-| lint 警告数 | `gate/lint_baseline.json` | `npm run ratchet:tighten` |
-| 重复代码 | `gate/dup_baseline.json` | 同上，三个维度同时下降 |
-| 格式冻结清单 | `gate/format_baseline.json` | 格式化某个冻结文件后跑 tighten，该文件自动移出 |
+**1. 不要手改产物。** `packages/dsh-workspace-split/client.js` 是 `npm run build`
+生成的。改了 `src/` 就必须重新构建，并在**同一个提交**里带上产物——否则
+`test/artifact.test.js`（重新构建 + 逐字节比对）会红。
 
-`ratchet:tighten` **只向下写**：测出来比基线高就只报警、不落盘。首次落地或确需接受一次上涨时用 `--seed`。
+**2. 只 add 自己的文件。** 用 `git add <路径>`，不用 `git add -A`、不用 `git add .`。
+提交前 `git diff --cached --stat` 逐条对一遍：暂存区里每个路径，都得是自己这轮改的。
+发现陌路径就 `git reset HEAD <路径>` 摘掉。
 
-基线变更必须与产生它的代码改动**同一个提交**。
+**3. 提交前跑 `npm run check`。** 钩子只检查暂存区，全局数字要自己看。
 
-## 三档门禁
+## 门禁
 
-| 档位 | 命令 | 内容 |
-|---|---|---|
-| 钩子 | 自动，`git commit` 时 | 暂存区冲突标记 → 暂存文件格式 → 暂存文件 error → 新增文件零警告 |
-| 快档 | `npm run check:fast` | lint + 重复 + 格式 |
-| 全档 | `npm run check` | 快档 + 测试 |
-| 发版档 | `npm run check:full` | 全档 + 构建 |
+```bash
+npm run check        # 全档：lint + 重复代码 + 格式 + 测试
+npm run check:fast   # 跳过测试
+npm run build        # 重建产物
+```
 
-钩子只检查**暂存区**里的文件，不看工作区其他未提交改动。全局计数类检查不进钩子，避免存量违规把提交锁死。
+判定依据是**基线文件**，不是任何文档里的数字（数字会随收紧变化）：
 
-## 客户端产物：不要手改
+| 基线 | 文件 |
+|---|---|
+| lint 警告数 | `gate/lint_baseline.json` |
+| 重复代码 | `gate/dup_baseline.json` |
+| 格式豁免清单 | `gate/format_baseline.json` |
+| 产物一致性 | `test/artifact.test.js` |
 
-`packages/dsh-workspace-split/client.js` 是构建产物（内部含 mdast/micromark 内联代码，8000+ 行）。
+`npm run ratchet:tighten` **只向下写**：测出来比基线高只报警、不落盘。
+基线只在确有必要时用 `--seed` 上调，并在提交信息里写明理由。
 
-- 改逻辑或样式：改 `packages/dsh-workspace-split/src/client.js`，然后 `npm run build`
-- 直接改产物会被 `test/artifact.test.js` 拦下（它重新构建并与提交的产物逐字节比对）
-- 产物文件在 `.prettierignore`、ESLint `ignores`、重复扫描范围之外，都不要纳进去
+三条硬线：
+
+- ESLint **error 必须为 0**（钩子会拦）
+- 警告数、重复块数**不得超过基线**
+- 新增文件**零警告**，格式必须 Prettier-clean
 
 ## 提交信息
 
@@ -55,17 +71,36 @@ Conventional Commits，由 `gate/commit_msg.mjs` 校验：
 type(scope): description
 ```
 
-- type 取值：`feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `build` `style` `revert`
+- type：`feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `build` `style` `revert`
 - 主题 ≤ 72 字符，结尾不加句号
-- `Merge ` / `Revert "` / `fixup!` 开头豁免
-- body 可选，用 `- ` 列条目
+- body 可选，用 `- ` 列条目；**写「为什么」**，不写「改了什么」
 
-## 开发纪律（单人）
+一次提交只表达一件事。产物与源码同提交。
 
-1. **只 add 自己的文件**。不要用 `git add -A` / `git add .`，逐条指定路径。
-2. **原子提交**。一次提交只表达一件事，产物与源码同提交。
-3. **提交前跑 `npm run check`**。钩子只做定向检查，全局数字要自己看。
-4. **不动别人的未提交改动**。工作区里不属于本次任务的修改，不暂存、不还原、不格式化。
-5. **收紧基线要谨慎**。把警告数压下去靠改代码，不靠改基线；确需接受上涨用 `--seed` 并在提交信息里说明原因。
-6. **新增文件零警告**。钩子会拦，写完先跑 `npx eslint <file>`。
-7. **改了 `src/client.js` 必须重新构建并一并提交产物**，否则 `check` 的产物一致性测试会红。
+## 改代码时
+
+- **先读再改。** 文件可能被别的会话改过，读到的版本才是真的。
+- **注释写「为什么」，不写「是什么」。** 踩过的坑要写清：原来怎么写 → 什么现象
+  → 现在为什么这样。
+- **声称要有证据。** 「修好了」要能附命令输出；没跑过就不要写「实测」。
+- **碰浏览器/服务端验证时**：用空闲端口起自己的实例，不要动别人正在用的实例。
+- 修完自己做一次反证：把修复前的现象复现一遍，确认新代码真的挡住了它。
+
+## 发布
+
+```bash
+npm run release      # 构建 + 复制到 .release/，桌面 profile 用的快照
+```
+
+发布是「先暂存再换名」：整包复制到 `.release/.staging`，校验通过后才切换，
+失败或中断不会留下残缺快照；上一版留在 `.release/.previous` 可回滚。
+
+`.release/` 不入库。发布脚本按 `package.json` 的 `files` 取文件，并要求该包
+没有运行时依赖（`dependencies` / `peerDependencies` / `optionalDependencies`
+都查）——运行时依赖必须打进 bundle。
+
+## 文档
+
+七类型词表（PRD / DESIGN / TECH / IMPL / CR / SPEC / BACKLOG），目录即大类，
+快照类文件名前置日期，活文档不带日期。详见
+[docs/spec/SPEC_文档规范.md](docs/spec/SPEC_文档规范.md)。
