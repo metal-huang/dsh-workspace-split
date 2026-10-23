@@ -210,6 +210,42 @@ describe('buildTranscript: settlements', () => {
     assert.equal(rows.length, 1)
     assert.equal(rows[0].text, 'fixed')
   })
+
+  it('also drops it when the retry cannot name the attempt', () => {
+    const entries = [
+      live(2, 1, delta(0, 'oops')),
+      { type: 'event', event: { type: 'llm/retry', seq: 4, time: 0, data: {} } },
+      live(2, 1, delta(0, 'fixed')),
+    ]
+
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].text, 'fixed')
+  })
+
+  it('folds an abandoned attempt into the row its chunks already own', () => {
+    const entries = [
+      live(1, 1, delta(0, '半句')),
+      {
+        type: 'event',
+        event: {
+          type: 'assistant/attempt',
+          seq: 7,
+          time: 0,
+          data: {
+            turn: 1,
+            step: 1,
+            stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: ['半句'] }],
+          },
+        },
+      },
+    ]
+
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1, 'the settlement must not add a second row')
+    assert.equal(rows[0].text, '半句')
+    assert.equal(rows[0].streaming, false)
+  })
 })
 
 describe('buildTranscript: other rows', () => {

@@ -260,9 +260,16 @@ function onRetry(ev, ctx) {
 /** `assistant/attempt`: an attempt that settled without a surface message. */
 function onAttempt(ev, ctx) {
   const text = streamText(ev.data?.stream)
+  const key = streamKey(ev.data?.turn, ev.data?.step)
+  // Same ownership rule as a message: an attempt that already has a live row
+  // keeps it, so the text does not appear twice when both rows are in the window.
+  if (settle(ctx.streams.get(key), text)) {
+    ctx.streams.delete(key)
+    return
+  }
   if (text.trim() === '') return
   ctx.rows.push({
-    key: `attempt-${streamKey(ev.data?.turn, ev.data?.step)}`,
+    key: `attempt-${key}`,
     kind: 'assistant',
     text,
     turn: ev.data?.turn,
