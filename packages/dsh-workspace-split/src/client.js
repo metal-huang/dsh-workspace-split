@@ -23,10 +23,12 @@ const { useState, useEffect, useCallback, useSyncExternalStore, useRef } = React
 // browser half, so the limit lives in localStorage instead of cordis.patch.yml.
 const DEFAULT_MAX_CELLS = 10
 const DEFAULT_CONFIRM_CELLS = 6
-/** Largest row or column count the picker offers. */
-const PICKER_MAX = 10
-/** Upper bound of the user-editable limit. */
-const LIMIT_MAX = PICKER_MAX * PICKER_MAX
+/** Largest row count the picker offers. */
+const PICKER_MAX_ROWS = 5
+/** Largest column count the picker offers. */
+const PICKER_MAX_COLS = 6
+/** Each axis keeps its own ceiling, so the cap is their product, not a square. */
+const LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS
 /** Bound for one retained Session's initial history open (see CellView). */
 const OPEN_TIMEOUT_MS = 15000
 
@@ -66,14 +68,14 @@ function savedGeometry(saved) {
   if (Number.isInteger(saved?.rows) && Number.isInteger(saved?.cols)) {
     return { rows: toSpan(saved.rows, 2), cols: toSpan(saved.cols, 2) }
   }
-  const n = Math.min(toSpan(saved?.gridSize, 2), PICKER_MAX)
+  const n = Math.min(toSpan(saved?.gridSize, 2), PICKER_MAX_COLS)
   return { rows: n, cols: n }
 }
 
 /** Shrink a geometry until rows × cols fits `maxCells`, staying as square as possible. */
 function fitGeometry(rows, cols, maxCells) {
-  let r = Math.min(toSpan(rows, 1), PICKER_MAX)
-  let c = Math.min(toSpan(cols, 1), PICKER_MAX)
+  let r = Math.min(toSpan(rows, 1), PICKER_MAX_ROWS)
+  let c = Math.min(toSpan(cols, 1), PICKER_MAX_COLS)
   while (r * c > maxCells) {
     if (r >= c && r > 1) r -= 1
     else if (c > 1) c -= 1
@@ -846,6 +848,8 @@ const splitControlStyles = {
     position: 'fixed',
     top,
     left,
+    width: SPLIT_TIP_WIDTH,
+    boxSizing: 'border-box',
     transform: 'translateX(-50%)',
     padding: '6px 10px',
     borderRadius: 'var(--dsw-radius-md, 8px)',
@@ -854,7 +858,7 @@ const splitControlStyles = {
     color: 'var(--dsw-alias-label-primary, #eee)',
     fontSize: 12,
     lineHeight: '16px',
-    whiteSpace: 'nowrap',
+    textAlign: 'center',
     pointerEvents: 'none',
     zIndex: 30,
   }),
@@ -867,8 +871,51 @@ const splitControlStyles = {
 }
 
 const SIDEBAR_CONTROL_HINT = '左键切换分屏，右键选网格'
+/** Rough rendered width of the hover tip, used to keep it inside the viewport. */
+const SPLIT_TIP_WIDTH = 190
+
+/**
+ * Split-view glyph: four rounded panes in the harness's line-icon language
+ * (1.2 stroke, currentColor, 16px box) instead of a text character, which the
+ * system font renders as a coloured emoji.
+ * @param props - `size` in pixels.
+ */
+function SplitIcon(props) {
+  const size = props?.size ?? 16
+  return h('svg', {
+    width: size,
+    height: size,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    xmlns: 'http://www.w3.org/2000/svg',
+    'aria-hidden': true,
+    style: { display: 'block' },
+  },
+    h('rect', { x: 2, y: 2, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2 }),
+    h('rect', { x: 9, y: 2, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2, opacity: 0.55 }),
+    h('rect', { x: 2, y: 9, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2, opacity: 0.55 }),
+    h('rect', { x: 9, y: 9, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2, opacity: 0.55 }),
+  )
+}
 
 const SPLIT_STYLE_ID = 'dsws-split-styles'
+
+/**
+ * Place the picker panel against the control that opened it.
+ * @param rect - the trigger's viewport box.
+ * @returns fixed top/left for the panel.
+ */
+function panelPosition(rect) {
+  const panelWidth = 200
+  const panelHeight = 230
+  const below = rect.bottom + 8
+  const aboveTop = rect.top - 8 - panelHeight
+  const top = below + panelHeight <= window.innerHeight
+    ? below
+    : Math.max(8, Math.min(aboveTop, window.innerHeight - panelHeight - 8))
+  const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8))
+  return { top, left }
+}
 
 /**
  * Install the stylesheet that places the sidebar control.
@@ -907,14 +954,21 @@ function SidebarSplitControl(props) {
   const [hover, setHover] = useState(false)
   const [tip, setTip] = useState(null)
   const [pickOpen, setPickOpen] = useState(false)
-  const buttonRef = useRef(null)
+  const [anchorPos, setAnchorPos] = useState(null)
 
-  const showTip = () => {
-    setHover(true)
-    const el = buttonRef.current
-    if (el === null) return
+  // Everything below reads the box off the event's own node: a ref on a slot
+  // entry can stay empty while the element is already laid out.
+  const showTip = (e) => {
+    const el = e.currentTarget ?? e.target
+    if (el === null || el === undefined) return
     const rect = el.getBoundingClientRect()
-    setTip({ top: Math.max(4, rect.top - 52), left: rect.left + rect.width / 2 })
+    setHover(true)
+    // Clamp inside the viewport: in the rail the button hugs the left edge, so a
+    // centred tip would start off-screen and lose its leading characters.
+    const half = SPLIT_TIP_WIDTH / 2
+    const center = rect.left + rect.width / 2
+    const left = Math.max(half + 8, Math.min(center, window.innerWidth - half - 8))
+    setTip({ top: Math.max(4, rect.top - 52), left })
   }
   const hideTip = () => {
     setHover(false)
@@ -923,7 +977,6 @@ function SidebarSplitControl(props) {
 
   return h(React.Fragment, null,
     h('button', {
-      ref: buttonRef,
       type: 'button',
       className: 'dsws-icon-btn',
       'aria-label': SIDEBAR_CONTROL_HINT,
@@ -943,9 +996,10 @@ function SidebarSplitControl(props) {
         // Right click opens the picker; the browser menu would hide it.
         e.preventDefault()
         e.stopPropagation()
+        setAnchorPos(panelPosition(e.currentTarget.getBoundingClientRect()))
         setPickOpen((open) => !open)
       },
-    }, '⊞'),
+    }, h(SplitIcon, { size: 15 })),
     hover && tip !== null
       ? h('div', { role: 'tooltip', style: splitControlStyles.tip(tip.top, tip.left) },
           `网格 ${geometry.rows} × ${geometry.cols}`,
@@ -960,7 +1014,7 @@ function SidebarSplitControl(props) {
       onApply: updateGeometry,
       open: pickOpen,
       onOpenChange: setPickOpen,
-      anchorRef: buttonRef,
+      anchorPos,
     }),
   )
 }
@@ -971,6 +1025,9 @@ function SplitButton() {
   return h('button', {
     title: '切换分屏视图',
     style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
       padding: '4px 10px',
       fontSize: 12,
       lineHeight: '18px',
@@ -985,7 +1042,7 @@ function SplitButton() {
         window.__dswsToggle?.()
       } catch (_e) {}
     },
-  }, '⊞ 分屏')
+  }, h(SplitIcon, { size: 14 }), '分屏')
 }
 
 // ---------- composer ----------
@@ -1612,7 +1669,7 @@ const pickerStyles = {
   }),
   grid: {
     display: 'grid',
-    gridTemplateColumns: `repeat(${PICKER_MAX}, 18px)`,
+    gridTemplateColumns: `repeat(${PICKER_MAX_COLS}, 18px)`,
     gridAutoRows: '18px',
     gap: 4,
     marginTop: 10,
@@ -1837,8 +1894,8 @@ function GridChoiceGrid(props) {
     if (delta !== undefined) {
       event.preventDefault()
       onPreview({
-        rows: Math.min(PICKER_MAX, Math.max(1, preview.rows + delta[0])),
-        cols: Math.min(PICKER_MAX, Math.max(1, preview.cols + delta[1])),
+        rows: Math.min(PICKER_MAX_ROWS, Math.max(1, preview.rows + delta[0])),
+        cols: Math.min(PICKER_MAX_COLS, Math.max(1, preview.cols + delta[1])),
       })
       return
     }
@@ -1848,9 +1905,11 @@ function GridChoiceGrid(props) {
     }
   }
 
+  // Row index is the row count and column index is the column count, so the
+  // matrix is rows-tall by cols-wide.
   const cells = []
-  for (let r = 1; r <= PICKER_MAX; r += 1) {
-    for (let c = 1; c <= PICKER_MAX; c += 1) {
+  for (let r = 1; r <= PICKER_MAX_ROWS; r += 1) {
+    for (let c = 1; c <= PICKER_MAX_COLS; c += 1) {
       const count = r * c
       const inside = r <= preview.rows && c <= preview.cols
       const state = inside ? tone : 'idle'
@@ -1901,25 +1960,23 @@ function GridPickerPanel(props) {
   const confirm = !blocked && count > confirmCells
   const hint = pickerHint(blocked, confirm, maxCells, confirmCells)
 
-  // Fixed positioning escapes the main column's overflow:hidden, which would
-  // otherwise clip the lower rows (the 7–10 range) in a short window.
+  // Fixed positioning escapes the sidebar's overflow:hidden. The owner computes
+  // the spot when it opens; the class lookup is the last resort so the panel is
+  // never left pinned to the top-left corner.
   const place = useCallback(() => {
-    const el = anchorRef.current
+    if (props.anchorPos !== undefined && props.anchorPos !== null) {
+      setAnchor(props.anchorPos)
+      return
+    }
+    const el = anchorRef?.current ?? document.querySelector('.dsws-icon-btn')
     if (el === null || el === undefined) return
-    const rect = el.getBoundingClientRect()
-    const panelWidth = 240
-    const panelHeight = 320
-    const top = rect.bottom + 8 + panelHeight <= window.innerHeight
-      ? rect.bottom + 8
-      : Math.max(8, window.innerHeight - panelHeight - 8)
-    const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8))
-    setAnchor({ top, left })
-  }, [anchorRef])
+    setAnchor(panelPosition(el.getBoundingClientRect()))
+  }, [anchorRef, props.anchorPos])
 
   const close = useCallback((refocus) => {
     onOpenChange(false)
     setPreview(null)
-    if (refocus) anchorRef.current?.focus()
+    if (refocus) anchorRef?.current?.focus()
   }, [anchorRef, onOpenChange])
 
   const closeDialog = useCallback(() => {
@@ -1936,9 +1993,12 @@ function GridPickerPanel(props) {
   useEffect(() => {
     if (!open) return undefined
     const onPointerDown = (event) => {
-      // The outside trigger toggles on click; closing here first would reopen it.
-      if (anchorRef.current?.contains(event.target)) return
-      if (panelRef.current?.contains(event.target)) return
+      // Only the left button dismisses; the right button is the trigger's own
+      // toggle. The trigger is matched by class so no ref is needed.
+      if (event.button !== 0) return
+      const target = event.target
+      if (target instanceof Element && target.closest('.dsws-icon-btn') !== null) return
+      if (panelRef.current?.contains(target)) return
       close(false)
     }
     const onKey = (event) => {

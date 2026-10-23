@@ -7379,8 +7379,9 @@ var h = import_react.default.createElement;
 var { useState, useEffect, useCallback, useSyncExternalStore, useRef } = import_react.default;
 var DEFAULT_MAX_CELLS = 10;
 var DEFAULT_CONFIRM_CELLS = 6;
-var PICKER_MAX = 10;
-var LIMIT_MAX = PICKER_MAX * PICKER_MAX;
+var PICKER_MAX_ROWS = 5;
+var PICKER_MAX_COLS = 6;
+var LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS;
 var OPEN_TIMEOUT_MS = 15e3;
 var openChain = Promise.resolve();
 function enqueueOpen(task) {
@@ -7412,12 +7413,12 @@ function savedGeometry(saved) {
   if (Number.isInteger(saved?.rows) && Number.isInteger(saved?.cols)) {
     return { rows: toSpan(saved.rows, 2), cols: toSpan(saved.cols, 2) };
   }
-  const n = Math.min(toSpan(saved?.gridSize, 2), PICKER_MAX);
+  const n = Math.min(toSpan(saved?.gridSize, 2), PICKER_MAX_COLS);
   return { rows: n, cols: n };
 }
 function fitGeometry(rows, cols, maxCells) {
-  let r = Math.min(toSpan(rows, 1), PICKER_MAX);
-  let c = Math.min(toSpan(cols, 1), PICKER_MAX);
+  let r = Math.min(toSpan(rows, 1), PICKER_MAX_ROWS);
+  let c = Math.min(toSpan(cols, 1), PICKER_MAX_COLS);
   while (r * c > maxCells) {
     if (r >= c && r > 1) r -= 1;
     else if (c > 1) c -= 1;
@@ -8062,6 +8063,8 @@ var splitControlStyles = {
     position: "fixed",
     top,
     left,
+    width: SPLIT_TIP_WIDTH,
+    boxSizing: "border-box",
     transform: "translateX(-50%)",
     padding: "6px 10px",
     borderRadius: "var(--dsw-radius-md, 8px)",
@@ -8070,7 +8073,7 @@ var splitControlStyles = {
     color: "var(--dsw-alias-label-primary, #eee)",
     fontSize: 12,
     lineHeight: "16px",
-    whiteSpace: "nowrap",
+    textAlign: "center",
     pointerEvents: "none",
     zIndex: 30
   }),
@@ -8082,7 +8085,36 @@ var splitControlStyles = {
   }
 };
 var SIDEBAR_CONTROL_HINT = "\u5DE6\u952E\u5207\u6362\u5206\u5C4F\uFF0C\u53F3\u952E\u9009\u7F51\u683C";
+var SPLIT_TIP_WIDTH = 190;
+function SplitIcon(props) {
+  const size = props?.size ?? 16;
+  return h(
+    "svg",
+    {
+      width: size,
+      height: size,
+      viewBox: "0 0 16 16",
+      fill: "none",
+      xmlns: "http://www.w3.org/2000/svg",
+      "aria-hidden": true,
+      style: { display: "block" }
+    },
+    h("rect", { x: 2, y: 2, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2 }),
+    h("rect", { x: 9, y: 2, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2, opacity: 0.55 }),
+    h("rect", { x: 2, y: 9, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2, opacity: 0.55 }),
+    h("rect", { x: 9, y: 9, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2, opacity: 0.55 })
+  );
+}
 var SPLIT_STYLE_ID = "dsws-split-styles";
+function panelPosition(rect) {
+  const panelWidth = 200;
+  const panelHeight = 230;
+  const below = rect.bottom + 8;
+  const aboveTop = rect.top - 8 - panelHeight;
+  const top = below + panelHeight <= window.innerHeight ? below : Math.max(8, Math.min(aboveTop, window.innerHeight - panelHeight - 8));
+  const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
+  return { top, left };
+}
 function installSplitStyles() {
   const existing = document.getElementById(SPLIT_STYLE_ID);
   if (existing !== null) return () => {
@@ -8108,13 +8140,16 @@ function SidebarSplitControl(props) {
   const [hover, setHover] = useState(false);
   const [tip, setTip] = useState(null);
   const [pickOpen, setPickOpen] = useState(false);
-  const buttonRef = useRef(null);
-  const showTip = () => {
-    setHover(true);
-    const el = buttonRef.current;
-    if (el === null) return;
+  const [anchorPos, setAnchorPos] = useState(null);
+  const showTip = (e) => {
+    const el = e.currentTarget ?? e.target;
+    if (el === null || el === void 0) return;
     const rect = el.getBoundingClientRect();
-    setTip({ top: Math.max(4, rect.top - 52), left: rect.left + rect.width / 2 });
+    setHover(true);
+    const half = SPLIT_TIP_WIDTH / 2;
+    const center = rect.left + rect.width / 2;
+    const left = Math.max(half + 8, Math.min(center, window.innerWidth - half - 8));
+    setTip({ top: Math.max(4, rect.top - 52), left });
   };
   const hideTip = () => {
     setHover(false);
@@ -8124,7 +8159,6 @@ function SidebarSplitControl(props) {
     import_react.default.Fragment,
     null,
     h("button", {
-      ref: buttonRef,
       type: "button",
       className: "dsws-icon-btn",
       "aria-label": SIDEBAR_CONTROL_HINT,
@@ -8144,9 +8178,10 @@ function SidebarSplitControl(props) {
       onContextMenu: (e) => {
         e.preventDefault();
         e.stopPropagation();
+        setAnchorPos(panelPosition(e.currentTarget.getBoundingClientRect()));
         setPickOpen((open) => !open);
       }
-    }, "\u229E"),
+    }, h(SplitIcon, { size: 15 })),
     hover && tip !== null ? h(
       "div",
       { role: "tooltip", style: splitControlStyles.tip(tip.top, tip.left) },
@@ -8161,7 +8196,7 @@ function SidebarSplitControl(props) {
       onApply: updateGeometry,
       open: pickOpen,
       onOpenChange: setPickOpen,
-      anchorRef: buttonRef
+      anchorPos
     })
   );
 }
@@ -8169,6 +8204,9 @@ function SplitButton() {
   return h("button", {
     title: "\u5207\u6362\u5206\u5C4F\u89C6\u56FE",
     style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
       padding: "4px 10px",
       fontSize: 12,
       lineHeight: "18px",
@@ -8184,7 +8222,7 @@ function SplitButton() {
       } catch (_e) {
       }
     }
-  }, "\u229E \u5206\u5C4F");
+  }, h(SplitIcon, { size: 14 }), "\u5206\u5C4F");
 }
 var composerWrapStyle = {
   display: "flex",
@@ -8767,7 +8805,7 @@ var pickerStyles = {
   }),
   grid: {
     display: "grid",
-    gridTemplateColumns: `repeat(${PICKER_MAX}, 18px)`,
+    gridTemplateColumns: `repeat(${PICKER_MAX_COLS}, 18px)`,
     gridAutoRows: "18px",
     gap: 4,
     marginTop: 10,
@@ -8982,8 +9020,8 @@ function GridChoiceGrid(props) {
     if (delta !== void 0) {
       event.preventDefault();
       onPreview({
-        rows: Math.min(PICKER_MAX, Math.max(1, preview.rows + delta[0])),
-        cols: Math.min(PICKER_MAX, Math.max(1, preview.cols + delta[1]))
+        rows: Math.min(PICKER_MAX_ROWS, Math.max(1, preview.rows + delta[0])),
+        cols: Math.min(PICKER_MAX_COLS, Math.max(1, preview.cols + delta[1]))
       });
       return;
     }
@@ -8993,8 +9031,8 @@ function GridChoiceGrid(props) {
     }
   };
   const cells = [];
-  for (let r = 1; r <= PICKER_MAX; r += 1) {
-    for (let c = 1; c <= PICKER_MAX; c += 1) {
+  for (let r = 1; r <= PICKER_MAX_ROWS; r += 1) {
+    for (let c = 1; c <= PICKER_MAX_COLS; c += 1) {
       const count = r * c;
       const inside = r <= preview.rows && c <= preview.cols;
       const state = inside ? tone : "idle";
@@ -9036,19 +9074,18 @@ function GridPickerPanel(props) {
   const confirm = !blocked && count > confirmCells;
   const hint = pickerHint(blocked, confirm, maxCells, confirmCells);
   const place = useCallback(() => {
-    const el = anchorRef.current;
+    if (props.anchorPos !== void 0 && props.anchorPos !== null) {
+      setAnchor(props.anchorPos);
+      return;
+    }
+    const el = anchorRef?.current ?? document.querySelector(".dsws-icon-btn");
     if (el === null || el === void 0) return;
-    const rect = el.getBoundingClientRect();
-    const panelWidth = 240;
-    const panelHeight = 320;
-    const top = rect.bottom + 8 + panelHeight <= window.innerHeight ? rect.bottom + 8 : Math.max(8, window.innerHeight - panelHeight - 8);
-    const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
-    setAnchor({ top, left });
-  }, [anchorRef]);
+    setAnchor(panelPosition(el.getBoundingClientRect()));
+  }, [anchorRef, props.anchorPos]);
   const close = useCallback((refocus) => {
     onOpenChange(false);
     setPreview(null);
-    if (refocus) anchorRef.current?.focus();
+    if (refocus) anchorRef?.current?.focus();
   }, [anchorRef, onOpenChange]);
   const closeDialog = useCallback(() => {
     setDialog(null);
@@ -9060,8 +9097,10 @@ function GridPickerPanel(props) {
   useEffect(() => {
     if (!open) return void 0;
     const onPointerDown = (event) => {
-      if (anchorRef.current?.contains(event.target)) return;
-      if (panelRef.current?.contains(event.target)) return;
+      if (event.button !== 0) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest(".dsws-icon-btn") !== null) return;
+      if (panelRef.current?.contains(target)) return;
       close(false);
     };
     const onKey = (event) => {
