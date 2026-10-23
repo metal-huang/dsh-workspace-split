@@ -11,6 +11,7 @@ import { gfm } from 'micromark-extension-gfm'
 import { gfmFromMarkdown } from 'mdast-util-gfm'
 import { math } from 'micromark-extension-math'
 import { mathFromMarkdown } from 'mdast-util-math'
+import katex from 'katex'
 
 const h = React.createElement
 const { useState, useEffect, useCallback, useSyncExternalStore, useRef } = React
@@ -397,25 +398,41 @@ const mdStyles = {
     maxWidth: 320,
     minWidth: 100,
   },
-  math: {
-    fontFamily: 'var(--ds-font-family-code, monospace)',
-    fontSize: '0.875em',
-    background: 'var(--dsw-alias-markdown-inline-code, rgba(128,128,128,.16))',
-    borderRadius: 'var(--dsw-radius-sm, 4px)',
-    padding: '0 5px',
-  },
+  // KaTeX paints its own metrics; the wrapper only handles overflow and rhythm.
+  mathInline: { display: 'inline-block', maxWidth: '100%', overflowX: 'auto', verticalAlign: 'middle' },
   mathBlock: {
     minWidth: 0,
     maxWidth: '100%',
     margin: `${mdBlockGap}px 0`,
-    padding: '10px 14px',
-    fontFamily: 'var(--ds-font-family-code, monospace)',
-    fontSize: '0.875em',
-    background: 'var(--dsw-alias-markdown-code-block, rgba(128,128,128,.10))',
-    borderRadius: 'var(--dsw-radius-md, 8px)',
     overflowX: 'auto',
-    whiteSpace: 'pre',
+    overflowY: 'hidden',
   },
+}
+
+/**
+ * Render TeX the way the harness's own transcript does.
+ *
+ * The page already ships KaTeX's stylesheet with the vendor CSS, so no
+ * stylesheet work is needed here; an unparsable expression falls back to its
+ * source instead of breaking the turn.
+ * @param value - TeX source.
+ * @param displayMode - block expression when true, inline when false.
+ * @returns a React node holding the rendered math.
+ */
+function texNode(value, displayMode) {
+  const source = String(value ?? '')
+  try {
+    const html = katex.renderToString(source, {
+      throwOnError: false,
+      displayMode,
+      output: 'html',
+      strict: 'ignore',
+      trust: false,
+    })
+    return h('span', { dangerouslySetInnerHTML: { __html: html } })
+  } catch {
+    return h('code', null, source)
+  }
 }
 
 /** Flatten an mdast node's text content (used for table cells and alt text). */
@@ -559,10 +576,10 @@ function renderMdNode(node, key) {
     }
 
     case 'math':
-      return h('div', { key, style: mdStyles.mathBlock }, node.value ?? '')
+      return h('div', { key, style: mdStyles.mathBlock }, texNode(node.value, true))
 
     case 'inlineMath':
-      return h('code', { key, style: mdStyles.math }, node.value ?? '')
+      return h('span', { key, style: mdStyles.mathInline }, texNode(node.value, false))
 
     case 'break':
       return h('br', { key })
@@ -1100,7 +1117,7 @@ function SidebarSplitControl(props) {
 // Labelled button for the hero options row.
 function SplitButton() {
   return h('button', {
-    title: '切换分屏视图',
+    title: t('split.button.toggle'),
     style: {
       display: 'inline-flex',
       alignItems: 'center',
@@ -1664,7 +1681,7 @@ function CellView(props) {
           value: inputText,
           onChange: (e) => setInputText(e.target.value),
           onKeyDown,
-          placeholder: '输入消息…',
+          placeholder: t('composer.placeholder'),
           rows: 1,
           style: composerInputStyle,
         }),

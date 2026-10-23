@@ -10,12 +10,19 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
   "scripts": {
     "build": "node build.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
+    "katex": "^0.18.11",
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm": "^3.1.0",
     "mdast-util-math": "^3.0.0",
@@ -23,10 +30,14 @@
     "micromark-extension-math": "^3.1.0"
   },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   }
 }

@@ -40,7 +40,9 @@ const result = await build({
   target: 'es2022',
   external: PLATFORM_EXTERNALS,
   legalComments: 'none',
-  minify: false,
+  // The artifact is generated; src/client.js stays the readable source. Minify
+  // keeps the payload sane now that KaTeX is inlined (772 KiB -> ~330 KiB).
+  minify: true,
 })
 
 const body = result.outputFiles[0].text
