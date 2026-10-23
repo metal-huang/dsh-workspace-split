@@ -9040,6 +9040,67 @@ function GridPicker(props) {
     dialogNode
   );
 }
+var cellPickerStyles = {
+  wrap: (hover) => ({
+    position: "relative",
+    flex: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 22,
+    height: 22,
+    marginLeft: 4,
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    background: hover ? "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))" : "transparent",
+    color: "var(--dsw-alias-label-tertiary, #999)"
+  }),
+  glyph: {
+    fontSize: 9,
+    lineHeight: 1,
+    pointerEvents: "none"
+  },
+  select: {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    opacity: 0,
+    border: "none",
+    padding: 0,
+    margin: 0,
+    cursor: "pointer",
+    appearance: "none"
+  }
+};
+function CellPicker(props) {
+  const [hover, setHover] = useState(false);
+  return h(
+    "span",
+    {
+      style: cellPickerStyles.wrap(hover),
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => setHover(false)
+    },
+    h("span", { style: cellPickerStyles.glyph, "aria-hidden": true }, "\u25BE"),
+    h(
+      "select",
+      {
+        style: cellPickerStyles.select,
+        value: props.value,
+        "aria-label": "\u5207\u6362\u4F1A\u8BDD",
+        onChange: (e) => props.onChange(e.target.value || null)
+      },
+      h("option", { value: "" }, props.placeholder),
+      props.options.map(
+        (s) => h(
+          "option",
+          { key: s.id, value: s.id },
+          (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? " \u25CF" : "")
+        )
+      )
+    )
+  );
+}
 function SplitMain(props) {
   const sessions = props.__sessions;
   const workspaces = props.__workspaces;
@@ -9183,15 +9244,6 @@ function SplitMain(props) {
     fontWeight: 500,
     color: "var(--dsw-alias-label-primary, inherit)"
   };
-  const selectStyle = {
-    fontSize: 12,
-    padding: "2px 6px",
-    maxWidth: "52%",
-    background: "var(--dsw-specific-input-major, transparent)",
-    color: "var(--dsw-alias-label-primary, inherit)",
-    border: "0.5px solid var(--dsw-alias-border-l2, #555)",
-    borderRadius: "var(--dsw-radius-sm, 6px)"
-  };
   const dotStyle = (running) => ({
     width: 8,
     height: 8,
@@ -9324,37 +9376,44 @@ function SplitMain(props) {
               import_react.default.Fragment,
               null,
               h("span", { style: dotStyle(sess.running) }),
-              // One line with an ellipsis: at six columns a wrapping title
-              // eats the whole header and pushes the transcript down.
-              h("span", {
+              // The title is the picker's trigger: one line with an ellipsis,
+              // no second copy of the same text beside it.
+              h("button", {
+                type: "button",
+                title: "\u70B9\u51FB\u5207\u6362\u4F1A\u8BDD",
                 style: {
                   flex: "1 1 auto",
                   minWidth: 0,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
-                  whiteSpace: "nowrap"
+                  whiteSpace: "nowrap",
+                  border: "none",
+                  background: "transparent",
+                  padding: 0,
+                  font: "inherit",
+                  color: "inherit",
+                  textAlign: "start",
+                  cursor: "pointer"
+                },
+                onClick: (e) => {
+                  const select = e.currentTarget.parentElement?.querySelector("select");
+                  if (select === null || select === void 0) return;
+                  try {
+                    select.showPicker();
+                  } catch (_e) {
+                    select.focus();
+                  }
                 }
               }, sess.displayTitle || sess.title || sess.id.slice(0, 8))
-            ) : h("span", { style: { color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u683C ${i + 1}`),
-            h(
-              "select",
-              {
-                style: { ...selectStyle, marginLeft: "auto", flex: "0 1 auto", minWidth: 0 },
-                value: sid ?? "",
-                onChange: (e) => {
-                  const id = e.target.value || null;
-                  setCell(i, id === null ? null : cell?.t === "workspace" ? { t: "workspace", ws: cell.ws, id } : { t: "session", id });
-                }
-              },
-              h("option", { value: "" }, wsTitle === null ? "\u9009\u62E9\u4F1A\u8BDD\u2026" : `${wsTitle}\uFF08\u9009\u4F1A\u8BDD\uFF09`),
-              options.map(
-                (s) => h(
-                  "option",
-                  { key: s.id, value: s.id },
-                  (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? " \u25CF" : "")
-                )
-              )
-            )
+            ) : h("span", { style: { flex: "1 1 auto", color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u683C ${i + 1}`),
+            h(CellPicker, {
+              value: sid ?? "",
+              placeholder: wsTitle === null ? "\u9009\u62E9\u4F1A\u8BDD\u2026" : `${wsTitle}\uFF08\u9009\u4F1A\u8BDD\uFF09`,
+              options,
+              onChange: (id) => {
+                setCell(i, id === null ? null : cell?.t === "workspace" ? { t: "workspace", ws: cell.ws, id } : { t: "session", id });
+              }
+            })
           ),
           cell?.t === "workspace" && !sess ? h(
             "div",
