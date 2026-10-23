@@ -7493,6 +7493,7 @@ var mdBlockGap = 16;
 var mdStyles = {
   root: {
     minWidth: 0,
+    maxWidth: "100%",
     overflowWrap: "anywhere",
     font: "var(--dsw-font-markdown-base, inherit)",
     color: "var(--dsw-alias-label-primary, inherit)"
@@ -7526,6 +7527,8 @@ var mdStyles = {
   },
   strong: { fontWeight: 600 },
   codeBlock: {
+    minWidth: 0,
+    maxWidth: "100%",
     margin: `${mdBlockGap}px 0`,
     borderRadius: "var(--dsw-radius-lg, 10px)",
     background: "var(--dsw-alias-markdown-code-block, rgba(128,128,128,.10))",
@@ -7541,6 +7544,8 @@ var mdStyles = {
     color: "var(--dsw-alias-label-primary, inherit)"
   },
   codePre: {
+    minWidth: 0,
+    maxWidth: "100%",
     font: "var(--dsw-font-markdown-code-block, inherit)",
     fontFamily: "var(--ds-font-family-code, monospace)",
     padding: 16,
@@ -7550,8 +7555,21 @@ var mdStyles = {
     wordBreak: "break-all",
     background: "var(--dsw-alias-markdown-code-block, rgba(128,128,128,.10))"
   },
-  tableScroll: { maxWidth: "100%", overflowX: "auto", overscrollBehaviorX: "contain", margin: `${mdBlockGap}px 0` },
+  // `minWidth: 0` on every block that can hold wide content: a flex item's
+  // default `min-width: auto` resolves to its content's min-content width, so
+  // a wide table would stretch the block past the cell instead of scrolling
+  // inside its own wrapper.
+  tableScroll: {
+    minWidth: 0,
+    maxWidth: "100%",
+    overflowX: "auto",
+    overscrollBehaviorX: "contain",
+    margin: `${mdBlockGap}px 0`
+  },
   table: { borderCollapse: "collapse", width: "max-content", maxWidth: "max-content" },
+  // `.tableFill` in the native sheet: fill the column so cells wrap instead of
+  // forcing the reader to scroll sideways in a narrow cell.
+  tableFill: { borderCollapse: "collapse", width: "100%", maxWidth: "none" },
   th: {
     textAlign: "start",
     padding: "10px 16px",
@@ -7576,6 +7594,8 @@ var mdStyles = {
     padding: "0 5px"
   },
   mathBlock: {
+    minWidth: 0,
+    maxWidth: "100%",
     margin: `${mdBlockGap}px 0`,
     padding: "10px 14px",
     fontFamily: "var(--ds-font-family-code, monospace)",
@@ -7684,14 +7704,19 @@ function renderMdNode(node2, key) {
       );
     case "table": {
       const rows = node2.children;
+      const columns = rows[0]?.children.length ?? 0;
+      const wide = columns >= 4;
+      const tableStyle = wide ? mdStyles.table : mdStyles.tableFill;
       const renderRow = (row, r, isHead) => h(
         "tr",
         { key: `${key}-r${r}` },
         row.children.map((cell, c) => {
           const Tag = isHead ? "th" : "td";
+          const base = isHead ? mdStyles.th : mdStyles.td;
+          const style = wide ? base : { ...base, minWidth: 0, maxWidth: "none" };
           return h(Tag, {
             key: `${key}-r${r}c${c}`,
-            style: isHead ? mdStyles.th : mdStyles.td
+            style
           }, cell.children.map((x, i) => renderMdNode(x, `${key}-r${r}c${c}-${i}`)));
         })
       );
@@ -7700,7 +7725,7 @@ function renderMdNode(node2, key) {
         { key, style: mdStyles.tableScroll },
         h(
           "table",
-          { style: mdStyles.table },
+          { style: tableStyle },
           rows.length > 0 ? h("thead", null, renderRow(rows[0], 0, true)) : null,
           rows.length > 1 ? h("tbody", null, rows.slice(1).map((row, i) => renderRow(row, i + 1, false))) : null
         )
@@ -8148,6 +8173,8 @@ var toolStyles = {
     marginTop: 6
   },
   pre: {
+    minWidth: 0,
+    maxWidth: "100%",
     margin: "4px 0",
     padding: "8px 10px",
     fontFamily: "var(--ds-font-family-code, monospace)",
@@ -8199,7 +8226,7 @@ function ToolRow(props) {
   }
   return h(
     "div",
-    { style: { display: "flex", flexDirection: "column" } },
+    { style: { display: "flex", flexDirection: "column", minWidth: 0, maxWidth: "100%" } },
     h(
       "div",
       {
@@ -8239,6 +8266,7 @@ function ToolRow(props) {
 function eventStyle(kind) {
   const base = {
     maxWidth: "82%",
+    minWidth: 0,
     wordBreak: "break-word",
     whiteSpace: "pre-wrap",
     fontSize: "var(--dsh-content-font-size, 13px)",
@@ -8467,7 +8495,18 @@ function CellView(props) {
         {
           ref: bodyRef,
           onScroll,
-          style: { display: "flex", flexDirection: "column", flex: 1, overflow: "auto", padding: "10px 12px", minHeight: 0 }
+          // `overflowX: hidden` is the backstop: every wide block scrolls inside
+          // its own wrapper, so the transcript itself must never scroll sideways.
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            flex: 1,
+            overflowY: "auto",
+            overflowX: "hidden",
+            padding: "10px 12px",
+            minHeight: 0,
+            minWidth: 0
+          }
         },
         visible.map((entry, idx) => {
           const ev = entry.event;
