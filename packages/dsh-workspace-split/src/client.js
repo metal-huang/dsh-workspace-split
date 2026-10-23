@@ -485,6 +485,8 @@ const TURN_RAIL_INSET = 6
 const TURN_FADE_PX = 24
 /** Below this cell width the rail would crowd the transcript, so it hides. */
 const TURN_RAIL_MIN_WIDTH = 420
+/** Bound for a rename round-trip; the title stays put when it expires. */
+const RENAME_TIMEOUT_MS = 8000
 
 const turnRailStyles = {
   frame: {
@@ -1872,6 +1874,146 @@ function GridPicker(props) {
   )
 }
 
+// ---------- cell title ----------
+// The title doubles as the picker's trigger; the pencil beside it renames the
+// Session itself through the session face (`rename`), which republishes the
+// title projection the list already renders.
+
+const titleStyles = {
+  dot: (running) => ({
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    flexShrink: 0,
+    background: running ? 'var(--dsw-alias-state-success, #4caf50)' : 'var(--dsw-alias-label-caption, #999)',
+    transition: 'background 0.3s',
+  }),
+  text: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    border: 'none',
+    background: 'transparent',
+    padding: 0,
+    font: 'inherit',
+    color: 'inherit',
+    textAlign: 'start',
+    cursor: 'pointer',
+  },
+  input: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    border: 'none',
+    borderBottom: '1px solid var(--dsw-alias-state-business-primary, #4a9eff)',
+    background: 'transparent',
+    padding: '0 0 1px',
+    font: 'inherit',
+    color: 'inherit',
+    outline: 'none',
+  },
+  action: (hover) => ({
+    flex: 'none',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    marginLeft: 2,
+    padding: 0,
+    border: 'none',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    background: hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))' : 'transparent',
+    color: 'var(--dsw-alias-label-tertiary, #999)',
+    cursor: 'pointer',
+    fontSize: 11,
+    lineHeight: 1,
+  }),
+}
+
+/**
+ * Cell header title: status dot, the title (or its edit field), and rename.
+ * @param props - sessions service, session id, title text, and running state.
+ */
+function CellTitle(props) {
+  const { sessions, sessionId, title, running } = props
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [hover, setHover] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const aliveRef = useRef(true)
+  useEffect(() => () => { aliveRef.current = false }, [])
+
+  const openPicker = (e) => {
+    const select = e.currentTarget.parentElement?.querySelector('select')
+    if (select === null || select === undefined) return
+    try {
+      select.showPicker()
+    } catch (_e) {
+      select.focus()
+    }
+  }
+
+  const commit = () => {
+    const next = draft.trim()
+    setEditing(false)
+    if (next === '' || next === title) return
+    const face = sessions.binding(sessionId)?.session
+    if (face === null || face === undefined) return
+    // The host normalizes the title and republishes the projection, so the row
+    // re-renders from the accepted value rather than from this draft. A host
+    // that cannot resolve the Session's agent never settles, so the wait is
+    // bounded and the title simply stays as it was.
+    setSaving(true)
+    const settle = () => { if (aliveRef.current) setSaving(false) }
+    const timer = setTimeout(settle, RENAME_TIMEOUT_MS)
+    Promise.resolve(face.rename(next)).then(settle, settle).finally(() => clearTimeout(timer))
+  }
+
+  return h(React.Fragment, null,
+    h('span', { style: titleStyles.dot(running) }),
+    editing
+      ? h('input', {
+          autoFocus: true,
+          value: draft,
+          'aria-label': '重命名会话',
+          onChange: (e) => setDraft(e.target.value),
+          onKeyDown: (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setEditing(false)
+            }
+          },
+          onBlur: commit,
+          style: titleStyles.input,
+        })
+      : h('button', {
+          type: 'button',
+          title: saving ? '正在保存…' : '点击切换会话',
+          style: { ...titleStyles.text, opacity: saving ? 0.5 : 1 },
+          onClick: openPicker,
+        }, title),
+    editing
+      ? null
+      : h('button', {
+          type: 'button',
+          title: '重命名会话',
+          'aria-label': '重命名会话',
+          style: titleStyles.action(hover),
+          onMouseEnter: () => setHover(true),
+          onMouseLeave: () => setHover(false),
+          onClick: () => {
+            setDraft(title)
+            setEditing(true)
+          },
+        }, '✎'),
+  )
+}
+
 // ---------- cell picker ----------
 // A native <select> kept for its keyboard handling and system popup, drawn as a
 // small chevron: the header already shows the session title, so repeating the
@@ -2111,14 +2253,6 @@ function SplitMain(props) {
     fontWeight: 500,
     color: 'var(--dsw-alias-label-primary, inherit)',
   }
-  const dotStyle = (running) => ({
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    flexShrink: 0,
-    background: running ? 'var(--dsw-alias-state-success, #4caf50)' : 'var(--dsw-alias-label-caption, #999)',
-    transition: 'background 0.3s',
-  })
   const toolbarStyle = {
     display: 'flex',
     alignItems: 'center',
@@ -2232,38 +2366,12 @@ function SplitMain(props) {
             },
           },
             sess
-              ? h(React.Fragment, null,
-                  h('span', { style: dotStyle(sess.running) }),
-                  // The title is the picker's trigger: one line with an ellipsis,
-                  // no second copy of the same text beside it.
-                  h('button', {
-                    type: 'button',
-                    title: '点击切换会话',
-                    style: {
-                      flex: '1 1 auto',
-                      minWidth: 0,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      border: 'none',
-                      background: 'transparent',
-                      padding: 0,
-                      font: 'inherit',
-                      color: 'inherit',
-                      textAlign: 'start',
-                      cursor: 'pointer',
-                    },
-                    onClick: (e) => {
-                      const select = e.currentTarget.parentElement?.querySelector('select')
-                      if (select === null || select === undefined) return
-                      try {
-                        select.showPicker()
-                      } catch (_e) {
-                        select.focus()
-                      }
-                    },
-                  }, sess.displayTitle || sess.title || sess.id.slice(0, 8)),
-                )
+              ? h(CellTitle, {
+                  sessions,
+                  sessionId: sess.id,
+                  title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
+                  running: sess.running,
+                })
               : h('span', { style: { flex: '1 1 auto', color: 'var(--dsw-alias-label-caption, #999)', whiteSpace: 'nowrap' } }, `格 ${i + 1}`),
             h(CellPicker, {
               value: sid ?? '',

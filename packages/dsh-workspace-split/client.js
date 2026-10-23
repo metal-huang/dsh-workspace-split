@@ -7759,6 +7759,7 @@ var TURN_MARK_PITCH = 10;
 var TURN_RAIL_INSET = 6;
 var TURN_FADE_PX = 24;
 var TURN_RAIL_MIN_WIDTH = 420;
+var RENAME_TIMEOUT_MS = 8e3;
 var turnRailStyles = {
   frame: {
     // Centered band, matching TurnNavigator.module.css: the rail floats at the
@@ -9040,6 +9041,130 @@ function GridPicker(props) {
     dialogNode
   );
 }
+var titleStyles = {
+  dot: (running) => ({
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    flexShrink: 0,
+    background: running ? "var(--dsw-alias-state-success, #4caf50)" : "var(--dsw-alias-label-caption, #999)",
+    transition: "background 0.3s"
+  }),
+  text: {
+    flex: "1 1 auto",
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    border: "none",
+    background: "transparent",
+    padding: 0,
+    font: "inherit",
+    color: "inherit",
+    textAlign: "start",
+    cursor: "pointer"
+  },
+  input: {
+    flex: "1 1 auto",
+    minWidth: 0,
+    border: "none",
+    borderBottom: "1px solid var(--dsw-alias-state-business-primary, #4a9eff)",
+    background: "transparent",
+    padding: "0 0 1px",
+    font: "inherit",
+    color: "inherit",
+    outline: "none"
+  },
+  action: (hover) => ({
+    flex: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 22,
+    height: 22,
+    marginLeft: 2,
+    padding: 0,
+    border: "none",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    background: hover ? "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))" : "transparent",
+    color: "var(--dsw-alias-label-tertiary, #999)",
+    cursor: "pointer",
+    fontSize: 11,
+    lineHeight: 1
+  })
+};
+function CellTitle(props) {
+  const { sessions, sessionId, title, running } = props;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [hover, setHover] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const aliveRef = useRef(true);
+  useEffect(() => () => {
+    aliveRef.current = false;
+  }, []);
+  const openPicker = (e) => {
+    const select = e.currentTarget.parentElement?.querySelector("select");
+    if (select === null || select === void 0) return;
+    try {
+      select.showPicker();
+    } catch (_e) {
+      select.focus();
+    }
+  };
+  const commit = () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (next === "" || next === title) return;
+    const face = sessions.binding(sessionId)?.session;
+    if (face === null || face === void 0) return;
+    setSaving(true);
+    const settle = () => {
+      if (aliveRef.current) setSaving(false);
+    };
+    const timer = setTimeout(settle, RENAME_TIMEOUT_MS);
+    Promise.resolve(face.rename(next)).then(settle, settle).finally(() => clearTimeout(timer));
+  };
+  return h(
+    import_react.default.Fragment,
+    null,
+    h("span", { style: titleStyles.dot(running) }),
+    editing ? h("input", {
+      autoFocus: true,
+      value: draft,
+      "aria-label": "\u91CD\u547D\u540D\u4F1A\u8BDD",
+      onChange: (e) => setDraft(e.target.value),
+      onKeyDown: (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setEditing(false);
+        }
+      },
+      onBlur: commit,
+      style: titleStyles.input
+    }) : h("button", {
+      type: "button",
+      title: saving ? "\u6B63\u5728\u4FDD\u5B58\u2026" : "\u70B9\u51FB\u5207\u6362\u4F1A\u8BDD",
+      style: { ...titleStyles.text, opacity: saving ? 0.5 : 1 },
+      onClick: openPicker
+    }, title),
+    editing ? null : h("button", {
+      type: "button",
+      title: "\u91CD\u547D\u540D\u4F1A\u8BDD",
+      "aria-label": "\u91CD\u547D\u540D\u4F1A\u8BDD",
+      style: titleStyles.action(hover),
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => setHover(false),
+      onClick: () => {
+        setDraft(title);
+        setEditing(true);
+      }
+    }, "\u270E")
+  );
+}
 var cellPickerStyles = {
   wrap: (hover) => ({
     position: "relative",
@@ -9244,14 +9369,6 @@ function SplitMain(props) {
     fontWeight: 500,
     color: "var(--dsw-alias-label-primary, inherit)"
   };
-  const dotStyle = (running) => ({
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    flexShrink: 0,
-    background: running ? "var(--dsw-alias-state-success, #4caf50)" : "var(--dsw-alias-label-caption, #999)",
-    transition: "background 0.3s"
-  });
   const toolbarStyle = {
     display: "flex",
     alignItems: "center",
@@ -9372,40 +9489,12 @@ function SplitMain(props) {
                 background: isActive ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : "transparent"
               }
             },
-            sess ? h(
-              import_react.default.Fragment,
-              null,
-              h("span", { style: dotStyle(sess.running) }),
-              // The title is the picker's trigger: one line with an ellipsis,
-              // no second copy of the same text beside it.
-              h("button", {
-                type: "button",
-                title: "\u70B9\u51FB\u5207\u6362\u4F1A\u8BDD",
-                style: {
-                  flex: "1 1 auto",
-                  minWidth: 0,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  border: "none",
-                  background: "transparent",
-                  padding: 0,
-                  font: "inherit",
-                  color: "inherit",
-                  textAlign: "start",
-                  cursor: "pointer"
-                },
-                onClick: (e) => {
-                  const select = e.currentTarget.parentElement?.querySelector("select");
-                  if (select === null || select === void 0) return;
-                  try {
-                    select.showPicker();
-                  } catch (_e) {
-                    select.focus();
-                  }
-                }
-              }, sess.displayTitle || sess.title || sess.id.slice(0, 8))
-            ) : h("span", { style: { flex: "1 1 auto", color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u683C ${i + 1}`),
+            sess ? h(CellTitle, {
+              sessions,
+              sessionId: sess.id,
+              title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
+              running: sess.running
+            }) : h("span", { style: { flex: "1 1 auto", color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u683C ${i + 1}`),
             h(CellPicker, {
               value: sid ?? "",
               placeholder: wsTitle === null ? "\u9009\u62E9\u4F1A\u8BDD\u2026" : `${wsTitle}\uFF08\u9009\u4F1A\u8BDD\uFF09`,
