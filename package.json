@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Gate toolchain root for the multi-session split-view plugin.",
+  "license": "MIT",
+  "description": "Repository root for the dsh-workspace-split plugin: gate toolchain and shared tooling.",
   "scripts": {
     "prepare": "husky",
     "lint": "node gate/lint_runner.mjs",
