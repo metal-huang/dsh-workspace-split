@@ -59,9 +59,12 @@ npm run build
 npm run release   # 构建 + 复制到 .release/，桌面版下次启动生效
 ```
 
-- 日常验证走 web profile，它链接 `packages/dsh-workspace-split`，实时跟随源码
-- `.release/` 不入库；发布脚本只拷 `files` 里列的运行文件，并要求该包无运行时
-  依赖（有依赖直接报错，必须先打进 bundle）
+- 日常验证走 web profile，它链接 `packages/dsh-workspace-split`；包的 `exports`
+  指向构建产物 `client.js`，所以**改完 `src/client.js` 必须 `npm run build`** 才看得到变化
+- 发布是「先暂存再换名」：复制到 `.release/.staging`，整包校验通过后才切换，
+  失败或中断都不会留下残缺快照，上一版留在 `.release/.previous` 可回滚
+- `.release/` 不入库；发布脚本按 `package.json` 的 `files` 取文件，并要求该包
+  无运行时依赖（`dependencies` / `peerDependencies` / `optionalDependencies` 都查）
 - 桌面 profile 的 `package.json` 由 Electron 独占管理，`dsh plugin` 与
   `dsh --dump-config` 都拒绝操作它；改配置只能编辑文件后在该目录跑 `pnpm install`
 
