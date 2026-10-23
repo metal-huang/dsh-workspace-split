@@ -48,7 +48,13 @@ describe('built client artifact', () => {
   it('wraps the bundle in the module-loader envelope', () => {
     const committed = readFileSync(COMMITTED, 'utf8')
     assert.match(committed, /window\.__ModuleLoader__\.load\(\{/)
-    assert.match(committed, /id: "@local\/dsh-workspace-split"/)
+    // The id the loader keys the plugin by must be the package name; read it
+    // instead of repeating it here so a rename cannot drift out of sync.
+    const manifest = JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8'))
+    assert.ok(
+      committed.includes(`id: ${JSON.stringify(manifest.name)}`),
+      `loader id must be ${manifest.name}`,
+    )
     assert.match(committed, /factory\(require\)/)
   })
 

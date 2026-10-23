@@ -1,9 +1,25 @@
 {
-  "name": "@local/dsh-workspace-split",
+  "name": "dsh-workspace-split",
   "version": "0.1.0",
-  "private": true,
+  "description": "Split view for DeepSeek Harness: keep several live sessions side by side, each one typable.",
+  "license": "MIT",
   "type": "module",
-  "description": "Multi-session split view: watch several sessions side by side.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "split-view",
+    "dashboard",
+    "multi-session"
+  ],
+  "homepage": "https://github.com/dsh-workspace-split/dsh-workspace-split#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dsh-workspace-split/dsh-workspace-split.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dsh-workspace-split/dsh-workspace-split/issues"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

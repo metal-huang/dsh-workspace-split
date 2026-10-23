@@ -1,5 +1,5 @@
 - insert:
     - id: workspace-split
-      name: '@local/dsh-workspace-split'
+      name: 'dsh-workspace-split'
       # 格子上限不在这里配置：DSH 不会把插件 config 传给浏览器半。
       # 运行时在「设置 → 通用 → 分屏网格」调整，默认最多 10 格、超过 6 格需确认。

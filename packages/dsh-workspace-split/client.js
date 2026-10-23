@@ -1,6 +1,6 @@
 // GENERATED FILE — edit src/client.js and run `npm run build` instead.
 window.__ModuleLoader__.load({
-  id: "@local/dsh-workspace-split",
+  id: "dsh-workspace-split",
   factory(require) {
     const module = { exports: {} };
     const exports = module.exports;

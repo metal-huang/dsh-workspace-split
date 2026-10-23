@@ -1,8 +1,8 @@
 # 分屏插件测试用例
 
 ## 环境
-- DSH web profile，WSL Ubuntu-22.04，dsh 0.2.1-rc.2
-- 插件包 `@local/dsh-workspace-split` 已 link 安装
+- DSH web profile，Windows，dsh 0.2.1-rc.2
+- 插件包 `dsh-workspace-split` 已 link 安装
 
 ## 用例
 
