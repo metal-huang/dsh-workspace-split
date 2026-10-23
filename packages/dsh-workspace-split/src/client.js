@@ -120,11 +120,58 @@ function subscribeLimits(listener) {
 function getLimits() {
   return limitsSnapshot
 }
+
+// Geometry lives above the panel: the sidebar control owns the picker and is
+// always mounted, while the panel only exists while the split view is open.
+let geometrySnapshot = null
+const geometryListeners = new Set()
+
+/** Read the shared geometry, fitting it to the current cap on first use. */
+function getGeometry() {
+  if (geometrySnapshot === null) {
+    const start = savedGeometry(loadLayout())
+    geometrySnapshot = fitGeometry(start.rows, start.cols, limitsSnapshot.maxCells)
+  }
+  return geometrySnapshot
+}
+
+function subscribeGeometry(listener) {
+  geometryListeners.add(listener)
+  return () => geometryListeners.delete(listener)
+}
+
+/**
+ * Apply a new grid geometry everywhere it is read.
+ * @param nextRows - requested row count.
+ * @param nextCols - requested column count.
+ */
+function updateGeometry(nextRows, nextCols) {
+  const next = fitGeometry(nextRows, nextCols, limitsSnapshot.maxCells)
+  const prev = getGeometry()
+  if (next.rows === prev.rows && next.cols === prev.cols) return
+  geometrySnapshot = next
+  // Persist immediately: the picker works with the split view closed, where the
+  // panel's own persistence effect is not mounted.
+  const saved = loadLayout() ?? {}
+  saveLayout(next.rows, next.cols, saved.cells ?? [], saved.inSplit ?? false)
+  for (const listener of geometryListeners) listener()
+}
+
+/** Refit the shared geometry after the cap moves. */
+function refitGeometry() {
+  const prev = getGeometry()
+  const fitted = fitGeometry(prev.rows, prev.cols, limitsSnapshot.maxCells)
+  if (fitted.rows === prev.rows && fitted.cols === prev.cols) return
+  geometrySnapshot = fitted
+  for (const listener of geometryListeners) listener()
+}
+
 function updateLimits(patch) {
   limitsSnapshot = normalizeLimits({ ...limitsSnapshot, ...patch })
   try {
     localStorage.setItem(LIMITS_KEY, JSON.stringify(limitsSnapshot))
   } catch {}
+  refitGeometry()
   for (const listener of limitListeners) listener()
 }
 
@@ -768,55 +815,159 @@ function TurnRail(props) {
   )
 }
 
-// ---------- toggle button ----------
-// variant "sidebar": compact icon button for the sidebar footer row.
-// variant "inline": labelled button for the hero options row.
-function SplitButton(props) {
-  const variant = props?.variant ?? 'inline'
-  // Copied from ui-sidebar SidebarRoot.module.css `.iconButton`.
-  if (variant === 'sidebar') {
-    const [hover, setHover] = useState(false)
-    return h('button', {
+// ---------- sidebar split control ----------
+// One control for the whole split feature: left click toggles the view, right
+// click opens the grid picker, hover explains both. Its row sits above the
+// account row when the sidebar is expanded (dropped onto that row's trailing
+// edge) and above the avatar when the sidebar is a rail.
+
+const splitControlStyles = {
+  button: (hover) => ({
+    position: 'relative',
+    flex: 'none',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    border: 'none',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    padding: 0,
+    background: hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))' : 'transparent',
+    cursor: 'pointer',
+    color: hover ? 'var(--dsw-alias-label-primary, inherit)' : 'var(--dsw-alias-label-secondary, #888)',
+    fontSize: 15,
+    lineHeight: 1,
+    // Placement is stylesheet-driven (see installSplitStyles): it depends on the
+    // shell's own collapsed attribute, which the sidebar republishes whenever it
+    // remounts its subtree.
+  }),
+  tip: (top, left) => ({
+    position: 'fixed',
+    top,
+    left,
+    transform: 'translateX(-50%)',
+    padding: '6px 10px',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-1, #242424)',
+    boxShadow: 'var(--dsw-elevation-panel, 0 4px 16px rgba(0,0,0,.35))',
+    color: 'var(--dsw-alias-label-primary, #eee)',
+    fontSize: 12,
+    lineHeight: '16px',
+    whiteSpace: 'nowrap',
+    pointerEvents: 'none',
+    zIndex: 30,
+  }),
+  tipHint: {
+    display: 'block',
+    marginTop: 2,
+    color: 'var(--dsw-alias-label-caption, #888)',
+    fontSize: 11,
+  },
+}
+
+const SIDEBAR_CONTROL_HINT = '左键切换分屏，右键选网格'
+
+const SPLIT_STYLE_ID = 'dsws-split-styles'
+
+/**
+ * Install the stylesheet that places the sidebar control.
+ *
+ * Placement depends on the shell's own `data-sidebar-collapsed` attribute, so
+ * it is expressed in CSS: the sidebar remounts its subtree when it collapses,
+ * which defeats a width observer or a mutation listener bound to one node.
+ * @returns disposer removing the stylesheet.
+ */
+function installSplitStyles() {
+  const existing = document.getElementById(SPLIT_STYLE_ID)
+  if (existing !== null) return () => {}
+  const style = document.createElement('style')
+  style.id = SPLIT_STYLE_ID
+  style.textContent = [
+    // Expanded: the footer slot owns a row above the account row, so push to
+    // that row's trailing edge and drop one row to sit on the account row.
+    // The transform only moves paint, so a stack level keeps the later-painted
+    // account row from covering the control.
+    '.dsws-icon-btn{margin-left:auto;margin-right:4px;transform:translateY(40px);z-index:1}',
+    // Rail: the footer row centres its children and the account row is a later
+    // sibling, so dropping the offsets puts the control above the avatar.
+    '[data-sidebar-collapsed="true"] .dsws-icon-btn{margin-left:0;margin-right:0;transform:none;z-index:auto}',
+  ].join('\n')
+  document.head.append(style)
+  return () => style.remove()
+}
+
+/**
+ * Sidebar footer control: toggle, grid picker, and its hover hint.
+ * @param props - `maxCells` and `confirmCells` from the live limits snapshot.
+ */
+function SidebarSplitControl(props) {
+  const { maxCells, confirmCells } = props
+  const geometry = useSyncExternalStore(subscribeGeometry, getGeometry)
+  const [hover, setHover] = useState(false)
+  const [tip, setTip] = useState(null)
+  const [pickOpen, setPickOpen] = useState(false)
+  const buttonRef = useRef(null)
+
+  const showTip = () => {
+    setHover(true)
+    const el = buttonRef.current
+    if (el === null) return
+    const rect = el.getBoundingClientRect()
+    setTip({ top: Math.max(4, rect.top - 52), left: rect.left + rect.width / 2 })
+  }
+  const hideTip = () => {
+    setHover(false)
+    setTip(null)
+  }
+
+  return h(React.Fragment, null,
+    h('button', {
+      ref: buttonRef,
+      type: 'button',
       className: 'dsws-icon-btn',
-      title: '切换分屏视图',
-      'aria-label': '切换分屏视图',
-      style: {
-        position: 'relative',
-        flex: 'none',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 28,
-        height: 28,
-        border: 'none',
-        borderRadius: 'var(--dsw-radius-sm, 6px)',
-        padding: 0,
-        background: hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))' : 'transparent',
-        cursor: 'pointer',
-        color: hover ? 'var(--dsw-alias-label-primary, inherit)' : 'var(--dsw-alias-label-secondary, #888)',
-        fontSize: 15,
-        lineHeight: 1,
-        // The footer action slot owns a 28px row above the account row; push
-        // this control to that row's trailing edge and drop it one row down so
-        // it reads as part of the account row itself.
-        marginLeft: 'auto',
-        marginRight: 4,
-        transform: 'translateY(40px)',
-        // A transform moves paint, not layout: the account row (a later,
-        // positioned sibling subtree) would otherwise paint over this control
-        // and swallow every click. A positive stack level keeps the button
-        // above that row while leaving the row's own layout untouched.
-        zIndex: 1,
-      },
-      onMouseEnter: () => setHover(true),
-      onMouseLeave: () => setHover(false),
+      'aria-label': SIDEBAR_CONTROL_HINT,
+      'aria-haspopup': 'dialog',
+      'aria-expanded': pickOpen,
+      style: splitControlStyles.button(hover),
+      onMouseEnter: showTip,
+      onMouseLeave: hideTip,
+      onFocus: showTip,
+      onBlur: hideTip,
       onClick: () => {
         try {
           window.__dswsToggle?.()
         } catch (_e) {}
       },
-    }, '⊞')
-  }
+      onContextMenu: (e) => {
+        // Right click opens the picker; the browser menu would hide it.
+        e.preventDefault()
+        e.stopPropagation()
+        setPickOpen((open) => !open)
+      },
+    }, '⊞'),
+    hover && tip !== null
+      ? h('div', { role: 'tooltip', style: splitControlStyles.tip(tip.top, tip.left) },
+          `网格 ${geometry.rows} × ${geometry.cols}`,
+          h('span', { style: splitControlStyles.tipHint }, SIDEBAR_CONTROL_HINT),
+        )
+      : null,
+    h(GridPickerPanel, {
+      rows: geometry.rows,
+      cols: geometry.cols,
+      maxCells,
+      confirmCells,
+      onApply: updateGeometry,
+      open: pickOpen,
+      onOpenChange: setPickOpen,
+      anchorRef: buttonRef,
+    }),
+  )
+}
+
+// ---------- toggle button ----------
+// Labelled button for the hero options row.
+function SplitButton() {
   return h('button', {
     title: '切换分屏视图',
     style: {
@@ -1051,7 +1202,7 @@ function ToolRow(props) {
           resultText ? h(React.Fragment, null,
             h('div', { style: toolStyles.label }, isError ? '错误输出' : '输出'),
             h('pre', { style: toolStyles.pre }, resultText),
-          ) : h('div', { style: toolStyles.label }, '（暂无输出）'),
+          ) : h('div', { style: toolStyles.label }, '无输出'),
         )
       : null,
   )
@@ -1144,7 +1295,7 @@ function CellView(props) {
       try {
         controller.abort()
       } catch {}
-      setError(`打开会话超时（${OPEN_TIMEOUT_MS / 1000}s）`)
+      setError(`打开会话超时（${OPEN_TIMEOUT_MS / 1000} 秒）`)
     }, OPEN_TIMEOUT_MS)
     const finish = () => clearTimeout(openTimerRef.current)
     // Serialize the history open: concurrent opens leave some unsettled.
@@ -1261,7 +1412,7 @@ function CellView(props) {
   }
   if (error) {
     return h('div', { style: { padding: 12, flex: 1, color: 'var(--dsw-alias-label-secondary, #888)' } },
-      h('div', { style: { marginBottom: 8 } }, `加载失败: ${error}`),
+      h('div', { style: { marginBottom: 8 } }, `加载失败：${error}`),
       h('button', {
         style: { ...composerBtnStyle, alignSelf: 'flex-start' },
         onClick: () => {
@@ -1273,7 +1424,7 @@ function CellView(props) {
     )
   }
   if (!cataloged) {
-    return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '等待会话目录…')
+    return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '等待会话列表…')
   }
   if (!binding) {
     return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '加载中…')
@@ -1413,6 +1564,8 @@ function CellView(props) {
 
 const pickerStyles = {
   wrap: { position: 'relative', display: 'inline-flex' },
+  // Controlled by an outside button: this wrapper only carries the fixed panel.
+  wrapControlled: { display: 'contents' },
   trigger: (open) => ({
     display: 'inline-flex',
     alignItems: 'center',
@@ -1731,18 +1884,17 @@ function pickerHint(blocked, confirm, maxCells, confirmCells) {
 }
 
 /**
- * Toolbar trigger plus its popover. Enforces the two-stage limit: silent up to
+ * Grid chooser popover. The sidebar control owns the affordance and the open
+ * state; this renders the panel and enforces the two-stage limit: silent up to
  * `confirmCells`, confirm up to `maxCells`, Settings unlock beyond.
  */
-function GridPicker(props) {
-  const { rows, cols, maxCells, confirmCells, onApply } = props
-  const [open, setOpen] = useState(false)
+function GridPickerPanel(props) {
+  const { rows, cols, maxCells, confirmCells, onApply, open, onOpenChange, anchorRef } = props
   const [preview, setPreview] = useState(null)
   const [dialog, setDialog] = useState(null)
   const [anchor, setAnchor] = useState(null)
   const [focusTick, setFocusTick] = useState(0)
-  const wrapRef = useRef(null)
-  const triggerRef = useRef(null)
+  const panelRef = useRef(null)
   const shown = preview ?? { rows, cols }
   const count = shown.rows * shown.cols
   const blocked = count > maxCells
@@ -1752,8 +1904,8 @@ function GridPicker(props) {
   // Fixed positioning escapes the main column's overflow:hidden, which would
   // otherwise clip the lower rows (the 7–10 range) in a short window.
   const place = useCallback(() => {
-    const el = triggerRef.current
-    if (el === null) return
+    const el = anchorRef.current
+    if (el === null || el === undefined) return
     const rect = el.getBoundingClientRect()
     const panelWidth = 240
     const panelHeight = 320
@@ -1762,13 +1914,13 @@ function GridPicker(props) {
       : Math.max(8, window.innerHeight - panelHeight - 8)
     const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8))
     setAnchor({ top, left })
-  }, [])
+  }, [anchorRef])
 
   const close = useCallback((refocus) => {
-    setOpen(false)
+    onOpenChange(false)
     setPreview(null)
-    if (refocus) triggerRef.current?.focus()
-  }, [])
+    if (refocus) anchorRef.current?.focus()
+  }, [anchorRef, onOpenChange])
 
   const closeDialog = useCallback(() => {
     setDialog(null)
@@ -1776,10 +1928,17 @@ function GridPicker(props) {
     setFocusTick((value) => value + 1)
   }, [])
 
+  // The outside trigger only flips `open`; anchoring happens on that edge.
+  useEffect(() => {
+    if (open) place()
+  }, [open, place])
+
   useEffect(() => {
     if (!open) return undefined
     const onPointerDown = (event) => {
-      if (wrapRef.current?.contains(event.target)) return
+      // The outside trigger toggles on click; closing here first would reopen it.
+      if (anchorRef.current?.contains(event.target)) return
+      if (panelRef.current?.contains(event.target)) return
       close(false)
     }
     const onKey = (event) => {
@@ -1796,7 +1955,7 @@ function GridPicker(props) {
       window.removeEventListener('resize', onReflow)
       window.removeEventListener('scroll', onReflow, true)
     }
-  }, [open, dialog, close, place])
+  }, [open, dialog, close, place, anchorRef])
 
   const commit = useCallback((nextRows, nextCols) => {
     onApply(nextRows, nextCols)
@@ -1829,25 +1988,9 @@ function GridPicker(props) {
     },
   })
 
-  return h('div', { ref: wrapRef, style: pickerStyles.wrap },
-    h('button', {
-      ref: triggerRef,
-      type: 'button',
-      style: pickerStyles.trigger(open),
-      'aria-haspopup': 'dialog',
-      'aria-expanded': open,
-      title: `当前 ${rows} 行 × ${cols} 列，点击选择网格大小`,
-      onClick: () => {
-        if (!open) place()
-        setOpen((value) => !value)
-        setPreview(null)
-        setDialog(null)
-      },
-    },
-      `网格 ${rows}×${cols}`,
-      h('span', { style: pickerStyles.caret }, '▾'),
-    ),
+  return h(React.Fragment, null,
     open ? h('div', {
+      ref: panelRef,
       role: 'dialog',
       'aria-label': '选择网格大小',
       style: {
@@ -1993,7 +2136,7 @@ function CellTitle(props) {
         })
       : h('button', {
           type: 'button',
-          title: saving ? '正在保存…' : '点击切换会话',
+          title: saving ? '正在保存' : '切换会话',
           style: { ...titleStyles.text, opacity: saving ? 0.5 : 1 },
           onClick: openPicker,
         }, title),
@@ -2073,7 +2216,7 @@ function CellPicker(props) {
       h('option', { value: '' }, props.placeholder),
       props.options.map((s) =>
         h('option', { key: s.id, value: s.id },
-          (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? ' ●' : '')),
+          (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? '（运行中）' : '')),
       ),
     ),
   )
@@ -2091,14 +2234,9 @@ function SplitMain(props) {
   const wsSnapshot = useCallback(() => workspaces.list.getSnapshot(), [workspaces])
   const wsState = useSyncExternalStore(wsSubscribe, wsSnapshot)
 
-  const limits = useSyncExternalStore(subscribeLimits, getLimits)
-  const maxCells = limits.maxCells
-  const confirmCells = limits.confirmOverCells
   const saved = useRef(loadLayout()).current
-  const [geometry, setGeometry] = useState(() => {
-    const start = savedGeometry(saved)
-    return fitGeometry(start.rows, start.cols, maxCells)
-  })
+  // Shared with the sidebar control, which owns the picker for this panel.
+  const geometry = useSyncExternalStore(subscribeGeometry, getGeometry)
   const { rows, cols } = geometry
   const [activeCell, setActiveCell] = useState(0)
   const [dragOver, setDragOver] = useState(-1)
@@ -2143,20 +2281,7 @@ function SplitMain(props) {
     })
   }, [nonBlank.length])
 
-  // Lowering the cap in Settings shrinks an oversized grid to fit.
-  useEffect(() => {
-    setGeometry((prev) => {
-      const fitted = fitGeometry(prev.rows, prev.cols, maxCells)
-      if (fitted.rows === prev.rows && fitted.cols === prev.cols) return prev
-      return fitted
-    })
-  }, [maxCells])
-
   const total = rows * cols
-
-  const applyGeometry = useCallback((nextRows, nextCols) => {
-    setGeometry(fitGeometry(nextRows, nextCols, maxCells))
-  }, [maxCells])
 
   const setCell = (idx, cell) => {
     setCells((prev) => {
@@ -2253,18 +2378,10 @@ function SplitMain(props) {
     fontWeight: 500,
     color: 'var(--dsw-alias-label-primary, inherit)',
   }
-  const toolbarStyle = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    minHeight: 38,
-    padding: '6px 20px',
-    flexShrink: 0,
-    borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
-    color: 'var(--dsw-alias-label-primary, inherit)',
-  }
   // minmax(0, 1fr) on both axes: a bare 1fr resolves its min to auto, so a
   // long transcript would grow its row past the viewport instead of scrolling.
+  // The grid IS the panel: no frame chrome, because the split toggle, the grid
+  // picker and the way out all live on the sidebar control that opened it.
   const gridStyle = {
     display: 'grid',
     gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
@@ -2274,45 +2391,12 @@ function SplitMain(props) {
     borderRight: '0.5px solid var(--dsw-alias-border-l3, #444)',
     borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
     boxSizing: 'border-box',
-    flex: 1,
+    height: '100%',
     minHeight: 0,
     overflow: 'hidden',
   }
-  const btnStyle = {
-    padding: '2px 8px',
-    fontSize: 12,
-    lineHeight: '18px',
-    cursor: 'pointer',
-    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
-    borderRadius: 'var(--dsw-radius-sm, 6px)',
-    background: 'transparent',
-    color: 'var(--dsw-alias-label-primary, inherit)',
-  }
 
-  return h('div', { style: { display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' } },
-    h('div', { style: toolbarStyle },
-      h('span', { style: { fontWeight: 600, fontSize: 15 } }, '分屏视图'),
-      h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
-        `${nonBlank.length} 个会话 · ${total}/${maxCells} 格`),
-      h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' } },
-        h(GridPicker, {
-          rows,
-          cols,
-          maxCells,
-          confirmCells,
-          onApply: applyGeometry,
-        }),
-        h('button', {
-          style: btnStyle,
-          onClick: () => {
-            try {
-              window.__dswsToggle?.()
-            } catch (_e) {}
-          },
-        }, '退出分屏'),
-      ),
-    ),
-    h('div', { style: gridStyle },
+  return h('div', { style: gridStyle },
       Array.from({ length: total }, (_, i) => {
         const cell = cells[i]
         const sid = cell?.id ?? null
@@ -2372,7 +2456,7 @@ function SplitMain(props) {
                   title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
                   running: sess.running,
                 })
-              : h('span', { style: { flex: '1 1 auto', color: 'var(--dsw-alias-label-caption, #999)', whiteSpace: 'nowrap' } }, `格 ${i + 1}`),
+              : h('span', { style: { flex: '1 1 auto', color: 'var(--dsw-alias-label-caption, #999)', whiteSpace: 'nowrap' } }, `第 ${i + 1} 格`),
             h(CellPicker, {
               value: sid ?? '',
               placeholder: wsTitle === null ? '选择会话…' : `${wsTitle}（选会话）`,
@@ -2390,7 +2474,6 @@ function SplitMain(props) {
             : h(CellView, { sessions, sessionId: sid }),
         )
       }),
-    ),
   )
 }
 
@@ -2499,13 +2582,21 @@ export function apply(ctx) {
     } catch (_e) {}
   }, 'workspace-split: cleanup')
 
-  // Primary entry: sidebar footer row, on the account row's trailing edge.
+  // Placement of the sidebar control, keyed on the shell's collapsed attribute.
+  ctx.effect(() => installSplitStyles(), 'workspace-split: styles')
+
+  // The one control for the whole feature: left click toggles the view, right
+  // click opens the grid picker, hover says so.
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
     id: 'workspace-split-sidebar',
     order: 5,
-  }, function SidebarSplitButton() {
-    return h(SplitButton, { variant: 'sidebar' })
+  }, function SidebarEntry() {
+    const limits = useSyncExternalStore(subscribeLimits, getLimits)
+    return h(SidebarSplitControl, {
+      maxCells: limits.maxCells,
+      confirmCells: limits.confirmOverCells,
+    })
   }))
 
   ctx.slots.inject('conversation.hero.options', () => ctx.slots.register({

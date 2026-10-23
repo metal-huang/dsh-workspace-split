@@ -7455,12 +7455,42 @@ function subscribeLimits(listener) {
 function getLimits() {
   return limitsSnapshot;
 }
+var geometrySnapshot = null;
+var geometryListeners = /* @__PURE__ */ new Set();
+function getGeometry() {
+  if (geometrySnapshot === null) {
+    const start = savedGeometry(loadLayout());
+    geometrySnapshot = fitGeometry(start.rows, start.cols, limitsSnapshot.maxCells);
+  }
+  return geometrySnapshot;
+}
+function subscribeGeometry(listener) {
+  geometryListeners.add(listener);
+  return () => geometryListeners.delete(listener);
+}
+function updateGeometry(nextRows, nextCols) {
+  const next = fitGeometry(nextRows, nextCols, limitsSnapshot.maxCells);
+  const prev = getGeometry();
+  if (next.rows === prev.rows && next.cols === prev.cols) return;
+  geometrySnapshot = next;
+  const saved = loadLayout() ?? {};
+  saveLayout(next.rows, next.cols, saved.cells ?? [], saved.inSplit ?? false);
+  for (const listener of geometryListeners) listener();
+}
+function refitGeometry() {
+  const prev = getGeometry();
+  const fitted = fitGeometry(prev.rows, prev.cols, limitsSnapshot.maxCells);
+  if (fitted.rows === prev.rows && fitted.cols === prev.cols) return;
+  geometrySnapshot = fitted;
+  for (const listener of geometryListeners) listener();
+}
 function updateLimits(patch) {
   limitsSnapshot = normalizeLimits({ ...limitsSnapshot, ...patch });
   try {
     localStorage.setItem(LIMITS_KEY, JSON.stringify(limitsSnapshot));
   } catch {
   }
+  refitGeometry();
   for (const listener of limitListeners) listener();
 }
 function normalizeCell(value) {
@@ -8007,52 +8037,135 @@ function TurnRail(props) {
     )
   );
 }
-function SplitButton(props) {
-  const variant = props?.variant ?? "inline";
-  if (variant === "sidebar") {
-    const [hover, setHover] = useState(false);
-    return h("button", {
+var splitControlStyles = {
+  button: (hover) => ({
+    position: "relative",
+    flex: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 28,
+    height: 28,
+    border: "none",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    padding: 0,
+    background: hover ? "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))" : "transparent",
+    cursor: "pointer",
+    color: hover ? "var(--dsw-alias-label-primary, inherit)" : "var(--dsw-alias-label-secondary, #888)",
+    fontSize: 15,
+    lineHeight: 1
+    // Placement is stylesheet-driven (see installSplitStyles): it depends on the
+    // shell's own collapsed attribute, which the sidebar republishes whenever it
+    // remounts its subtree.
+  }),
+  tip: (top, left) => ({
+    position: "fixed",
+    top,
+    left,
+    transform: "translateX(-50%)",
+    padding: "6px 10px",
+    borderRadius: "var(--dsw-radius-md, 8px)",
+    background: "var(--dsw-alias-bg-layer-1, #242424)",
+    boxShadow: "var(--dsw-elevation-panel, 0 4px 16px rgba(0,0,0,.35))",
+    color: "var(--dsw-alias-label-primary, #eee)",
+    fontSize: 12,
+    lineHeight: "16px",
+    whiteSpace: "nowrap",
+    pointerEvents: "none",
+    zIndex: 30
+  }),
+  tipHint: {
+    display: "block",
+    marginTop: 2,
+    color: "var(--dsw-alias-label-caption, #888)",
+    fontSize: 11
+  }
+};
+var SIDEBAR_CONTROL_HINT = "\u5DE6\u952E\u5207\u6362\u5206\u5C4F\uFF0C\u53F3\u952E\u9009\u7F51\u683C";
+var SPLIT_STYLE_ID = "dsws-split-styles";
+function installSplitStyles() {
+  const existing = document.getElementById(SPLIT_STYLE_ID);
+  if (existing !== null) return () => {
+  };
+  const style = document.createElement("style");
+  style.id = SPLIT_STYLE_ID;
+  style.textContent = [
+    // Expanded: the footer slot owns a row above the account row, so push to
+    // that row's trailing edge and drop one row to sit on the account row.
+    // The transform only moves paint, so a stack level keeps the later-painted
+    // account row from covering the control.
+    ".dsws-icon-btn{margin-left:auto;margin-right:4px;transform:translateY(40px);z-index:1}",
+    // Rail: the footer row centres its children and the account row is a later
+    // sibling, so dropping the offsets puts the control above the avatar.
+    '[data-sidebar-collapsed="true"] .dsws-icon-btn{margin-left:0;margin-right:0;transform:none;z-index:auto}'
+  ].join("\n");
+  document.head.append(style);
+  return () => style.remove();
+}
+function SidebarSplitControl(props) {
+  const { maxCells, confirmCells } = props;
+  const geometry = useSyncExternalStore(subscribeGeometry, getGeometry);
+  const [hover, setHover] = useState(false);
+  const [tip, setTip] = useState(null);
+  const [pickOpen, setPickOpen] = useState(false);
+  const buttonRef = useRef(null);
+  const showTip = () => {
+    setHover(true);
+    const el = buttonRef.current;
+    if (el === null) return;
+    const rect = el.getBoundingClientRect();
+    setTip({ top: Math.max(4, rect.top - 52), left: rect.left + rect.width / 2 });
+  };
+  const hideTip = () => {
+    setHover(false);
+    setTip(null);
+  };
+  return h(
+    import_react.default.Fragment,
+    null,
+    h("button", {
+      ref: buttonRef,
+      type: "button",
       className: "dsws-icon-btn",
-      title: "\u5207\u6362\u5206\u5C4F\u89C6\u56FE",
-      "aria-label": "\u5207\u6362\u5206\u5C4F\u89C6\u56FE",
-      style: {
-        position: "relative",
-        flex: "none",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: 28,
-        height: 28,
-        border: "none",
-        borderRadius: "var(--dsw-radius-sm, 6px)",
-        padding: 0,
-        background: hover ? "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))" : "transparent",
-        cursor: "pointer",
-        color: hover ? "var(--dsw-alias-label-primary, inherit)" : "var(--dsw-alias-label-secondary, #888)",
-        fontSize: 15,
-        lineHeight: 1,
-        // The footer action slot owns a 28px row above the account row; push
-        // this control to that row's trailing edge and drop it one row down so
-        // it reads as part of the account row itself.
-        marginLeft: "auto",
-        marginRight: 4,
-        transform: "translateY(40px)",
-        // A transform moves paint, not layout: the account row (a later,
-        // positioned sibling subtree) would otherwise paint over this control
-        // and swallow every click. A positive stack level keeps the button
-        // above that row while leaving the row's own layout untouched.
-        zIndex: 1
-      },
-      onMouseEnter: () => setHover(true),
-      onMouseLeave: () => setHover(false),
+      "aria-label": SIDEBAR_CONTROL_HINT,
+      "aria-haspopup": "dialog",
+      "aria-expanded": pickOpen,
+      style: splitControlStyles.button(hover),
+      onMouseEnter: showTip,
+      onMouseLeave: hideTip,
+      onFocus: showTip,
+      onBlur: hideTip,
       onClick: () => {
         try {
           window.__dswsToggle?.();
         } catch (_e) {
         }
+      },
+      onContextMenu: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setPickOpen((open) => !open);
       }
-    }, "\u229E");
-  }
+    }, "\u229E"),
+    hover && tip !== null ? h(
+      "div",
+      { role: "tooltip", style: splitControlStyles.tip(tip.top, tip.left) },
+      `\u7F51\u683C ${geometry.rows} \xD7 ${geometry.cols}`,
+      h("span", { style: splitControlStyles.tipHint }, SIDEBAR_CONTROL_HINT)
+    ) : null,
+    h(GridPickerPanel, {
+      rows: geometry.rows,
+      cols: geometry.cols,
+      maxCells,
+      confirmCells,
+      onApply: updateGeometry,
+      open: pickOpen,
+      onOpenChange: setPickOpen,
+      anchorRef: buttonRef
+    })
+  );
+}
+function SplitButton() {
   return h("button", {
     title: "\u5207\u6362\u5206\u5C4F\u89C6\u56FE",
     style: {
@@ -8272,7 +8385,7 @@ function ToolRow(props) {
         null,
         h("div", { style: toolStyles.label }, isError ? "\u9519\u8BEF\u8F93\u51FA" : "\u8F93\u51FA"),
         h("pre", { style: toolStyles.pre }, resultText)
-      ) : h("div", { style: toolStyles.label }, "\uFF08\u6682\u65E0\u8F93\u51FA\uFF09")
+      ) : h("div", { style: toolStyles.label }, "\u65E0\u8F93\u51FA")
     ) : null
   );
 }
@@ -8356,7 +8469,7 @@ function CellView(props) {
         controller.abort();
       } catch {
       }
-      setError(`\u6253\u5F00\u4F1A\u8BDD\u8D85\u65F6\uFF08${OPEN_TIMEOUT_MS / 1e3}s\uFF09`);
+      setError(`\u6253\u5F00\u4F1A\u8BDD\u8D85\u65F6\uFF08${OPEN_TIMEOUT_MS / 1e3} \u79D2\uFF09`);
     }, OPEN_TIMEOUT_MS);
     const finish = () => clearTimeout(openTimerRef.current);
     enqueueOpen(() => {
@@ -8464,7 +8577,7 @@ function CellView(props) {
     return h(
       "div",
       { style: { padding: 12, flex: 1, color: "var(--dsw-alias-label-secondary, #888)" } },
-      h("div", { style: { marginBottom: 8 } }, `\u52A0\u8F7D\u5931\u8D25: ${error}`),
+      h("div", { style: { marginBottom: 8 } }, `\u52A0\u8F7D\u5931\u8D25\uFF1A${error}`),
       h("button", {
         style: { ...composerBtnStyle, alignSelf: "flex-start" },
         onClick: () => {
@@ -8476,7 +8589,7 @@ function CellView(props) {
     );
   }
   if (!cataloged) {
-    return h("div", { style: { padding: 12, color: "var(--dsw-alias-label-secondary, #888)", flex: 1 } }, "\u7B49\u5F85\u4F1A\u8BDD\u76EE\u5F55\u2026");
+    return h("div", { style: { padding: 12, color: "var(--dsw-alias-label-secondary, #888)", flex: 1 } }, "\u7B49\u5F85\u4F1A\u8BDD\u5217\u8868\u2026");
   }
   if (!binding) {
     return h("div", { style: { padding: 12, color: "var(--dsw-alias-label-secondary, #888)", flex: 1 } }, "\u52A0\u8F7D\u4E2D\u2026");
@@ -8608,6 +8721,8 @@ function CellView(props) {
 }
 var pickerStyles = {
   wrap: { position: "relative", display: "inline-flex" },
+  // Controlled by an outside button: this wrapper only carries the fixed panel.
+  wrapControlled: { display: "contents" },
   trigger: (open) => ({
     display: "inline-flex",
     alignItems: "center",
@@ -8908,43 +9023,45 @@ function pickerHint(blocked, confirm, maxCells, confirmCells) {
   if (confirm) return { tone: "warn", text: `\u8D85\u8FC7 ${confirmCells} \u683C\uFF0C\u786E\u8BA4\u540E\u7EE7\u7EED` };
   return { tone: "muted", text: `\u5EFA\u8BAE\u4E0D\u8D85\u8FC7 ${confirmCells} \u683C` };
 }
-function GridPicker(props) {
-  const { rows, cols, maxCells, confirmCells, onApply } = props;
-  const [open, setOpen] = useState(false);
+function GridPickerPanel(props) {
+  const { rows, cols, maxCells, confirmCells, onApply, open, onOpenChange, anchorRef } = props;
   const [preview, setPreview] = useState(null);
   const [dialog, setDialog] = useState(null);
   const [anchor, setAnchor] = useState(null);
   const [focusTick, setFocusTick] = useState(0);
-  const wrapRef = useRef(null);
-  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
   const shown = preview ?? { rows, cols };
   const count = shown.rows * shown.cols;
   const blocked = count > maxCells;
   const confirm = !blocked && count > confirmCells;
   const hint = pickerHint(blocked, confirm, maxCells, confirmCells);
   const place = useCallback(() => {
-    const el = triggerRef.current;
-    if (el === null) return;
+    const el = anchorRef.current;
+    if (el === null || el === void 0) return;
     const rect = el.getBoundingClientRect();
     const panelWidth = 240;
     const panelHeight = 320;
     const top = rect.bottom + 8 + panelHeight <= window.innerHeight ? rect.bottom + 8 : Math.max(8, window.innerHeight - panelHeight - 8);
     const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
     setAnchor({ top, left });
-  }, []);
+  }, [anchorRef]);
   const close = useCallback((refocus) => {
-    setOpen(false);
+    onOpenChange(false);
     setPreview(null);
-    if (refocus) triggerRef.current?.focus();
-  }, []);
+    if (refocus) anchorRef.current?.focus();
+  }, [anchorRef, onOpenChange]);
   const closeDialog = useCallback(() => {
     setDialog(null);
     setFocusTick((value) => value + 1);
   }, []);
   useEffect(() => {
+    if (open) place();
+  }, [open, place]);
+  useEffect(() => {
     if (!open) return void 0;
     const onPointerDown = (event) => {
-      if (wrapRef.current?.contains(event.target)) return;
+      if (anchorRef.current?.contains(event.target)) return;
+      if (panelRef.current?.contains(event.target)) return;
       close(false);
     };
     const onKey = (event) => {
@@ -8961,7 +9078,7 @@ function GridPicker(props) {
       window.removeEventListener("resize", onReflow);
       window.removeEventListener("scroll", onReflow, true);
     };
-  }, [open, dialog, close, place]);
+  }, [open, dialog, close, place, anchorRef]);
   const commit = useCallback((nextRows, nextCols) => {
     onApply(nextRows, nextCols);
     setDialog(null);
@@ -8990,30 +9107,12 @@ function GridPicker(props) {
     }
   });
   return h(
-    "div",
-    { ref: wrapRef, style: pickerStyles.wrap },
-    h(
-      "button",
-      {
-        ref: triggerRef,
-        type: "button",
-        style: pickerStyles.trigger(open),
-        "aria-haspopup": "dialog",
-        "aria-expanded": open,
-        title: `\u5F53\u524D ${rows} \u884C \xD7 ${cols} \u5217\uFF0C\u70B9\u51FB\u9009\u62E9\u7F51\u683C\u5927\u5C0F`,
-        onClick: () => {
-          if (!open) place();
-          setOpen((value) => !value);
-          setPreview(null);
-          setDialog(null);
-        }
-      },
-      `\u7F51\u683C ${rows}\xD7${cols}`,
-      h("span", { style: pickerStyles.caret }, "\u25BE")
-    ),
+    import_react.default.Fragment,
+    null,
     open ? h(
       "div",
       {
+        ref: panelRef,
         role: "dialog",
         "aria-label": "\u9009\u62E9\u7F51\u683C\u5927\u5C0F",
         style: {
@@ -9147,7 +9246,7 @@ function CellTitle(props) {
       style: titleStyles.input
     }) : h("button", {
       type: "button",
-      title: saving ? "\u6B63\u5728\u4FDD\u5B58\u2026" : "\u70B9\u51FB\u5207\u6362\u4F1A\u8BDD",
+      title: saving ? "\u6B63\u5728\u4FDD\u5B58" : "\u5207\u6362\u4F1A\u8BDD",
       style: { ...titleStyles.text, opacity: saving ? 0.5 : 1 },
       onClick: openPicker
     }, title),
@@ -9220,7 +9319,7 @@ function CellPicker(props) {
         (s) => h(
           "option",
           { key: s.id, value: s.id },
-          (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? " \u25CF" : "")
+          (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? "\uFF08\u8FD0\u884C\u4E2D\uFF09" : "")
         )
       )
     )
@@ -9235,14 +9334,8 @@ function SplitMain(props) {
   const wsSubscribe = useCallback((cb) => workspaces.list.subscribe(cb), [workspaces]);
   const wsSnapshot = useCallback(() => workspaces.list.getSnapshot(), [workspaces]);
   const wsState = useSyncExternalStore(wsSubscribe, wsSnapshot);
-  const limits = useSyncExternalStore(subscribeLimits, getLimits);
-  const maxCells = limits.maxCells;
-  const confirmCells = limits.confirmOverCells;
   const saved = useRef(loadLayout()).current;
-  const [geometry, setGeometry] = useState(() => {
-    const start = savedGeometry(saved);
-    return fitGeometry(start.rows, start.cols, maxCells);
-  });
+  const geometry = useSyncExternalStore(subscribeGeometry, getGeometry);
   const { rows, cols } = geometry;
   const [activeCell, setActiveCell] = useState(0);
   const [dragOver, setDragOver] = useState(-1);
@@ -9283,17 +9376,7 @@ function SplitMain(props) {
       }
     });
   }, [nonBlank.length]);
-  useEffect(() => {
-    setGeometry((prev) => {
-      const fitted = fitGeometry(prev.rows, prev.cols, maxCells);
-      if (fitted.rows === prev.rows && fitted.cols === prev.cols) return prev;
-      return fitted;
-    });
-  }, [maxCells]);
   const total = rows * cols;
-  const applyGeometry = useCallback((nextRows, nextCols) => {
-    setGeometry(fitGeometry(nextRows, nextCols, maxCells));
-  }, [maxCells]);
   const setCell = (idx, cell) => {
     setCells((prev) => {
       const next = [...prev];
@@ -9369,16 +9452,6 @@ function SplitMain(props) {
     fontWeight: 500,
     color: "var(--dsw-alias-label-primary, inherit)"
   };
-  const toolbarStyle = {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    minHeight: 38,
-    padding: "6px 20px",
-    flexShrink: 0,
-    borderBottom: "0.5px solid var(--dsw-alias-border-l3, #444)",
-    color: "var(--dsw-alias-label-primary, inherit)"
-  };
   const gridStyle = {
     display: "grid",
     gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
@@ -9388,130 +9461,86 @@ function SplitMain(props) {
     borderRight: "0.5px solid var(--dsw-alias-border-l3, #444)",
     borderBottom: "0.5px solid var(--dsw-alias-border-l3, #444)",
     boxSizing: "border-box",
-    flex: 1,
+    height: "100%",
     minHeight: 0,
     overflow: "hidden"
   };
-  const btnStyle = {
-    padding: "2px 8px",
-    fontSize: 12,
-    lineHeight: "18px",
-    cursor: "pointer",
-    border: "0.5px solid var(--dsw-alias-border-l2, #555)",
-    borderRadius: "var(--dsw-radius-sm, 6px)",
-    background: "transparent",
-    color: "var(--dsw-alias-label-primary, inherit)"
-  };
   return h(
     "div",
-    { style: { display: "flex", flexDirection: "column", height: "100%", boxSizing: "border-box" } },
-    h(
-      "div",
-      { style: toolbarStyle },
-      h("span", { style: { fontWeight: 600, fontSize: 15 } }, "\u5206\u5C4F\u89C6\u56FE"),
-      h(
-        "span",
-        { style: { fontSize: 12, color: "var(--dsw-alias-label-secondary, #888)" } },
-        `${nonBlank.length} \u4E2A\u4F1A\u8BDD \xB7 ${total}/${maxCells} \u683C`
-      ),
-      h(
+    { style: gridStyle },
+    Array.from({ length: total }, (_, i) => {
+      const cell = cells[i];
+      const sid = cell?.id ?? null;
+      const sess = sid ? nonBlank.find((s) => s.id === sid) : null;
+      const isActive = i === activeCell;
+      const isDragOver = i === dragOver;
+      const options = cell?.t === "workspace" ? sessionsOfWorkspace(cell.ws) : nonBlank;
+      const wsTitle = cell?.t === "workspace" ? workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? "\u9879\u76EE" : null;
+      return h(
         "div",
-        { style: { marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" } },
-        h(GridPicker, {
-          rows,
-          cols,
-          maxCells,
-          confirmCells,
-          onApply: applyGeometry
-        }),
-        h("button", {
-          style: btnStyle,
-          onClick: () => {
+        {
+          key: i,
+          style: {
+            ...cellStyle,
+            // Inset ring marks the active tile without touching the shared
+            // dividers or shifting the tile's box.
+            boxShadow: isActive ? "inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)" : "none",
+            background: isDragOver ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : cellStyle.background
+          },
+          onMouseDown: () => setActiveCell(i),
+          // Accept a Sidebar drag: a Session row or a project row.
+          onDragOver: (e) => {
+            e.preventDefault();
             try {
-              window.__dswsToggle?.();
+              e.dataTransfer.dropEffect = "move";
             } catch (_e) {
             }
+            if (dragOver !== i) setDragOver(i);
+          },
+          onDragLeave: () => setDragOver((current) => current === i ? -1 : current),
+          onDrop: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setDragOver(-1);
+            let raw = "";
+            try {
+              raw = e.dataTransfer?.getData("text/plain") ?? "";
+            } catch (_e) {
+            }
+            const next = cellFromDrop(raw);
+            if (next) setCell(i, next);
           }
-        }, "\u9000\u51FA\u5206\u5C4F")
-      )
-    ),
-    h(
-      "div",
-      { style: gridStyle },
-      Array.from({ length: total }, (_, i) => {
-        const cell = cells[i];
-        const sid = cell?.id ?? null;
-        const sess = sid ? nonBlank.find((s) => s.id === sid) : null;
-        const isActive = i === activeCell;
-        const isDragOver = i === dragOver;
-        const options = cell?.t === "workspace" ? sessionsOfWorkspace(cell.ws) : nonBlank;
-        const wsTitle = cell?.t === "workspace" ? workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? "\u9879\u76EE" : null;
-        return h(
+        },
+        h(
           "div",
           {
-            key: i,
             style: {
-              ...cellStyle,
-              // Inset ring marks the active tile without touching the shared
-              // dividers or shifting the tile's box.
-              boxShadow: isActive ? "inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)" : "none",
-              background: isDragOver ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : cellStyle.background
-            },
-            onMouseDown: () => setActiveCell(i),
-            // Accept a Sidebar drag: a Session row or a project row.
-            onDragOver: (e) => {
-              e.preventDefault();
-              try {
-                e.dataTransfer.dropEffect = "move";
-              } catch (_e) {
-              }
-              if (dragOver !== i) setDragOver(i);
-            },
-            onDragLeave: () => setDragOver((current) => current === i ? -1 : current),
-            onDrop: (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setDragOver(-1);
-              let raw = "";
-              try {
-                raw = e.dataTransfer?.getData("text/plain") ?? "";
-              } catch (_e) {
-              }
-              const next = cellFromDrop(raw);
-              if (next) setCell(i, next);
+              ...cellHeaderStyle,
+              background: isActive ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : "transparent"
             }
           },
-          h(
-            "div",
-            {
-              style: {
-                ...cellHeaderStyle,
-                background: isActive ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : "transparent"
-              }
-            },
-            sess ? h(CellTitle, {
-              sessions,
-              sessionId: sess.id,
-              title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
-              running: sess.running
-            }) : h("span", { style: { flex: "1 1 auto", color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u683C ${i + 1}`),
-            h(CellPicker, {
-              value: sid ?? "",
-              placeholder: wsTitle === null ? "\u9009\u62E9\u4F1A\u8BDD\u2026" : `${wsTitle}\uFF08\u9009\u4F1A\u8BDD\uFF09`,
-              options,
-              onChange: (id) => {
-                setCell(i, id === null ? null : cell?.t === "workspace" ? { t: "workspace", ws: cell.ws, id } : { t: "session", id });
-              }
-            })
-          ),
-          cell?.t === "workspace" && !sess ? h(
-            "div",
-            { style: { flex: 1, padding: 12, color: "var(--dsw-alias-label-secondary, #888)" } },
-            options.length === 0 ? `\u9879\u76EE\u300C${wsTitle}\u300D\u8FD8\u6CA1\u6709\u4F1A\u8BDD` : "\u4ECE\u4E0A\u65B9\u9009\u62E9\u8BE5\u9879\u76EE\u7684\u4F1A\u8BDD"
-          ) : h(CellView, { sessions, sessionId: sid })
-        );
-      })
-    )
+          sess ? h(CellTitle, {
+            sessions,
+            sessionId: sess.id,
+            title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
+            running: sess.running
+          }) : h("span", { style: { flex: "1 1 auto", color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u7B2C ${i + 1} \u683C`),
+          h(CellPicker, {
+            value: sid ?? "",
+            placeholder: wsTitle === null ? "\u9009\u62E9\u4F1A\u8BDD\u2026" : `${wsTitle}\uFF08\u9009\u4F1A\u8BDD\uFF09`,
+            options,
+            onChange: (id) => {
+              setCell(i, id === null ? null : cell?.t === "workspace" ? { t: "workspace", ws: cell.ws, id } : { t: "session", id });
+            }
+          })
+        ),
+        cell?.t === "workspace" && !sess ? h(
+          "div",
+          { style: { flex: 1, padding: 12, color: "var(--dsw-alias-label-secondary, #888)" } },
+          options.length === 0 ? `\u9879\u76EE\u300C${wsTitle}\u300D\u8FD8\u6CA1\u6709\u4F1A\u8BDD` : "\u4ECE\u4E0A\u65B9\u9009\u62E9\u8BE5\u9879\u76EE\u7684\u4F1A\u8BDD"
+        ) : h(CellView, { sessions, sessionId: sid })
+      );
+    })
   );
 }
 var limitsRowStyles = {
@@ -9622,12 +9651,17 @@ function apply(ctx) {
     } catch (_e) {
     }
   }, "workspace-split: cleanup");
+  ctx.effect(() => installSplitStyles(), "workspace-split: styles");
   ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
     name: "sidebar.footer.action",
     id: "workspace-split-sidebar",
     order: 5
-  }, function SidebarSplitButton() {
-    return h(SplitButton, { variant: "sidebar" });
+  }, function SidebarEntry() {
+    const limits = useSyncExternalStore(subscribeLimits, getLimits);
+    return h(SidebarSplitControl, {
+      maxCells: limits.maxCells,
+      confirmCells: limits.confirmOverCells
+    });
   }));
   ctx.slots.inject("conversation.hero.options", () => ctx.slots.register({
     name: "conversation.hero.options",
