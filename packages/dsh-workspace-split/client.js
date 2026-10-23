@@ -7382,6 +7382,53 @@ var DEFAULT_CONFIRM_CELLS = 6;
 var PICKER_MAX_ROWS = 5;
 var PICKER_MAX_COLS = 6;
 var LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS;
+var ZOOM_MIN = 0.6;
+var ZOOM_MAX = 1.6;
+var ZOOM_STEP = 0.05;
+var ZOOM_FULL_WIDTH = 820;
+var ZOOM_AUTO_FLOOR = 0.78;
+function autoZoomForWidth(width) {
+  if (!(width > 0)) return 1;
+  return Math.max(ZOOM_AUTO_FLOOR, Math.min(1, width / ZOOM_FULL_WIDTH));
+}
+function CellZoom(props) {
+  const { zoom, onZoom, children } = props;
+  const outerRef = useRef(null);
+  const [auto, setAuto] = useState(1);
+  useEffect(() => {
+    const el = outerRef.current;
+    if (el === null || typeof ResizeObserver !== "function") return void 0;
+    const read = () => setAuto(autoZoomForWidth(el.getBoundingClientRect().width));
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    const el = outerRef.current;
+    if (el === null) return void 0;
+    const onWheel = (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      onZoom(event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onZoom]);
+  const scale = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, auto * zoom));
+  return h(
+    "div",
+    {
+      ref: outerRef,
+      style: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }
+    },
+    h("div", {
+      // `zoom` scales text AND layout, so token-derived sizes (the markdown type
+      // ladder, the composer) follow along instead of only my own font sizes.
+      style: { zoom: scale, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }
+    }, children)
+  );
+}
 var OPEN_TIMEOUT_MS = 15e3;
 var openChain = Promise.resolve();
 function enqueueOpen(task) {
@@ -7399,11 +7446,18 @@ function loadLayout() {
     return null;
   }
 }
-function saveLayout(rows, cols, cells, inSplit) {
+function saveLayout(next) {
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ rows, cols, cells, inSplit }));
+    localStorage.setItem(LS_KEY, JSON.stringify(next));
   } catch {
   }
+}
+function savedZooms(saved) {
+  const list2 = Array.isArray(saved?.zooms) ? saved.zooms : [];
+  return list2.map((value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, n)) : 1;
+  });
 }
 function toSpan(value, fallback) {
   const n = Number(value);
@@ -7475,7 +7529,7 @@ function updateGeometry(nextRows, nextCols) {
   if (next.rows === prev.rows && next.cols === prev.cols) return;
   geometrySnapshot = next;
   const saved = loadLayout() ?? {};
-  saveLayout(next.rows, next.cols, saved.cells ?? [], saved.inSplit ?? false);
+  saveLayout({ ...saved, rows: next.rows, cols: next.cols });
   for (const listener of geometryListeners) listener();
 }
 function refitGeometry() {
@@ -8093,16 +8147,15 @@ function SplitIcon(props) {
     {
       width: size,
       height: size,
-      viewBox: "0 0 16 16",
-      fill: "none",
+      viewBox: "0 0 64 64",
       xmlns: "http://www.w3.org/2000/svg",
       "aria-hidden": true,
       style: { display: "block" }
     },
-    h("rect", { x: 2, y: 2, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2 }),
-    h("rect", { x: 9, y: 2, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2, opacity: 0.55 }),
-    h("rect", { x: 2, y: 9, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2, opacity: 0.55 }),
-    h("rect", { x: 9, y: 9, width: 5, height: 5, rx: 1.4, stroke: "currentColor", strokeWidth: 1.2, opacity: 0.55 })
+    h("rect", { x: 6, y: 6, width: 24, height: 24, rx: 4, fill: "#247bbf" }),
+    h("rect", { x: 34, y: 6, width: 24, height: 24, rx: 4, fill: "#4a9fd8" }),
+    h("rect", { x: 6, y: 34, width: 24, height: 24, rx: 4, fill: "#4a9fd8" }),
+    h("rect", { x: 34, y: 34, width: 24, height: 24, rx: 4, fill: "#247bbf" })
   );
 }
 var SPLIT_STYLE_ID = "dsws-split-styles";
@@ -8555,17 +8608,6 @@ function CellView(props) {
     };
     update();
     return es.subscribe(update);
-  }, [binding]);
-  const [running, setRunning] = useState(false);
-  useEffect(() => {
-    if (!binding?.session) return;
-    const sess = binding.session;
-    const update = () => {
-      const s = sess.getSnapshot();
-      setRunning(s?.running ?? false);
-    };
-    update();
-    return sess.subscribe(update);
   }, [binding]);
   const followRef = useRef(true);
   useEffect(() => {
@@ -9387,6 +9429,15 @@ function SplitMain(props) {
     for (let i = 0; i < s.length; i++) arr[i] = normalizeCell(s[i]);
     return arr;
   });
+  const [zooms, setZooms] = useState(() => savedZooms(saved));
+  const zoomIn = useCallback((index2, delta) => {
+    setZooms((prev) => {
+      const next = [...prev];
+      const current = next[index2] ?? 1;
+      next[index2] = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, current + delta));
+      return next;
+    });
+  }, []);
   const items = list2?.ids?.map((id) => list2.byId[id]).filter(Boolean) ?? [];
   const nonBlank = items.filter((s) => !s.blank);
   const workspaceItems = wsState?.items ?? [];
@@ -9454,8 +9505,8 @@ function SplitMain(props) {
     setActiveCell((prev) => Math.min(prev, size - 1));
   }, [rows, cols]);
   useEffect(() => {
-    saveLayout(rows, cols, cells, window.__dswsInSplit ?? false);
-  }, [rows, cols, cells]);
+    saveLayout({ rows, cols, cells, zooms, inSplit: window.__dswsInSplit ?? false });
+  }, [rows, cols, cells, zooms]);
   useEffect(() => {
     if (list2?.phase !== "ready") return;
     const known = new Set(list2.ids ?? []);
@@ -9509,79 +9560,120 @@ function SplitMain(props) {
   return h(
     "div",
     { style: gridStyle },
-    Array.from({ length: total }, (_, i) => {
-      const cell = cells[i];
-      const sid = cell?.id ?? null;
-      const sess = sid ? nonBlank.find((s) => s.id === sid) : null;
-      const isActive = i === activeCell;
-      const isDragOver = i === dragOver;
-      const options = cell?.t === "workspace" ? sessionsOfWorkspace(cell.ws) : nonBlank;
-      const wsTitle = cell?.t === "workspace" ? workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? "\u9879\u76EE" : null;
-      return h(
+    Array.from({ length: total }, (_, i) => h(SplitCell, {
+      key: i,
+      index: i,
+      cell: cells[i],
+      sessions,
+      nonBlank,
+      workspaceItems,
+      sessionsOfWorkspace,
+      active: i === activeCell,
+      dragOver: dragOver === i,
+      zoom: zooms[i] ?? 1,
+      cellStyle,
+      headerStyle: cellHeaderStyle,
+      onActivate: () => setActiveCell(i),
+      onDragOverCell: () => setDragOver(i),
+      onDragLeaveCell: () => setDragOver((current) => current === i ? -1 : current),
+      onDropCell: (raw) => {
+        const next = cellFromDrop(raw);
+        if (next) setCell(i, next);
+      },
+      onPick: (id) => {
+        const cell = cells[i];
+        setCell(i, id === null ? null : cell?.t === "workspace" ? { t: "workspace", ws: cell.ws, id } : { t: "session", id });
+      },
+      onZoom: (delta) => zoomIn(i, delta)
+    }))
+  );
+}
+function SplitCell(props) {
+  const {
+    index: index2,
+    cell,
+    sessions,
+    nonBlank,
+    workspaceItems,
+    sessionsOfWorkspace,
+    active,
+    dragOver,
+    zoom,
+    cellStyle,
+    headerStyle,
+    onActivate,
+    onDragOverCell,
+    onDragLeaveCell,
+    onDropCell,
+    onPick,
+    onZoom
+  } = props;
+  const sid = cell?.id ?? null;
+  const sess = sid === null ? null : nonBlank.find((s) => s.id === sid) ?? null;
+  const options = cell?.t === "workspace" ? sessionsOfWorkspace(cell.ws) : nonBlank;
+  const wsTitle = cell?.t === "workspace" ? workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? "\u9879\u76EE" : null;
+  return h(
+    "div",
+    {
+      style: {
+        ...cellStyle,
+        // Inset ring marks the active tile without touching the shared dividers
+        // or shifting the tile's box.
+        boxShadow: active ? "inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)" : "none",
+        background: dragOver ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : cellStyle.background
+      },
+      onMouseDown: onActivate,
+      // Accept a Sidebar drag: a Session row or a project row.
+      onDragOver: (e) => {
+        e.preventDefault();
+        try {
+          e.dataTransfer.dropEffect = "move";
+        } catch (_e) {
+        }
+        onDragOverCell();
+      },
+      onDragLeave: onDragLeaveCell,
+      onDrop: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        let raw = "";
+        try {
+          raw = e.dataTransfer?.getData("text/plain") ?? "";
+        } catch (_e) {
+        }
+        onDropCell(raw);
+      }
+    },
+    h(
+      CellZoom,
+      { zoom, onZoom },
+      h(
         "div",
         {
-          key: i,
           style: {
-            ...cellStyle,
-            // Inset ring marks the active tile without touching the shared
-            // dividers or shifting the tile's box.
-            boxShadow: isActive ? "inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)" : "none",
-            background: isDragOver ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : cellStyle.background
-          },
-          onMouseDown: () => setActiveCell(i),
-          // Accept a Sidebar drag: a Session row or a project row.
-          onDragOver: (e) => {
-            e.preventDefault();
-            try {
-              e.dataTransfer.dropEffect = "move";
-            } catch (_e) {
-            }
-            if (dragOver !== i) setDragOver(i);
-          },
-          onDragLeave: () => setDragOver((current) => current === i ? -1 : current),
-          onDrop: (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setDragOver(-1);
-            let raw = "";
-            try {
-              raw = e.dataTransfer?.getData("text/plain") ?? "";
-            } catch (_e) {
-            }
-            const next = cellFromDrop(raw);
-            if (next) setCell(i, next);
+            ...headerStyle,
+            background: active ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : "transparent"
           }
         },
-        h(
-          "div",
-          {
-            style: {
-              ...cellHeaderStyle,
-              background: isActive ? "var(--dsw-alias-interactive-bg-hover, #2f3b4a)" : "transparent"
-            }
-          },
-          sess ? h(CellTitle, {
-            sessions,
-            sessionId: sess.id,
-            title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
-            running: sess.running
-          }) : h("span", { style: { flex: "1 1 auto", color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u7B2C ${i + 1} \u683C`),
-          h(CellPicker, {
-            value: sid ?? "",
-            placeholder: wsTitle === null ? "\u9009\u62E9\u4F1A\u8BDD\u2026" : `${wsTitle}\uFF08\u9009\u4F1A\u8BDD\uFF09`,
-            options,
-            onChange: (id) => {
-              setCell(i, id === null ? null : cell?.t === "workspace" ? { t: "workspace", ws: cell.ws, id } : { t: "session", id });
-            }
-          })
-        ),
-        cell?.t === "workspace" && !sess ? h(
-          "div",
-          { style: { flex: 1, padding: 12, color: "var(--dsw-alias-label-secondary, #888)" } },
-          options.length === 0 ? `\u9879\u76EE\u300C${wsTitle}\u300D\u8FD8\u6CA1\u6709\u4F1A\u8BDD` : "\u4ECE\u4E0A\u65B9\u9009\u62E9\u8BE5\u9879\u76EE\u7684\u4F1A\u8BDD"
-        ) : h(CellView, { sessions, sessionId: sid })
-      );
-    })
+        sess ? h(CellTitle, {
+          sessions,
+          sessionId: sess.id,
+          title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
+          running: sess.running
+        }) : h("span", { style: { flex: "1 1 auto", color: "var(--dsw-alias-label-caption, #999)", whiteSpace: "nowrap" } }, `\u7B2C ${index2 + 1} \u683C`),
+        h(CellPicker, {
+          value: sid ?? "",
+          placeholder: wsTitle === null ? "\u9009\u62E9\u4F1A\u8BDD\u2026" : `${wsTitle}\uFF08\u9009\u4F1A\u8BDD\uFF09`,
+          options,
+          onChange: onPick
+        })
+      ),
+      cell?.t === "workspace" && sess === null ? h(
+        "div",
+        { style: { flex: 1, padding: 12, color: "var(--dsw-alias-label-secondary, #888)" } },
+        options.length === 0 ? `\u9879\u76EE\u300C${wsTitle}\u300D\u8FD8\u6CA1\u6709\u4F1A\u8BDD` : "\u4ECE\u4E0A\u65B9\u9009\u62E9\u8BE5\u9879\u76EE\u7684\u4F1A\u8BDD"
+      ) : h(CellView, { sessions, sessionId: sid })
+    )
   );
 }
 var limitsRowStyles = {
@@ -9683,7 +9775,7 @@ function apply(ctx) {
     const cur = loadLayout() ?? {};
     const start = savedGeometry(cur);
     const geo = fitGeometry(start.rows, start.cols, getLimits().maxCells);
-    saveLayout(geo.rows, geo.cols, cur.cells ?? [], inSplit);
+    saveLayout({ ...cur, rows: geo.rows, cols: geo.cols, inSplit });
   };
   ctx.effect(() => () => {
     try {

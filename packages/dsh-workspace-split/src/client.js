@@ -15,6 +15,9 @@ import { mathFromMarkdown } from 'mdast-util-math'
 const h = React.createElement
 const { useState, useEffect, useCallback, useSyncExternalStore, useRef } = React
 
+// ---------- i18n ----------
+import { t } from './i18n.js'
+
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
 // extra tile retains another live Session, so seven to ten ask for a
@@ -27,8 +30,73 @@ const DEFAULT_CONFIRM_CELLS = 6
 const PICKER_MAX_ROWS = 5
 /** Largest column count the picker offers. */
 const PICKER_MAX_COLS = 6
-/** Each axis keeps its own ceiling, so the cap is their product, not a square. */
 const LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS
+/**
+ * Cell text scaling. A cell renders at the desktop size only when it is about
+ * as wide as the conversation column; narrower cells shrink so the same screen
+ * area keeps showing a useful amount of text. `(ctrl) + wheel` over one cell
+ * moves that cell alone.
+ */
+const ZOOM_MIN = 0.6
+const ZOOM_MAX = 1.6
+/** Wheel step for the per-cell override. */
+const ZOOM_STEP = 0.05
+/** Width at or above which a cell keeps the desktop text size. */
+const ZOOM_FULL_WIDTH = 820
+/** Smallest automatic scale, so text never gets illegible. */
+const ZOOM_AUTO_FLOOR = 0.78
+/** Automatic scale for a cell of this width. */
+function autoZoomForWidth(width) {
+  if (!(width > 0)) return 1
+  return Math.max(ZOOM_AUTO_FLOOR, Math.min(1, width / ZOOM_FULL_WIDTH))
+}
+
+/**
+ * Scales one cell's contents so a narrow tile keeps its information density.
+ * Reads its own width, multiplies by the reader's per-cell override, and owns
+ * the ctrl+wheel listener (passive listeners cannot cancel the page zoom).
+ * @param props - `zoom` is the reader override, `onZoom` receives the next step.
+ */
+function CellZoom(props) {
+  const { zoom, onZoom, children } = props
+  const outerRef = useRef(null)
+  const [auto, setAuto] = useState(1)
+
+  useEffect(() => {
+    const el = outerRef.current
+    if (el === null || typeof ResizeObserver !== 'function') return undefined
+    const read = () => setAuto(autoZoomForWidth(el.getBoundingClientRect().width))
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const el = outerRef.current
+    if (el === null) return undefined
+    const onWheel = (event) => {
+      if (!event.ctrlKey) return
+      event.preventDefault()
+      onZoom(event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [onZoom])
+
+  const scale = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, auto * zoom))
+  return h('div', {
+    ref: outerRef,
+    style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
+  },
+    h('div', {
+      // `zoom` scales text AND layout, so token-derived sizes (the markdown type
+      // ladder, the composer) follow along instead of only my own font sizes.
+      style: { zoom: scale, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
+    }, children),
+  )
+}
+
 /** Bound for one retained Session's initial history open (see CellView). */
 const OPEN_TIMEOUT_MS = 15000
 
@@ -51,10 +119,19 @@ function loadLayout() {
     return null
   }
 }
-function saveLayout(rows, cols, cells, inSplit) {
+function saveLayout(next) {
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ rows, cols, cells, inSplit }))
+    localStorage.setItem(LS_KEY, JSON.stringify(next))
   } catch {}
+}
+
+/** Per-cell text scale a reader has dialled in, keyed by cell index. */
+function savedZooms(saved) {
+  const list = Array.isArray(saved?.zooms) ? saved.zooms : []
+  return list.map((value) => {
+    const n = Number(value)
+    return Number.isFinite(n) ? Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, n)) : 1
+  })
 }
 
 /** Coerce a persisted span to a positive integer, falling back when invalid. */
@@ -155,7 +232,7 @@ function updateGeometry(nextRows, nextCols) {
   // Persist immediately: the picker works with the split view closed, where the
   // panel's own persistence effect is not mounted.
   const saved = loadLayout() ?? {}
-  saveLayout(next.rows, next.cols, saved.cells ?? [], saved.inSplit ?? false)
+  saveLayout({ ...saved, rows: next.rows, cols: next.cols })
   for (const listener of geometryListeners) listener()
 }
 
@@ -875,9 +952,9 @@ const SIDEBAR_CONTROL_HINT = '左键切换分屏，右键选网格'
 const SPLIT_TIP_WIDTH = 190
 
 /**
- * Split-view glyph: four rounded panes in the harness's line-icon language
- * (1.2 stroke, currentColor, 16px box) instead of a text character, which the
- * system font renders as a coloured emoji.
+ * Split-view glyph, drawn from the shipped `icon.svg`: four rounded panes in two
+ * blues with opposing corners emphasised. Artwork keeps its own colours, which
+ * the plugin icon rules allow.
  * @param props - `size` in pixels.
  */
 function SplitIcon(props) {
@@ -885,16 +962,15 @@ function SplitIcon(props) {
   return h('svg', {
     width: size,
     height: size,
-    viewBox: '0 0 16 16',
-    fill: 'none',
+    viewBox: '0 0 64 64',
     xmlns: 'http://www.w3.org/2000/svg',
     'aria-hidden': true,
     style: { display: 'block' },
   },
-    h('rect', { x: 2, y: 2, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2 }),
-    h('rect', { x: 9, y: 2, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2, opacity: 0.55 }),
-    h('rect', { x: 2, y: 9, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2, opacity: 0.55 }),
-    h('rect', { x: 9, y: 9, width: 5, height: 5, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.2, opacity: 0.55 }),
+    h('rect', { x: 6, y: 6, width: 24, height: 24, rx: 4, fill: '#247bbf' }),
+    h('rect', { x: 34, y: 6, width: 24, height: 24, rx: 4, fill: '#4a9fd8' }),
+    h('rect', { x: 6, y: 34, width: 24, height: 24, rx: 4, fill: '#4a9fd8' }),
+    h('rect', { x: 34, y: 34, width: 24, height: 24, rx: 4, fill: '#247bbf' }),
   )
 }
 
@@ -1402,19 +1478,6 @@ function CellView(props) {
     }
     update()
     return es.subscribe(update)
-  }, [binding])
-
-  // Subscribe to the session snapshot for running state.
-  const [running, setRunning] = useState(false)
-  useEffect(() => {
-    if (!binding?.session) return
-    const sess = binding.session
-    const update = () => {
-      const s = sess.getSnapshot()
-      setRunning(s?.running ?? false)
-    }
-    update()
-    return sess.subscribe(update)
   }, [binding])
 
   // Follow the tail only while the reader is already at the bottom. Scrolling
@@ -2312,6 +2375,17 @@ function SplitMain(props) {
     for (let i = 0; i < s.length; i++) arr[i] = normalizeCell(s[i])
     return arr
   })
+  // Reader overrides for the per-cell text scale, one multiplier per cell.
+  const [zooms, setZooms] = useState(() => savedZooms(saved))
+
+  const zoomIn = useCallback((index, delta) => {
+    setZooms((prev) => {
+      const next = [...prev]
+      const current = next[index] ?? 1
+      next[index] = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, current + delta))
+      return next
+    })
+  }, [])
 
   const items = list?.ids?.map((id) => list.byId[id]).filter(Boolean) ?? []
   const nonBlank = items.filter((s) => !s.blank)
@@ -2395,8 +2469,8 @@ function SplitMain(props) {
   }, [rows, cols])
 
   useEffect(() => {
-    saveLayout(rows, cols, cells, window.__dswsInSplit ?? false)
-  }, [rows, cols, cells])
+    saveLayout({ rows, cols, cells, zooms, inSplit: window.__dswsInSplit ?? false })
+  }, [rows, cols, cells, zooms])
 
   // Drop stale references: a pinned cell whose Session left the catalog empties,
   // and a Workspace cell keeps its scope but lets the dead Session go.
@@ -2460,83 +2534,114 @@ function SplitMain(props) {
   }
 
   return h('div', { style: gridStyle },
-      Array.from({ length: total }, (_, i) => {
+    Array.from({ length: total }, (_, i) => h(SplitCell, {
+      key: i,
+      index: i,
+      cell: cells[i],
+      sessions,
+      nonBlank,
+      workspaceItems,
+      sessionsOfWorkspace,
+      active: i === activeCell,
+      dragOver: dragOver === i,
+      zoom: zooms[i] ?? 1,
+      cellStyle,
+      headerStyle: cellHeaderStyle,
+      onActivate: () => setActiveCell(i),
+      onDragOverCell: () => setDragOver(i),
+      onDragLeaveCell: () => setDragOver((current) => (current === i ? -1 : current)),
+      onDropCell: (raw) => {
+        const next = cellFromDrop(raw)
+        if (next) setCell(i, next)
+      },
+      onPick: (id) => {
         const cell = cells[i]
-        const sid = cell?.id ?? null
-        const sess = sid ? nonBlank.find((s) => s.id === sid) : null
-        const isActive = i === activeCell
-        const isDragOver = i === dragOver
-        // A Workspace cell offers only that Workspace's Sessions in its picker.
-        const options = cell?.t === 'workspace' ? sessionsOfWorkspace(cell.ws) : nonBlank
-        const wsTitle = cell?.t === 'workspace'
-          ? (workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? '项目')
-          : null
-        return h('div', {
-          key: i,
-          style: {
-            ...cellStyle,
-            // Inset ring marks the active tile without touching the shared
-            // dividers or shifting the tile's box.
-            boxShadow: isActive
-              ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
-              : 'none',
-            background: isDragOver
-              ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
-              : cellStyle.background,
-          },
-          onMouseDown: () => setActiveCell(i),
-          // Accept a Sidebar drag: a Session row or a project row.
-          onDragOver: (e) => {
-            e.preventDefault()
-            try {
-              e.dataTransfer.dropEffect = 'move'
-            } catch (_e) {}
-            if (dragOver !== i) setDragOver(i)
-          },
-          onDragLeave: () => setDragOver((current) => (current === i ? -1 : current)),
-          onDrop: (e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            setDragOver(-1)
-            let raw = ''
-            try {
-              raw = e.dataTransfer?.getData('text/plain') ?? ''
-            } catch (_e) {}
-            const next = cellFromDrop(raw)
-            if (next) setCell(i, next)
-          },
+        setCell(i, id === null
+          ? null
+          : cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id } : { t: 'session', id })
+      },
+      onZoom: (delta) => zoomIn(i, delta),
+    })),
+  )
+}
+
+/**
+ * One grid tile: shell, drag target, zoomed contents.
+ * @param props - cell assignment, catalogs, styles, and the cell's handlers.
+ */
+function SplitCell(props) {
+  const {
+    index, cell, sessions, nonBlank, workspaceItems, sessionsOfWorkspace,
+    active, dragOver, zoom, cellStyle, headerStyle,
+    onActivate, onDragOverCell, onDragLeaveCell, onDropCell, onPick, onZoom,
+  } = props
+  const sid = cell?.id ?? null
+  const sess = sid === null ? null : nonBlank.find((s) => s.id === sid) ?? null
+  // A Workspace cell offers only that Workspace's Sessions in its picker.
+  const options = cell?.t === 'workspace' ? sessionsOfWorkspace(cell.ws) : nonBlank
+  const wsTitle = cell?.t === 'workspace'
+    ? (workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? '项目')
+    : null
+
+  return h('div', {
+    style: {
+      ...cellStyle,
+      // Inset ring marks the active tile without touching the shared dividers
+      // or shifting the tile's box.
+      boxShadow: active
+        ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
+        : 'none',
+      background: dragOver
+        ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
+        : cellStyle.background,
+    },
+    onMouseDown: onActivate,
+    // Accept a Sidebar drag: a Session row or a project row.
+    onDragOver: (e) => {
+      e.preventDefault()
+      try {
+        e.dataTransfer.dropEffect = 'move'
+      } catch (_e) {}
+      onDragOverCell()
+    },
+    onDragLeave: onDragLeaveCell,
+    onDrop: (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      let raw = ''
+      try {
+        raw = e.dataTransfer?.getData('text/plain') ?? ''
+      } catch (_e) {}
+      onDropCell(raw)
+    },
+  },
+    h(CellZoom, { zoom, onZoom },
+      h('div', {
+        style: {
+          ...headerStyle,
+          background: active ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)' : 'transparent',
         },
-          h('div', {
-            style: {
-              ...cellHeaderStyle,
-              background: isActive ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)' : 'transparent',
-            },
-          },
-            sess
-              ? h(CellTitle, {
-                  sessions,
-                  sessionId: sess.id,
-                  title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
-                  running: sess.running,
-                })
-              : h('span', { style: { flex: '1 1 auto', color: 'var(--dsw-alias-label-caption, #999)', whiteSpace: 'nowrap' } }, `第 ${i + 1} 格`),
-            h(CellPicker, {
-              value: sid ?? '',
-              placeholder: wsTitle === null ? '选择会话…' : `${wsTitle}（选会话）`,
-              options,
-              onChange: (id) => {
-                setCell(i, id === null
-                  ? null
-                  : cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id } : { t: 'session', id })
-              },
-            }),
-          ),
-          cell?.t === 'workspace' && !sess
-            ? h('div', { style: { flex: 1, padding: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
-                options.length === 0 ? `项目「${wsTitle}」还没有会话` : '从上方选择该项目的会话')
-            : h(CellView, { sessions, sessionId: sid }),
-        )
-      }),
+      },
+        sess
+          ? h(CellTitle, {
+              sessions,
+              sessionId: sess.id,
+              title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
+              running: sess.running,
+            })
+          : h('span', { style: { flex: '1 1 auto', color: 'var(--dsw-alias-label-caption, #999)', whiteSpace: 'nowrap' } }, `第 ${index + 1} 格`),
+        h(CellPicker, {
+          value: sid ?? '',
+          placeholder: wsTitle === null ? '选择会话…' : `${wsTitle}（选会话）`,
+          options,
+          onChange: onPick,
+        }),
+      ),
+      cell?.t === 'workspace' && sess === null
+        ? h('div', { style: { flex: 1, padding: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
+            options.length === 0 ? `项目「${wsTitle}」还没有会话` : '从上方选择该项目的会话')
+        : h(CellView, { sessions, sessionId: sid }),
+    ),
   )
 }
 
@@ -2636,7 +2741,7 @@ export function apply(ctx) {
     const cur = loadLayout() ?? {}
     const start = savedGeometry(cur)
     const geo = fitGeometry(start.rows, start.cols, getLimits().maxCells)
-    saveLayout(geo.rows, geo.cols, cur.cells ?? [], inSplit)
+    saveLayout({ ...cur, rows: geo.rows, cols: geo.cols, inSplit })
   }
   ctx.effect(() => () => {
     try {
