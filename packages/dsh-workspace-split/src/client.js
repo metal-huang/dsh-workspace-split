@@ -906,8 +906,9 @@ const SPLIT_STYLE_ID = 'dsws-split-styles'
  * @returns fixed top/left for the panel.
  */
 function panelPosition(rect) {
-  const panelWidth = 200
-  const panelHeight = 230
+  // Content-sized panel: 6 marks at 18px plus gaps and padding.
+  const panelWidth = 168
+  const panelHeight = 210
   const below = rect.bottom + 8
   const aboveTop = rect.top - 8 - panelHeight
   const top = below + panelHeight <= window.innerHeight
@@ -1640,12 +1641,14 @@ const pickerStyles = {
   panel: {
     position: 'fixed',
     zIndex: 60,
-    width: 240,
+    // Sized by its content: the ladder is 6 marks wide, so a fixed 240px panel
+    // left a dead column on the right.
+    width: 'max-content',
     maxWidth: 'calc(100vw - 16px)',
     maxHeight: 'calc(100vh - 16px)',
     overflow: 'auto',
     boxSizing: 'border-box',
-    padding: '12px 12px 10px',
+    padding: '12px 14px 10px',
     border: '0.5px solid var(--dsw-alias-border-l2, #555)',
     borderRadius: 'var(--dsw-radius-lg, 10px)',
     background: 'var(--dsw-alias-bg-layer-1, #1e1e1e)',
