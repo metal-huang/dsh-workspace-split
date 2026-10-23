@@ -19,6 +19,9 @@ const { useState, useEffect, useCallback, useSyncExternalStore, useRef } = React
 // ---------- i18n ----------
 import { t } from './i18n.js'
 
+// ---------- cell text scaling ----------
+import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
+
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
 // extra tile retains another live Session, so seven to ten ask for a
@@ -32,25 +35,6 @@ const PICKER_MAX_ROWS = 5
 /** Largest column count the picker offers. */
 const PICKER_MAX_COLS = 6
 const LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS
-/**
- * Cell text scaling. A cell renders at the desktop size only when it is about
- * as wide as the conversation column; narrower cells shrink so the same screen
- * area keeps showing a useful amount of text. `(ctrl) + wheel` over one cell
- * moves that cell alone.
- */
-const ZOOM_MIN = 0.6
-const ZOOM_MAX = 1.6
-/** Wheel step for the per-cell override. */
-const ZOOM_STEP = 0.05
-/** Width at or above which a cell keeps the desktop text size. */
-const ZOOM_FULL_WIDTH = 820
-/** Smallest automatic scale, so text never gets illegible. */
-const ZOOM_AUTO_FLOOR = 0.78
-/** Automatic scale for a cell of this width. */
-function autoZoomForWidth(width) {
-  if (!(width > 0)) return 1
-  return Math.max(ZOOM_AUTO_FLOOR, Math.min(1, width / ZOOM_FULL_WIDTH))
-}
 
 /**
  * Scales one cell's contents so a narrow tile keeps its information density.
@@ -78,6 +62,9 @@ function CellZoom(props) {
     if (el === null) return undefined
     const onWheel = (event) => {
       if (!event.ctrlKey) return
+      // Horizontal wheels and trackpad noise report deltaY 0; those must not
+      // count as a zoom step.
+      if (event.deltaY === 0) return
       event.preventDefault()
       onZoom(event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP)
     }
@@ -85,16 +72,29 @@ function CellZoom(props) {
     return () => el.removeEventListener('wheel', onWheel)
   }, [onZoom])
 
-  const scale = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, auto * zoom))
-  return h('div', {
-    ref: outerRef,
-    style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
-  },
-    h('div', {
-      // `zoom` scales text AND layout, so token-derived sizes (the markdown type
-      // ladder, the composer) follow along instead of only my own font sizes.
-      style: { zoom: scale, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
-    }, children),
+  const scale = effectiveZoom(auto, zoom)
+  return h(
+    'div',
+    {
+      ref: outerRef,
+      style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
+    },
+    h(
+      'div',
+      {
+        // `zoom` scales text AND layout, so token-derived sizes (the markdown type
+        // ladder, the composer) follow along instead of only my own font sizes.
+        style: {
+          zoom: scale,
+          display: 'flex',
+          flexDirection: 'column',
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+        },
+      },
+      children,
+    ),
   )
 }
 
@@ -124,15 +124,6 @@ function saveLayout(next) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(next))
   } catch {}
-}
-
-/** Per-cell text scale a reader has dialled in, keyed by cell index. */
-function savedZooms(saved) {
-  const list = Array.isArray(saved?.zooms) ? saved.zooms : []
-  return list.map((value) => {
-    const n = Number(value)
-    return Number.isFinite(n) ? Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, n)) : 1
-  })
 }
 
 /** Coerce a persisted span to a positive integer, falling back when invalid. */
@@ -174,7 +165,10 @@ function normalizeLimits(value) {
   const maxCells = clampLimit(value?.maxCells, DEFAULT_MAX_CELLS)
   return {
     maxCells,
-    confirmOverCells: Math.min(clampLimit(value?.confirmOverCells, DEFAULT_CONFIRM_CELLS), maxCells),
+    confirmOverCells: Math.min(
+      clampLimit(value?.confirmOverCells, DEFAULT_CONFIRM_CELLS),
+      maxCells,
+    ),
   }
 }
 
@@ -292,7 +286,10 @@ function parseMarkdown(text) {
   try {
     tree = fromMarkdown(text, { extensions: MD_EXTENSIONS, mdastExtensions: MD_MDAST_EXTENSIONS })
   } catch {
-    tree = { type: 'root', children: [{ type: 'paragraph', children: [{ type: 'text', value: text }] }] }
+    tree = {
+      type: 'root',
+      children: [{ type: 'paragraph', children: [{ type: 'text', value: text }] }],
+    }
   }
   // Bounded cache: transcripts re-render on every frame flush.
   if (mdCache.size > 200) mdCache.clear()
@@ -322,7 +319,12 @@ const mdStyles = {
     margin: `${mdBlockGap}px 0 0`,
     paddingLeft: 14,
   },
-  hr: { border: 'none', height: '0.5px', margin: '32px 0', background: 'var(--dsw-alias-border-l2, #4a4a4a)' },
+  hr: {
+    border: 'none',
+    height: '0.5px',
+    margin: '32px 0',
+    background: 'var(--dsw-alias-border-l2, #4a4a4a)',
+  },
   inlineCode: {
     font: 'var(--dsw-font-markdown-code, inherit)',
     fontFamily: 'var(--ds-font-family-code, monospace)',
@@ -399,7 +401,12 @@ const mdStyles = {
     minWidth: 100,
   },
   // KaTeX paints its own metrics; the wrapper only handles overflow and rhythm.
-  mathInline: { display: 'inline-block', maxWidth: '100%', overflowX: 'auto', verticalAlign: 'middle' },
+  mathInline: {
+    display: 'inline-block',
+    maxWidth: '100%',
+    overflowX: 'auto',
+    verticalAlign: 'middle',
+  },
   mathBlock: {
     minWidth: 0,
     maxWidth: '100%',
@@ -413,8 +420,10 @@ const mdStyles = {
  * Render TeX the way the harness's own transcript does.
  *
  * The page already ships KaTeX's stylesheet with the vendor CSS, so no
- * stylesheet work is needed here; an unparsable expression falls back to its
- * source instead of breaking the turn.
+ * stylesheet work is needed here. MathML is kept (the default `htmlAndMathml`
+ * output) so screen readers still get the formula; `throwOnError: false` makes
+ * bad TeX render KaTeX's own error marker rather than throw, and the catch only
+ * covers an internal failure.
  * @param value - TeX source.
  * @param displayMode - block expression when true, inline when false.
  * @returns a React node holding the rendered math.
@@ -425,7 +434,6 @@ function texNode(value, displayMode) {
     const html = katex.renderToString(source, {
       throwOnError: false,
       displayMode,
-      output: 'html',
       strict: 'ignore',
       trust: false,
     })
@@ -465,19 +473,35 @@ function renderMdNode(node, key) {
       return node.children.map((child, i) => renderMdNode(child, `${key}-${i}`))
 
     case 'paragraph':
-      return h('p', { key, style: mdStyles.p }, node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)))
+      return h(
+        'p',
+        { key, style: mdStyles.p },
+        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)),
+      )
 
     case 'text':
       return node.value
 
     case 'strong':
-      return h('strong', { key, style: mdStyles.strong }, node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)))
+      return h(
+        'strong',
+        { key, style: mdStyles.strong },
+        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)),
+      )
 
     case 'emphasis':
-      return h('em', { key }, node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)))
+      return h(
+        'em',
+        { key },
+        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)),
+      )
 
     case 'delete':
-      return h('del', { key }, node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)))
+      return h(
+        'del',
+        { key },
+        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)),
+      )
 
     case 'inlineCode':
       return h('code', { key, style: mdStyles.inlineCode }, node.value)
@@ -495,26 +519,35 @@ function renderMdNode(node, key) {
       return h('span', { key, style: { opacity: 0.7 } }, node.alt ?? node.url ?? '')
 
     case 'heading':
-      return h(`h${Math.min(node.depth ?? 1, 6)}`, { key, style: mdStyles.h(node.depth ?? 1) },
-        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)))
+      return h(
+        `h${Math.min(node.depth ?? 1, 6)}`,
+        { key, style: mdStyles.h(node.depth ?? 1) },
+        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)),
+      )
 
     case 'list': {
       const items = node.children.map((child, i) => {
         const li = renderMdNode({ ...child, type: 'listItem' }, `${key}-li${i}`)
         return li
       })
-      return h(node.ordered ? 'ol' : 'ul', {
-        key,
-        style: mdStyles.ul,
-        start: node.ordered && typeof node.start === 'number' ? node.start : undefined,
-      }, items)
+      return h(
+        node.ordered ? 'ol' : 'ul',
+        {
+          key,
+          style: mdStyles.ul,
+          start: node.ordered && typeof node.start === 'number' ? node.start : undefined,
+        },
+        items,
+      )
     }
 
     case 'listItem': {
       const kids = node.children.map((c, i) => renderMdNode(c, `${key}-${i}`))
       // Task-list checkbox parity with the native renderer.
       const checked = node.checked
-      return h('li', { key, style: mdStyles.li },
+      return h(
+        'li',
+        { key, style: mdStyles.li },
         checked === undefined || checked === null
           ? kids
           : [
@@ -523,27 +556,46 @@ function renderMdNode(node, key) {
                 type: 'checkbox',
                 checked: Boolean(checked),
                 readOnly: true,
-                style: { margin: '0 8px 0 0', accentColor: 'var(--dsw-alias-label-secondary, #888)' },
+                style: {
+                  margin: '0 8px 0 0',
+                  accentColor: 'var(--dsw-alias-label-secondary, #888)',
+                },
               }),
               ...kids,
-            ])
+            ],
+      )
     }
 
     case 'blockquote':
-      return h('blockquote', { key, style: mdStyles.blockquote },
-        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)))
+      return h(
+        'blockquote',
+        { key, style: mdStyles.blockquote },
+        node.children.map((c, i) => renderMdNode(c, `${key}-${i}`)),
+      )
 
     case 'thematicBreak':
       return h('hr', { key, style: mdStyles.hr })
 
     case 'code':
-      return h('div', { key, style: mdStyles.codeBlock },
+      return h(
+        'div',
+        { key, style: mdStyles.codeBlock },
         node.lang
-          ? h('div', { style: mdStyles.codeBanner },
-              h('span', { style: { fontFamily: 'var(--ds-font-family-code, monospace)', fontSize: 11 } }, node.lang))
+          ? h(
+              'div',
+              { style: mdStyles.codeBanner },
+              h(
+                'span',
+                { style: { fontFamily: 'var(--ds-font-family-code, monospace)', fontSize: 11 } },
+                node.lang,
+              ),
+            )
           : null,
-        h('pre', { style: mdStyles.codePre },
-          h('code', { style: { fontFamily: 'inherit' } }, node.value ?? '')),
+        h(
+          'pre',
+          { style: mdStyles.codePre },
+          h('code', { style: { fontFamily: 'inherit' } }, node.value ?? ''),
+        ),
       )
 
     case 'table': {
@@ -555,22 +607,40 @@ function renderMdNode(node, key) {
       const columns = rows[0]?.children.length ?? 0
       const wide = columns >= 4
       const tableStyle = wide ? mdStyles.table : mdStyles.tableFill
-      const renderRow = (row, r, isHead) => h('tr', { key: `${key}-r${r}` },
-        row.children.map((cell, c) => {
-          const Tag = isHead ? 'th' : 'td'
-          const base = isHead ? mdStyles.th : mdStyles.td
-          // The native 100px floor suits the wide conversation column; inside a
-          // narrow cell it would push a filled table past the wrapper again.
-          const style = wide ? base : { ...base, minWidth: 0, maxWidth: 'none' }
-          return h(Tag, {
-            key: `${key}-r${r}c${c}`,
-            style,
-          }, cell.children.map((x, i) => renderMdNode(x, `${key}-r${r}c${c}-${i}`)))
-        }))
-      return h('div', { key, style: mdStyles.tableScroll },
-        h('table', { style: tableStyle },
+      const renderRow = (row, r, isHead) =>
+        h(
+          'tr',
+          { key: `${key}-r${r}` },
+          row.children.map((cell, c) => {
+            const Tag = isHead ? 'th' : 'td'
+            const base = isHead ? mdStyles.th : mdStyles.td
+            // The native 100px floor suits the wide conversation column; inside a
+            // narrow cell it would push a filled table past the wrapper again.
+            const style = wide ? base : { ...base, minWidth: 0, maxWidth: 'none' }
+            return h(
+              Tag,
+              {
+                key: `${key}-r${r}c${c}`,
+                style,
+              },
+              cell.children.map((x, i) => renderMdNode(x, `${key}-r${r}c${c}-${i}`)),
+            )
+          }),
+        )
+      return h(
+        'div',
+        { key, style: mdStyles.tableScroll },
+        h(
+          'table',
+          { style: tableStyle },
           rows.length > 0 ? h('thead', null, renderRow(rows[0], 0, true)) : null,
-          rows.length > 1 ? h('tbody', null, rows.slice(1).map((row, i) => renderRow(row, i + 1, false))) : null,
+          rows.length > 1
+            ? h(
+                'tbody',
+                null,
+                rows.slice(1).map((row, i) => renderRow(row, i + 1, false)),
+              )
+            : null,
         ),
       )
     }
@@ -585,7 +655,11 @@ function renderMdNode(node, key) {
       return h('br', { key })
 
     case 'footnoteReference':
-      return h('sup', { key, style: { fontSize: '0.75em', opacity: 0.8 } }, `[${node.identifier ?? ''}]`)
+      return h(
+        'sup',
+        { key, style: { fontSize: '0.75em', opacity: 0.8 } },
+        `[${node.identifier ?? ''}]`,
+      )
 
     case 'footnoteDefinition':
       return null
@@ -656,13 +730,14 @@ const turnRailStyles = {
     scrollbarWidth: 'none',
     paddingTop: TURN_RAIL_INSET,
     paddingBottom: TURN_RAIL_INSET,
-    maskImage: fadeTop && fadeBottom
-      ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)`
-      : fadeTop
-        ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 100%)`
-        : fadeBottom
-          ? `linear-gradient(to bottom, #000 0, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)`
-          : undefined,
+    maskImage:
+      fadeTop && fadeBottom
+        ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)`
+        : fadeTop
+          ? `linear-gradient(to bottom, transparent 0, #000 ${TURN_FADE_PX}px, #000 100%)`
+          : fadeBottom
+            ? `linear-gradient(to bottom, #000 0, #000 calc(100% - ${TURN_FADE_PX}px), transparent 100%)`
+            : undefined,
   }),
   mark: {
     display: 'flex',
@@ -685,11 +760,12 @@ const turnRailStyles = {
       state === 'active' ? 1 : state === 'hover' ? 0.9 : state === 'unloaded' ? 0.4 : 0.6
     })`,
     opacity: state === 'unloaded' ? 0.6 : 1,
-    background: state === 'active'
-      ? 'var(--dsw-alias-label-primary, #eee)'
-      : state === 'hover'
-        ? 'var(--dsw-alias-label-tertiary, #999)'
-        : 'var(--dsw-alias-border-l4, #555)',
+    background:
+      state === 'active'
+        ? 'var(--dsw-alias-label-primary, #eee)'
+        : state === 'hover'
+          ? 'var(--dsw-alias-label-tertiary, #999)'
+          : 'var(--dsw-alias-border-l4, #555)',
   }),
   preview: {
     position: 'absolute',
@@ -754,11 +830,17 @@ function turnRailItems(events) {
     if (typeof turn !== 'number') continue
     if (ev.type === 'user/message') {
       const blocks = ev.data?.content ?? []
-      const text = blocks.filter((b) => b?.type === 'text').map((b) => b.text).join(' ')
+      const text = blocks
+        .filter((b) => b?.type === 'text')
+        .map((b) => b.text)
+        .join(' ')
       if (text !== '' && ensure(turn).prompt === '') ensure(turn).prompt = text.slice(0, 120)
     } else if (ev.type === 'assistant/message') {
       const blocks = ev.data?.message?.content ?? []
-      const text = blocks.filter((b) => b?.type === 'text').map((b) => b.text).join(' ')
+      const text = blocks
+        .filter((b) => b?.type === 'text')
+        .map((b) => b.text)
+        .join(' ')
       if (text !== '' && ensure(turn).response === '') ensure(turn).response = text.slice(0, 300)
     }
   }
@@ -836,78 +918,114 @@ function TurnRail(props) {
     setScrolled({ top: el.scrollTop > 1, bottom: el.scrollTop < total - view - 1 })
   }, [activeTurn, items.length])
 
-  const jump = useCallback(async (item) => {
-    const el = bodyRef.current
-    if (el === null) return
-    const find = () => el.querySelector(`[data-turn="${item.turn}"]`)
-    const node = find()
-    if (node !== null) {
-      el.scrollTop = node.offsetTop - 8
-      return
-    }
-    // Turn is known but paged out: pull its history in, then scroll.
-    if (session === undefined || session === null || typeof item.seq !== 'number') return
-    setBusyTurn(item.turn)
-    try {
-      await session.loadThrough(item.seq)
-    } catch {}
-    requestAnimationFrame(() => {
-      const late = find()
-      if (late !== null) el.scrollTop = late.offsetTop - 8
-      setBusyTurn(null)
-    })
-  }, [bodyRef, session])
+  const jump = useCallback(
+    async (item) => {
+      const el = bodyRef.current
+      if (el === null) return
+      const find = () => el.querySelector(`[data-turn="${item.turn}"]`)
+      const node = find()
+      if (node !== null) {
+        el.scrollTop = node.offsetTop - 8
+        return
+      }
+      // Turn is known but paged out: pull its history in, then scroll.
+      if (session === undefined || session === null || typeof item.seq !== 'number') return
+      setBusyTurn(item.turn)
+      try {
+        await session.loadThrough(item.seq)
+      } catch {}
+      requestAnimationFrame(() => {
+        const late = find()
+        if (late !== null) el.scrollTop = late.offsetTop - 8
+        setBusyTurn(null)
+      })
+    },
+    [bodyRef, session],
+  )
 
   if (items.length < 2 || tooNarrow) return null
   const hovered = hoverTurn === null ? undefined : items.find((i) => i.turn === hoverTurn)
 
-  return h('div', { style: turnRailStyles.frame },
-    h('div', {
-      ref: scrollerRef,
-      style: turnRailStyles.scroller(scrolled.top, scrolled.bottom),
-      onScroll: (e) => setRailScroll(e.currentTarget.scrollTop),
-    },
-      h('div', { style: { position: 'relative' } },
+  return h(
+    'div',
+    { style: turnRailStyles.frame },
+    h(
+      'div',
+      {
+        ref: scrollerRef,
+        style: turnRailStyles.scroller(scrolled.top, scrolled.bottom),
+        onScroll: (e) => setRailScroll(e.currentTarget.scrollTop),
+      },
+      h(
+        'div',
+        { style: { position: 'relative' } },
         items.map((item) => {
-          const state = item.turn === activeTurn
-            ? 'active'
-            : item.turn === hoverTurn
-              ? 'hover'
-              : item.seq === undefined
-                ? 'unloaded'
-                : 'rest'
-          return h('button', {
-            key: item.turn,
-            type: 'button',
-            'data-rail-turn': item.turn,
-            'aria-label': `第 ${item.turn} 轮`,
-            'aria-current': item.turn === activeTurn ? 'true' : undefined,
-            style: { ...turnRailStyles.mark, opacity: item.turn === busyTurn ? 0.4 : 1 },
-            onMouseEnter: () => setHoverTurn(item.turn),
-            onMouseLeave: () => setHoverTurn((prev) => (prev === item.turn ? null : prev)),
-            onFocus: () => setHoverTurn(item.turn),
-            onBlur: () => setHoverTurn((prev) => (prev === item.turn ? null : prev)),
-            onClick: () => { void jump(item) },
-          }, h('span', { style: turnRailStyles.tick(state) }))
+          const state =
+            item.turn === activeTurn
+              ? 'active'
+              : item.turn === hoverTurn
+                ? 'hover'
+                : item.seq === undefined
+                  ? 'unloaded'
+                  : 'rest'
+          return h(
+            'button',
+            {
+              key: item.turn,
+              type: 'button',
+              'data-rail-turn': item.turn,
+              'aria-label': t('turnRail.aria.turn', { n: item.turn }),
+              'aria-current': item.turn === activeTurn ? 'true' : undefined,
+              style: { ...turnRailStyles.mark, opacity: item.turn === busyTurn ? 0.4 : 1 },
+              onMouseEnter: () => setHoverTurn(item.turn),
+              onMouseLeave: () => setHoverTurn((prev) => (prev === item.turn ? null : prev)),
+              onFocus: () => setHoverTurn(item.turn),
+              onBlur: () => setHoverTurn((prev) => (prev === item.turn ? null : prev)),
+              onClick: () => {
+                void jump(item)
+              },
+            },
+            h('span', { style: turnRailStyles.tick(state) }),
+          )
         }),
       ),
     ),
-    hovered === undefined ? null : h('div', {
+    hovered === undefined
+      ? null
+      : h(TurnPreview, {
+          item: hovered,
+          index: items.findIndex((i) => i.turn === hovered.turn),
+          railScroll,
+        }),
+  )
+}
+
+/**
+ * Tooltip for the tick under the pointer.
+ * @param props - the item, its position in the rail, and the rail's scroll offset.
+ */
+function TurnPreview(props) {
+  const { item, index, railScroll } = props
+  return h(
+    'div',
+    {
       role: 'tooltip',
       style: {
         ...turnRailStyles.preview,
         // Track the hovered tick: its own offset inside the scroller, minus how
         // far that scroller has been scrolled, centered on the tick.
-        top: TURN_RAIL_INSET
-          + items.findIndex((i) => i.turn === hovered.turn) * TURN_MARK_PITCH
-          + TURN_MARK_PITCH / 2
-          - railScroll,
+        top: TURN_RAIL_INSET + index * TURN_MARK_PITCH + TURN_MARK_PITCH / 2 - railScroll,
         transform: 'translateY(-50%)',
       },
     },
-      h('div', { style: turnRailStyles.previewPrompt }, hovered.prompt || `第 ${hovered.turn} 轮`),
-      hovered.response === '' ? null : h('div', { style: turnRailStyles.previewResponse }, hovered.response),
+    h(
+      'div',
+      { style: turnRailStyles.previewPrompt },
+      item.prompt || t('turnRail.preview.turn', { n: item.turn }),
     ),
+    item.response === ''
+      ? null
+      : h('div', { style: turnRailStyles.previewResponse }, item.response),
   )
 }
 
@@ -929,9 +1047,13 @@ const splitControlStyles = {
     border: 'none',
     borderRadius: 'var(--dsw-radius-sm, 6px)',
     padding: 0,
-    background: hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))' : 'transparent',
+    background: hover
+      ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.14))'
+      : 'transparent',
     cursor: 'pointer',
-    color: hover ? 'var(--dsw-alias-label-primary, inherit)' : 'var(--dsw-alias-label-secondary, #888)',
+    color: hover
+      ? 'var(--dsw-alias-label-primary, inherit)'
+      : 'var(--dsw-alias-label-secondary, #888)',
     fontSize: 15,
     lineHeight: 1,
     // Placement is stylesheet-driven (see installSplitStyles): it depends on the
@@ -964,7 +1086,7 @@ const splitControlStyles = {
   },
 }
 
-const SIDEBAR_CONTROL_HINT = '左键切换分屏，右键选网格'
+const SIDEBAR_CONTROL_HINT = t('split.sidebar.hint')
 /** Rough rendered width of the hover tip, used to keep it inside the viewport. */
 const SPLIT_TIP_WIDTH = 190
 
@@ -976,14 +1098,16 @@ const SPLIT_TIP_WIDTH = 190
  */
 function SplitIcon(props) {
   const size = props?.size ?? 16
-  return h('svg', {
-    width: size,
-    height: size,
-    viewBox: '0 0 64 64',
-    xmlns: 'http://www.w3.org/2000/svg',
-    'aria-hidden': true,
-    style: { display: 'block' },
-  },
+  return h(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 64 64',
+      xmlns: 'http://www.w3.org/2000/svg',
+      'aria-hidden': true,
+      style: { display: 'block' },
+    },
     h('rect', { x: 6, y: 6, width: 24, height: 24, rx: 4, fill: '#247bbf' }),
     h('rect', { x: 34, y: 6, width: 24, height: 24, rx: 4, fill: '#4a9fd8' }),
     h('rect', { x: 6, y: 34, width: 24, height: 24, rx: 4, fill: '#4a9fd8' }),
@@ -1004,9 +1128,10 @@ function panelPosition(rect) {
   const panelHeight = 210
   const below = rect.bottom + 8
   const aboveTop = rect.top - 8 - panelHeight
-  const top = below + panelHeight <= window.innerHeight
-    ? below
-    : Math.max(8, Math.min(aboveTop, window.innerHeight - panelHeight - 8))
+  const top =
+    below + panelHeight <= window.innerHeight
+      ? below
+      : Math.max(8, Math.min(aboveTop, window.innerHeight - panelHeight - 8))
   const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8))
   return { top, left }
 }
@@ -1069,34 +1194,42 @@ function SidebarSplitControl(props) {
     setTip(null)
   }
 
-  return h(React.Fragment, null,
-    h('button', {
-      type: 'button',
-      className: 'dsws-icon-btn',
-      'aria-label': SIDEBAR_CONTROL_HINT,
-      'aria-haspopup': 'dialog',
-      'aria-expanded': pickOpen,
-      style: splitControlStyles.button(hover),
-      onMouseEnter: showTip,
-      onMouseLeave: hideTip,
-      onFocus: showTip,
-      onBlur: hideTip,
-      onClick: () => {
-        try {
-          window.__dswsToggle?.()
-        } catch (_e) {}
+  return h(
+    React.Fragment,
+    null,
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'dsws-icon-btn',
+        'aria-label': SIDEBAR_CONTROL_HINT,
+        'aria-haspopup': 'dialog',
+        'aria-expanded': pickOpen,
+        style: splitControlStyles.button(hover),
+        onMouseEnter: showTip,
+        onMouseLeave: hideTip,
+        onFocus: showTip,
+        onBlur: hideTip,
+        onClick: () => {
+          try {
+            window.__dswsToggle?.()
+          } catch (_e) {}
+        },
+        onContextMenu: (e) => {
+          // Right click opens the picker; the browser menu would hide it.
+          e.preventDefault()
+          e.stopPropagation()
+          setAnchorPos(panelPosition(e.currentTarget.getBoundingClientRect()))
+          setPickOpen((open) => !open)
+        },
       },
-      onContextMenu: (e) => {
-        // Right click opens the picker; the browser menu would hide it.
-        e.preventDefault()
-        e.stopPropagation()
-        setAnchorPos(panelPosition(e.currentTarget.getBoundingClientRect()))
-        setPickOpen((open) => !open)
-      },
-    }, h(SplitIcon, { size: 15 })),
+      h(SplitIcon, { size: 15 }),
+    ),
     hover && tip !== null
-      ? h('div', { role: 'tooltip', style: splitControlStyles.tip(tip.top, tip.left) },
-          `网格 ${geometry.rows} × ${geometry.cols}`,
+      ? h(
+          'div',
+          { role: 'tooltip', style: splitControlStyles.tip(tip.top, tip.left) },
+          t('split.grid.trigger', { rows: geometry.rows, cols: geometry.cols }),
           h('span', { style: splitControlStyles.tipHint }, SIDEBAR_CONTROL_HINT),
         )
       : null,
@@ -1116,27 +1249,32 @@ function SidebarSplitControl(props) {
 // ---------- toggle button ----------
 // Labelled button for the hero options row.
 function SplitButton() {
-  return h('button', {
-    title: t('split.button.toggle'),
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
-      padding: '4px 10px',
-      fontSize: 12,
-      lineHeight: '18px',
-      border: '0.5px solid var(--dsw-alias-border-l2, #555)',
-      borderRadius: 'var(--dsw-radius-sm, 6px)',
-      background: 'transparent',
-      color: 'var(--dsw-alias-label-primary, inherit)',
-      cursor: 'pointer',
+  return h(
+    'button',
+    {
+      title: t('split.button.toggle'),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 10px',
+        fontSize: 12,
+        lineHeight: '18px',
+        border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        cursor: 'pointer',
+      },
+      onClick: () => {
+        try {
+          window.__dswsToggle?.()
+        } catch (_e) {}
+      },
     },
-    onClick: () => {
-      try {
-        window.__dswsToggle?.()
-      } catch (_e) {}
-    },
-  }, h(SplitIcon, { size: 14 }), '分屏')
+    h(SplitIcon, { size: 14 }),
+    t('split.button.label'),
+  )
 }
 
 // ---------- composer ----------
@@ -1203,9 +1341,10 @@ const toolStyles = {
     overflow: 'hidden',
     cursor: 'pointer',
     userSelect: 'none',
-    color: hover || expanded
-      ? 'var(--dsw-alias-label-secondary, #999)'
-      : 'var(--dsw-alias-label-tertiary, #888)',
+    color:
+      hover || expanded
+        ? 'var(--dsw-alias-label-secondary, #999)'
+        : 'var(--dsw-alias-label-tertiary, #888)',
     transition: 'color 100ms ease',
   }),
   chevron: (expanded) => ({
@@ -1285,21 +1424,27 @@ function toolSummary(name, argsRaw) {
   try {
     parsed = JSON.parse(argsRaw)
   } catch {
-    return String(argsRaw ?? '').replace(/\s+/g, ' ').slice(0, 120)
+    return String(argsRaw ?? '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 120)
   }
   if (parsed === null || typeof parsed !== 'object') return String(parsed).slice(0, 120)
-  const pick = parsed.description
-    ?? parsed.command
-    ?? parsed.file_path
-    ?? parsed.path
-    ?? parsed.pattern
-    ?? parsed.query
-    ?? parsed.url
-    ?? parsed.prompt
+  const pick =
+    parsed.description ??
+    parsed.command ??
+    parsed.file_path ??
+    parsed.path ??
+    parsed.pattern ??
+    parsed.query ??
+    parsed.url ??
+    parsed.prompt
   if (typeof pick === 'string') return pick.replace(/\s+/g, ' ').slice(0, 200)
   const keys = Object.keys(parsed)
   if (keys.length === 0) return ''
-  return keys.slice(0, 3).map((k) => `${k}=${JSON.stringify(parsed[k]).slice(0, 40)}`).join(' ')
+  return keys
+    .slice(0, 3)
+    .map((k) => `${k}=${JSON.stringify(parsed[k]).slice(0, 40)}`)
+    .join(' ')
 }
 
 /** Result text of a tool/result event, flattened from its content blocks. */
@@ -1327,33 +1472,62 @@ function ToolRow(props) {
     prettyArgs = JSON.stringify(JSON.parse(argsRaw), null, 2)
   } catch {}
 
-  return h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' } },
-    h('div', {
-      style: toolStyles.row(hover, expanded),
-      onMouseEnter: () => setHover(true),
-      onMouseLeave: () => setHover(false),
-      onClick: () => setExpanded((v) => !v),
-      role: 'button',
-      'aria-expanded': expanded,
-      title: expanded ? '收起' : '展开',
-    },
+  return h(
+    'div',
+    { style: { display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' } },
+    h(
+      'div',
+      {
+        style: toolStyles.row(hover, expanded),
+        onMouseEnter: () => setHover(true),
+        onMouseLeave: () => setHover(false),
+        onClick: () => setExpanded((v) => !v),
+        role: 'button',
+        'aria-expanded': expanded,
+        title: expanded ? t('toolrow.collapse') : t('toolrow.expand'),
+      },
       h('span', { style: toolStyles.chevron(expanded) }, '▶'),
       h('span', { style: toolStyles.name }, name),
       summary ? h('span', { style: toolStyles.sep }) : null,
       summary ? h('span', { style: toolStyles.summary }, summary) : null,
-      isError ? h('span', { style: toolStyles.errorFlag, title: '执行失败' }) : null,
+      isError ? h('span', { style: toolStyles.errorFlag, title: t('toolrow.failed') }) : null,
     ),
     expanded
-      ? h('div', { style: toolStyles.body },
-          errorReason ? h('div', { style: { ...toolStyles.label, color: 'var(--dsw-alias-state-error-primary, #e5484d)' } }, errorReason) : null,
-          prettyArgs ? h(React.Fragment, null,
-            h('div', { style: toolStyles.label }, '参数'),
-            h('pre', { style: toolStyles.pre }, prettyArgs),
-          ) : null,
-          resultText ? h(React.Fragment, null,
-            h('div', { style: toolStyles.label }, isError ? '错误输出' : '输出'),
-            h('pre', { style: toolStyles.pre }, resultText),
-          ) : h('div', { style: toolStyles.label }, '无输出'),
+      ? h(
+          'div',
+          { style: toolStyles.body },
+          errorReason
+            ? h(
+                'div',
+                {
+                  style: {
+                    ...toolStyles.label,
+                    color: 'var(--dsw-alias-state-error-primary, #e5484d)',
+                  },
+                },
+                errorReason,
+              )
+            : null,
+          prettyArgs
+            ? h(
+                React.Fragment,
+                null,
+                h('div', { style: toolStyles.label }, t('toolrow.labels.params')),
+                h('pre', { style: toolStyles.pre }, prettyArgs),
+              )
+            : null,
+          resultText
+            ? h(
+                React.Fragment,
+                null,
+                h(
+                  'div',
+                  { style: toolStyles.label },
+                  isError ? t('toolrow.labels.errorOutput') : t('toolrow.labels.output'),
+                ),
+                h('pre', { style: toolStyles.pre }, resultText),
+              )
+            : h('div', { style: toolStyles.label }, t('toolrow.noOutput')),
         )
       : null,
   )
@@ -1372,41 +1546,45 @@ function eventStyle(kind) {
     color: 'var(--dsw-alias-label-primary, inherit)',
     marginBottom: 8,
   }
-  if (kind === 'user') return {
-    ...base,
-    alignSelf: 'flex-end',
-    background: 'var(--dsw-specific-bubble, var(--dsw-alias-interactive-bg-hover, #2f3b4a))',
-    borderRadius: 'var(--dsw-radius-xl, 16px)',
-    padding: '10px 16px',
-    boxSizing: 'border-box',
-  }
-  if (kind === 'assistant') return {
-    ...base,
-    alignSelf: 'stretch',
-    maxWidth: '100%',
-    whiteSpace: 'normal',
-    background: 'transparent',
-    padding: '2px 0',
-  }
-  if (kind === 'tool') return {
-    ...base,
-    alignSelf: 'flex-start',
-    color: 'var(--dsw-alias-label-tertiary, #888)',
-    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
-    lineHeight: 'calc(18px + var(--dsh-content-font-delta-secondary, 0px))',
-    fontFamily: 'var(--dsw-font-markdown-code-block-small, monospace)',
-    padding: '2px 0',
-  }
-  if (kind === 'divider') return {
-    ...base,
-    maxWidth: '100%',
-    alignSelf: 'stretch',
-    textAlign: 'center',
-    color: 'var(--dsw-alias-label-caption, #999)',
-    fontSize: 'var(--dsh-content-font-size-secondary, 11px)',
-    padding: '2px 0',
-    marginBottom: 6,
-  }
+  if (kind === 'user')
+    return {
+      ...base,
+      alignSelf: 'flex-end',
+      background: 'var(--dsw-specific-bubble, var(--dsw-alias-interactive-bg-hover, #2f3b4a))',
+      borderRadius: 'var(--dsw-radius-xl, 16px)',
+      padding: '10px 16px',
+      boxSizing: 'border-box',
+    }
+  if (kind === 'assistant')
+    return {
+      ...base,
+      alignSelf: 'stretch',
+      maxWidth: '100%',
+      whiteSpace: 'normal',
+      background: 'transparent',
+      padding: '2px 0',
+    }
+  if (kind === 'tool')
+    return {
+      ...base,
+      alignSelf: 'flex-start',
+      color: 'var(--dsw-alias-label-tertiary, #888)',
+      fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+      lineHeight: 'calc(18px + var(--dsh-content-font-delta-secondary, 0px))',
+      fontFamily: 'var(--dsw-font-markdown-code-block-small, monospace)',
+      padding: '2px 0',
+    }
+  if (kind === 'divider')
+    return {
+      ...base,
+      maxWidth: '100%',
+      alignSelf: 'stretch',
+      textAlign: 'center',
+      color: 'var(--dsw-alias-label-caption, #999)',
+      fontSize: 'var(--dsh-content-font-size-secondary, 11px)',
+      padding: '2px 0',
+      marginBottom: 6,
+    }
   return base
 }
 
@@ -1446,24 +1624,30 @@ function CellView(props) {
       try {
         controller.abort()
       } catch {}
-      setError(`打开会话超时（${OPEN_TIMEOUT_MS / 1000} 秒）`)
+      setError(t('cell.loadError.timeout', { sec: OPEN_TIMEOUT_MS / 1000 }))
     }, OPEN_TIMEOUT_MS)
     const finish = () => clearTimeout(openTimerRef.current)
     // Serialize the history open: concurrent opens leave some unsettled.
     enqueueOpen(() => {
       if (cancelled) return Promise.resolve()
       try {
-        reference = sessions.retain(sessionId, { source: 'controllerOperation', signal: controller.signal })
-        refRef.current = reference
-        return Promise.resolve(reference.ready).then((b) => {
-          if (cancelled) return
-          finish()
-          setBinding(b)
-        }, (e) => {
-          if (cancelled) return
-          finish()
-          setError(String(e))
+        reference = sessions.retain(sessionId, {
+          source: 'controllerOperation',
+          signal: controller.signal,
         })
+        refRef.current = reference
+        return Promise.resolve(reference.ready).then(
+          (b) => {
+            if (cancelled) return
+            finish()
+            setBinding(b)
+          },
+          (e) => {
+            if (cancelled) return
+            finish()
+            setError(String(e))
+          },
+        )
       } catch (e) {
         finish()
         setError(String(e))
@@ -1517,11 +1701,14 @@ function CellView(props) {
       const snap = sess?.getSnapshot()
       if (sess && snap?.hasMore && !snap.loadingOlder) {
         const before = el.scrollHeight
-        sess.loadOlder().then(() => {
-          // Keep the reader's place: the prepended page adds height above.
-          const grown = bodyRef.current
-          if (grown) grown.scrollTop += grown.scrollHeight - before
-        }).catch(() => {})
+        sess
+          .loadOlder()
+          .then(() => {
+            // Keep the reader's place: the prepended page adds height above.
+            const grown = bodyRef.current
+            if (grown) grown.scrollTop += grown.scrollHeight - before
+          })
+          .catch(() => {})
       }
     }
   }, [binding])
@@ -1546,26 +1733,51 @@ function CellView(props) {
   }
 
   if (!sessionId) {
-    return h('div', { style: { textAlign: 'center', marginTop: 40, color: 'var(--dsw-alias-label-caption, #999)', flex: 1 } }, '从上方选择会话')
+    return h(
+      'div',
+      {
+        style: {
+          textAlign: 'center',
+          marginTop: 40,
+          color: 'var(--dsw-alias-label-caption, #999)',
+          flex: 1,
+        },
+      },
+      t('split.cell.pickFromAbove'),
+    )
   }
   if (error) {
-    return h('div', { style: { padding: 12, flex: 1, color: 'var(--dsw-alias-label-secondary, #888)' } },
-      h('div', { style: { marginBottom: 8 } }, `加载失败：${error}`),
-      h('button', {
-        style: { ...composerBtnStyle, alignSelf: 'flex-start' },
-        onClick: () => {
-          setError(null)
-          setBinding(null)
-          setRetry((n) => n + 1)
+    return h(
+      'div',
+      { style: { padding: 12, flex: 1, color: 'var(--dsw-alias-label-secondary, #888)' } },
+      h('div', { style: { marginBottom: 8 } }, t('cell.loadError.generic', { error })),
+      h(
+        'button',
+        {
+          style: { ...composerBtnStyle, alignSelf: 'flex-start' },
+          onClick: () => {
+            setError(null)
+            setBinding(null)
+            setRetry((n) => n + 1)
+          },
         },
-      }, '重试'),
+        t('cell.retry'),
+      ),
     )
   }
   if (!cataloged) {
-    return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '等待会话列表…')
+    return h(
+      'div',
+      { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } },
+      t('cell.loading.waiting'),
+    )
   }
   if (!binding) {
-    return h('div', { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } }, '加载中…')
+    return h(
+      'div',
+      { style: { padding: 12, color: 'var(--dsw-alias-label-secondary, #888)', flex: 1 } },
+      t('cell.loading'),
+    )
   }
 
   // The binding's window already pages history, so render it whole: capping the
@@ -1588,26 +1800,40 @@ function CellView(props) {
   }
   const railItems = turnRailItems(visible)
 
-  return h(React.Fragment, null,
+  return h(
+    React.Fragment,
+    null,
     // The scrollport and the turn rail share this box: the rail must not scroll
     // with the transcript, so it sits beside the scroller, not inside it.
-    h('div', { style: { position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } },
-      h('div', {
-        ref: bodyRef,
-        onScroll,
-        // `overflowX: hidden` is the backstop: every wide block scrolls inside
-        // its own wrapper, so the transcript itself must never scroll sideways.
+    h(
+      'div',
+      {
         style: {
+          position: 'relative',
           display: 'flex',
           flexDirection: 'column',
           flex: 1,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          padding: '10px 12px',
           minHeight: 0,
-          minWidth: 0,
         },
       },
+      h(
+        'div',
+        {
+          ref: bodyRef,
+          onScroll,
+          // `overflowX: hidden` is the backstop: every wide block scrolls inside
+          // its own wrapper, so the transcript itself must never scroll sideways.
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '10px 12px',
+            minHeight: 0,
+            minWidth: 0,
+          },
+        },
         visible.map((entry, idx) => {
           const ev = entry.event
           const type = ev?.type ?? 'unknown'
@@ -1618,64 +1844,82 @@ function CellView(props) {
             return h(ToolRow, {
               key: idx,
               name: ev.data?.name ?? 'tool',
-            argsRaw: ev.data?.arguments ?? '',
-            resultText: result ? toolResultText(result) : '',
-            isError: Boolean(result?.message?.isError ?? result?.isError),
-            errorReason: result?.error?.reason ?? result?.error?.name ?? '',
-          })
-        }
-        if (type === 'tool/result') {
-          const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId
-          // Already rendered by its call row when that call is in the window.
-          if (id !== undefined && calledIds.has(id)) return null
-          return h(ToolRow, {
-            key: idx,
-            name: '工具结果',
-            argsRaw: '',
-            resultText: toolResultText(ev.data),
-            isError: Boolean(ev.data?.message?.isError ?? ev.data?.isError),
-            errorReason: ev.data?.error?.reason ?? ev.data?.error?.name ?? '',
-          })
-        }
+              argsRaw: ev.data?.arguments ?? '',
+              resultText: result ? toolResultText(result) : '',
+              isError: Boolean(result?.message?.isError ?? result?.isError),
+              errorReason: result?.error?.reason ?? result?.error?.name ?? '',
+            })
+          }
+          if (type === 'tool/result') {
+            const id = ev.data?.message?.toolCallId ?? ev.data?.toolCallId
+            // Already rendered by its call row when that call is in the window.
+            if (id !== undefined && calledIds.has(id)) return null
+            return h(ToolRow, {
+              key: idx,
+              name: t('toolrow.result.name'),
+              argsRaw: '',
+              resultText: toolResultText(ev.data),
+              isError: Boolean(ev.data?.message?.isError ?? ev.data?.isError),
+              errorReason: ev.data?.error?.reason ?? ev.data?.error?.name ?? '',
+            })
+          }
 
-        let text = ''
-        let kind = 'other'
-        let anchorTurn
-        if (type === 'user/message') {
-          const blocks = ev?.data?.content ?? []
-          text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('')
-          kind = 'user'
-        } else if (type === 'assistant/message') {
-          const blocks = ev?.data?.message?.content ?? []
-          text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('')
-          kind = 'assistant'
-        } else if (type === 'assistant/live-chunk') {
-          text = ev?.data?.chunk?.text ?? ''
-          kind = 'assistant'
-        } else if (type === 'turn/start') {
-          text = `— 第 ${ev?.data?.turn} 轮 —`
-          kind = 'divider'
-          // The turn rail scrolls to this anchor, so it must survive an empty label.
-          anchorTurn = ev?.data?.turn
-        } else {
-          return null
-        }
-        if (!text) return null
-        // Assistant narration is Markdown; user prompts and status rows stay literal.
-        if (kind === 'assistant') {
-          return h('div', { key: idx, style: eventStyle(kind) }, h(Markdown, { text, k: `m${idx}` }))
-        }
-        return h('div', {
-          key: idx,
-          style: eventStyle(kind),
-          'data-turn': anchorTurn,
-        }, text)
-      }),
-      h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
+          let text = ''
+          let kind = 'other'
+          let anchorTurn
+          if (type === 'user/message') {
+            const blocks = ev?.data?.content ?? []
+            text = blocks
+              .filter((b) => b.type === 'text')
+              .map((b) => b.text)
+              .join('')
+            kind = 'user'
+          } else if (type === 'assistant/message') {
+            const blocks = ev?.data?.message?.content ?? []
+            text = blocks
+              .filter((b) => b.type === 'text')
+              .map((b) => b.text)
+              .join('')
+            kind = 'assistant'
+          } else if (type === 'assistant/live-chunk') {
+            text = ev?.data?.chunk?.text ?? ''
+            kind = 'assistant'
+          } else if (type === 'turn/start') {
+            text = t('turn.divider', { n: ev?.data?.turn })
+            kind = 'divider'
+            // The turn rail scrolls to this anchor, so it must survive an empty label.
+            anchorTurn = ev?.data?.turn
+          } else {
+            return null
+          }
+          if (!text) return null
+          // Assistant narration is Markdown; user prompts and status rows stay literal.
+          if (kind === 'assistant') {
+            return h(
+              'div',
+              { key: idx, style: eventStyle(kind) },
+              h(Markdown, { text, k: `m${idx}` }),
+            )
+          }
+          return h(
+            'div',
+            {
+              key: idx,
+              style: eventStyle(kind),
+              'data-turn': anchorTurn,
+            },
+            text,
+          )
+        }),
+        h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
       ),
     ),
-    h('div', { style: composerWrapStyle },
-      h('div', { style: composerCardStyle },
+    h(
+      'div',
+      { style: composerWrapStyle },
+      h(
+        'div',
+        { style: composerCardStyle },
         h('textarea', {
           ref: textareaRef,
           value: inputText,
@@ -1685,11 +1929,15 @@ function CellView(props) {
           rows: 1,
           style: composerInputStyle,
         }),
-        h('button', {
-          onClick: send,
-          disabled: !inputText.trim() || sending,
-          style: { ...composerBtnStyle, opacity: !inputText.trim() || sending ? 0.4 : 1 },
-        }, '发送'),
+        h(
+          'button',
+          {
+            onClick: send,
+            disabled: !inputText.trim() || sending,
+            style: { ...composerBtnStyle, opacity: !inputText.trim() || sending ? 0.4 : 1 },
+          },
+          t('composer.send'),
+        ),
       ),
     ),
   )
@@ -1746,9 +1994,10 @@ const pickerStyles = {
     minHeight: 16,
     fontSize: 11,
     lineHeight: '16px',
-    color: tone === 'warn'
-      ? 'var(--dsw-alias-state-warning, #e6a23c)'
-      : 'var(--dsw-alias-label-caption, #999)',
+    color:
+      tone === 'warn'
+        ? 'var(--dsw-alias-state-warning, #e6a23c)'
+        : 'var(--dsw-alias-label-caption, #999)',
   }),
   grid: {
     display: 'grid',
@@ -1899,35 +2148,49 @@ function GridDialog(props) {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  return h('div', {
-    style: pickerDialogStyles.backdrop,
-    onMouseDown: (event) => {
-      if (event.target === event.currentTarget) props.onCancel()
+  return h(
+    'div',
+    {
+      style: pickerDialogStyles.backdrop,
+      onMouseDown: (event) => {
+        if (event.target === event.currentTarget) props.onCancel()
+      },
     },
-  },
-    h('div', {
-      ref: cardRef,
-      role: 'dialog',
-      'aria-modal': 'true',
-      'aria-label': props.title,
-      style: pickerDialogStyles.card,
-    },
+    h(
+      'div',
+      {
+        ref: cardRef,
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': props.title,
+        style: pickerDialogStyles.card,
+      },
       h('div', { style: pickerDialogStyles.title }, props.title),
       h('div', { style: pickerDialogStyles.body }, props.body),
       props.note === undefined ? null : h('div', { style: pickerDialogStyles.note }, props.note),
       props.code === undefined ? null : h('pre', { style: pickerDialogStyles.code }, props.code),
-      h('div', { style: pickerDialogStyles.actions },
-        h('button', {
-          ref: cancelRef,
-          type: 'button',
-          style: pickerDialogStyles.button(false),
-          onClick: props.onCancel,
-        }, '取消'),
-        h('button', {
-          type: 'button',
-          style: pickerDialogStyles.button(true),
-          onClick: props.onConfirm,
-        }, props.confirmLabel),
+      h(
+        'div',
+        { style: pickerDialogStyles.actions },
+        h(
+          'button',
+          {
+            ref: cancelRef,
+            type: 'button',
+            style: pickerDialogStyles.button(false),
+            onClick: props.onCancel,
+          },
+          t('composer.cancel'),
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            style: pickerDialogStyles.button(true),
+            onClick: props.onConfirm,
+          },
+          props.confirmLabel,
+        ),
       ),
     ),
   )
@@ -1939,19 +2202,19 @@ function GridPickerDialog(props) {
   const count = dialog.rows * dialog.cols
   if (dialog.kind === 'unlock') {
     return h(GridDialog, {
-      title: `需要解锁 ${count} 格`,
-      body: `单个界面默认最多 ${maxCells} 格。要使用 ${count} 格，需要先在设置里解锁上限。`,
-      note: `打开 设置 → 通用 → 分屏网格，把「最多格子数」调到 ${count} 或更大；改完立即生效。`,
-      confirmLabel: '知道了',
+      title: t('split.dialog.unlock.title', { count }),
+      body: t('split.dialog.unlock.body', { max: maxCells, count }),
+      note: t('split.dialog.unlock.note', { count }),
+      confirmLabel: t('split.dialog.unlock.btn'),
       onCancel,
       onConfirm,
     })
   }
   return h(GridDialog, {
-    title: `打开 ${count} 个格子？`,
-    body: `单屏超过 ${confirmCells} 个会话时，每个格子都会持有一个会话，同时输出可能造成卡顿。`,
-    note: `确认后仍将使用 ${count} 格，可以随时改回更小的网格。`,
-    confirmLabel: '仍然继续',
+    title: t('split.dialog.confirm.title', { count }),
+    body: t('split.dialog.confirm.body', { confirm: confirmCells }),
+    note: t('split.dialog.confirm.note', { count }),
+    confirmLabel: t('split.dialog.confirm.btn'),
     onCancel,
     onConfirm,
   })
@@ -1962,7 +2225,8 @@ function GridChoiceGrid(props) {
   const { preview, maxCells, confirmCells, onPreview, onChoose, focusTick } = props
   const gridRef = useRef(null)
   const previewCount = preview.rows * preview.cols
-  const tone = previewCount > maxCells ? 'blocked' : previewCount > confirmCells ? 'confirm' : 'active'
+  const tone =
+    previewCount > maxCells ? 'blocked' : previewCount > confirmCells ? 'confirm' : 'active'
   useEffect(() => {
     gridRef.current?.focus()
   }, [focusTick])
@@ -1996,33 +2260,39 @@ function GridChoiceGrid(props) {
       const count = r * c
       const inside = r <= preview.rows && c <= preview.cols
       const state = inside ? tone : 'idle'
-      cells.push(h('button', {
-        key: `${r}.${c}`,
-        type: 'button',
-        tabIndex: -1,
-        'aria-label': `${r} 行 × ${c} 列，共 ${count} 格`,
-        style: pickerStyles.cell(state),
-        onMouseEnter: () => onPreview({ rows: r, cols: c }),
-        onClick: () => onChoose(r, c),
-      }))
+      cells.push(
+        h('button', {
+          key: `${r}.${c}`,
+          type: 'button',
+          tabIndex: -1,
+          'aria-label': t('aria.gridCell', { rows: r, cols: c, count }),
+          style: pickerStyles.cell(state),
+          onMouseEnter: () => onPreview({ rows: r, cols: c }),
+          onClick: () => onChoose(r, c),
+        }),
+      )
     }
   }
 
-  return h('div', {
-    ref: gridRef,
-    role: 'group',
-    'aria-label': '选择行数与列数',
-    tabIndex: 0,
-    style: pickerStyles.grid,
-    onKeyDown,
-  }, cells)
+  return h(
+    'div',
+    {
+      ref: gridRef,
+      role: 'group',
+      'aria-label': t('aria.chooseGrid'),
+      tabIndex: 0,
+      style: pickerStyles.grid,
+      onKeyDown,
+    },
+    cells,
+  )
 }
 
 /** Hint line: what clicking the highlighted block will do. */
 function pickerHint(blocked, confirm, maxCells, confirmCells) {
-  if (blocked) return { tone: 'warn', text: `超过上限 ${maxCells} 格，去设置解锁` }
-  if (confirm) return { tone: 'warn', text: `超过 ${confirmCells} 格，确认后继续` }
-  return { tone: 'muted', text: `建议不超过 ${confirmCells} 格` }
+  if (blocked) return { tone: 'warn', text: t('split.grid.hint.blocked', { max: maxCells }) }
+  if (confirm) return { tone: 'warn', text: t('split.grid.hint.confirm', { count: confirmCells }) }
+  return { tone: 'muted', text: t('split.grid.hint.max', { count: confirmCells }) }
 }
 
 /**
@@ -2056,11 +2326,14 @@ function GridPickerPanel(props) {
     setAnchor(panelPosition(el.getBoundingClientRect()))
   }, [anchorRef, props.anchorPos])
 
-  const close = useCallback((refocus) => {
-    onOpenChange(false)
-    setPreview(null)
-    if (refocus) anchorRef?.current?.focus()
-  }, [anchorRef, onOpenChange])
+  const close = useCallback(
+    (refocus) => {
+      onOpenChange(false)
+      setPreview(null)
+      if (refocus) anchorRef?.current?.focus()
+    },
+    [anchorRef, onOpenChange],
+  )
 
   const closeDialog = useCallback(() => {
     setDialog(null)
@@ -2100,62 +2373,83 @@ function GridPickerPanel(props) {
     }
   }, [open, dialog, close, place, anchorRef])
 
-  const commit = useCallback((nextRows, nextCols) => {
-    onApply(nextRows, nextCols)
-    setDialog(null)
-    close(true)
-  }, [onApply, close])
-
-  const choose = useCallback((nextRows, nextCols) => {
-    const nextCount = nextRows * nextCols
-    if (nextCount > maxCells) {
-      setDialog({ kind: 'unlock', rows: nextRows, cols: nextCols })
-      return
-    }
-    // Shrinking a layout that already exceeded the soft limit needs no warning.
-    if (nextCount > confirmCells && nextCount > rows * cols) {
-      setDialog({ kind: 'confirm', rows: nextRows, cols: nextCols })
-      return
-    }
-    commit(nextRows, nextCols)
-  }, [maxCells, confirmCells, rows, cols, commit])
-
-  const dialogNode = dialog === null ? null : h(GridPickerDialog, {
-    dialog,
-    maxCells,
-    confirmCells,
-    onCancel: closeDialog,
-    onConfirm: () => {
-      if (dialog.kind === 'confirm') commit(dialog.rows, dialog.cols)
-      else closeDialog()
+  const commit = useCallback(
+    (nextRows, nextCols) => {
+      onApply(nextRows, nextCols)
+      setDialog(null)
+      close(true)
     },
-  })
+    [onApply, close],
+  )
 
-  return h(React.Fragment, null,
-    open ? h('div', {
-      ref: panelRef,
-      role: 'dialog',
-      'aria-label': '选择网格大小',
-      style: {
-        ...pickerStyles.panel,
-        top: anchor === null ? 0 : anchor.top,
-        left: anchor === null ? 0 : anchor.left,
-      },
+  const choose = useCallback(
+    (nextRows, nextCols) => {
+      const nextCount = nextRows * nextCols
+      if (nextCount > maxCells) {
+        setDialog({ kind: 'unlock', rows: nextRows, cols: nextCols })
+        return
+      }
+      // Shrinking a layout that already exceeded the soft limit needs no warning.
+      if (nextCount > confirmCells && nextCount > rows * cols) {
+        setDialog({ kind: 'confirm', rows: nextRows, cols: nextCols })
+        return
+      }
+      commit(nextRows, nextCols)
     },
-      h('div', { style: pickerStyles.caption },
-        `${shown.rows} 行 × ${shown.cols} 列`,
-        h('span', { style: pickerStyles.captionMeta }, ` · ${count} 格`),
-      ),
-      h(GridChoiceGrid, {
-        preview: shown,
-        maxCells,
-        confirmCells,
-        focusTick,
-        onPreview: setPreview,
-        onChoose: choose,
-      }),
-      h('div', { style: pickerStyles.hint(hint.tone) }, hint.text),
-    ) : null,
+    [maxCells, confirmCells, rows, cols, commit],
+  )
+
+  const dialogNode =
+    dialog === null
+      ? null
+      : h(GridPickerDialog, {
+          dialog,
+          maxCells,
+          confirmCells,
+          onCancel: closeDialog,
+          onConfirm: () => {
+            if (dialog.kind === 'confirm') commit(dialog.rows, dialog.cols)
+            else closeDialog()
+          },
+        })
+
+  return h(
+    React.Fragment,
+    null,
+    open
+      ? h(
+          'div',
+          {
+            ref: panelRef,
+            role: 'dialog',
+            'aria-label': t('split.grid.pick'),
+            style: {
+              ...pickerStyles.panel,
+              top: anchor === null ? 0 : anchor.top,
+              left: anchor === null ? 0 : anchor.left,
+            },
+          },
+          h(
+            'div',
+            { style: pickerStyles.caption },
+            t('split.grid.preview.caption', { rows: shown.rows, cols: shown.cols }),
+            h(
+              'span',
+              { style: pickerStyles.captionMeta },
+              ` · ${count} ${t('split.grid.cellSuffix')}`,
+            ),
+          ),
+          h(GridChoiceGrid, {
+            preview: shown,
+            maxCells,
+            confirmCells,
+            focusTick,
+            onPreview: setPreview,
+            onChoose: choose,
+          }),
+          h('div', { style: pickerStyles.hint(hint.tone) }, hint.text),
+        )
+      : null,
     dialogNode,
   )
 }
@@ -2171,7 +2465,9 @@ const titleStyles = {
     height: 8,
     borderRadius: '50%',
     flexShrink: 0,
-    background: running ? 'var(--dsw-alias-state-success, #4caf50)' : 'var(--dsw-alias-label-caption, #999)',
+    background: running
+      ? 'var(--dsw-alias-state-success, #4caf50)'
+      : 'var(--dsw-alias-label-caption, #999)',
     transition: 'background 0.3s',
   }),
   text: {
@@ -2210,7 +2506,9 @@ const titleStyles = {
     padding: 0,
     border: 'none',
     borderRadius: 'var(--dsw-radius-sm, 6px)',
-    background: hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))' : 'transparent',
+    background: hover
+      ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
+      : 'transparent',
     color: 'var(--dsw-alias-label-tertiary, #999)',
     cursor: 'pointer',
     fontSize: 11,
@@ -2229,7 +2527,12 @@ function CellTitle(props) {
   const [hover, setHover] = useState(false)
   const [saving, setSaving] = useState(false)
   const aliveRef = useRef(true)
-  useEffect(() => () => { aliveRef.current = false }, [])
+  useEffect(
+    () => () => {
+      aliveRef.current = false
+    },
+    [],
+  )
 
   const openPicker = (e) => {
     const select = e.currentTarget.parentElement?.querySelector('select')
@@ -2252,18 +2555,24 @@ function CellTitle(props) {
     // that cannot resolve the Session's agent never settles, so the wait is
     // bounded and the title simply stays as it was.
     setSaving(true)
-    const settle = () => { if (aliveRef.current) setSaving(false) }
+    const settle = () => {
+      if (aliveRef.current) setSaving(false)
+    }
     const timer = setTimeout(settle, RENAME_TIMEOUT_MS)
-    Promise.resolve(face.rename(next)).then(settle, settle).finally(() => clearTimeout(timer))
+    Promise.resolve(face.rename(next))
+      .then(settle, settle)
+      .finally(() => clearTimeout(timer))
   }
 
-  return h(React.Fragment, null,
+  return h(
+    React.Fragment,
+    null,
     h('span', { style: titleStyles.dot(running) }),
     editing
       ? h('input', {
           autoFocus: true,
           value: draft,
-          'aria-label': '重命名会话',
+          'aria-label': t('split.cell.rename.tooltip'),
           onChange: (e) => setDraft(e.target.value),
           onKeyDown: (e) => {
             if (e.key === 'Enter') {
@@ -2277,26 +2586,34 @@ function CellTitle(props) {
           onBlur: commit,
           style: titleStyles.input,
         })
-      : h('button', {
-          type: 'button',
-          title: saving ? '正在保存' : '切换会话',
-          style: { ...titleStyles.text, opacity: saving ? 0.5 : 1 },
-          onClick: openPicker,
-        }, title),
+      : h(
+          'button',
+          {
+            type: 'button',
+            title: saving ? t('split.cell.rename.saving') : t('split.session.picker.aria'),
+            style: { ...titleStyles.text, opacity: saving ? 0.5 : 1 },
+            onClick: openPicker,
+          },
+          title,
+        ),
     editing
       ? null
-      : h('button', {
-          type: 'button',
-          title: '重命名会话',
-          'aria-label': '重命名会话',
-          style: titleStyles.action(hover),
-          onMouseEnter: () => setHover(true),
-          onMouseLeave: () => setHover(false),
-          onClick: () => {
-            setDraft(title)
-            setEditing(true)
+      : h(
+          'button',
+          {
+            type: 'button',
+            title: t('split.cell.rename.tooltip'),
+            'aria-label': t('split.cell.rename.tooltip'),
+            style: titleStyles.action(hover),
+            onMouseEnter: () => setHover(true),
+            onMouseLeave: () => setHover(false),
+            onClick: () => {
+              setDraft(title)
+              setEditing(true)
+            },
           },
-        }, '✎'),
+          '✎',
+        ),
   )
 }
 
@@ -2316,7 +2633,9 @@ const cellPickerStyles = {
     height: 22,
     marginLeft: 4,
     borderRadius: 'var(--dsw-radius-sm, 6px)',
-    background: hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))' : 'transparent',
+    background: hover
+      ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
+      : 'transparent',
     color: 'var(--dsw-alias-label-tertiary, #999)',
   }),
   glyph: {
@@ -2344,22 +2663,30 @@ const cellPickerStyles = {
  */
 function CellPicker(props) {
   const [hover, setHover] = useState(false)
-  return h('span', {
-    style: cellPickerStyles.wrap(hover),
-    onMouseEnter: () => setHover(true),
-    onMouseLeave: () => setHover(false),
-  },
-    h('span', { style: cellPickerStyles.glyph, 'aria-hidden': true }, '▾'),
-    h('select', {
-      style: cellPickerStyles.select,
-      value: props.value,
-      'aria-label': '切换会话',
-      onChange: (e) => props.onChange(e.target.value || null),
+  return h(
+    'span',
+    {
+      style: cellPickerStyles.wrap(hover),
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => setHover(false),
     },
+    h('span', { style: cellPickerStyles.glyph, 'aria-hidden': true }, '▾'),
+    h(
+      'select',
+      {
+        style: cellPickerStyles.select,
+        value: props.value,
+        'aria-label': t('split.session.picker.aria'),
+        onChange: (e) => props.onChange(e.target.value || null),
+      },
       h('option', { value: '' }, props.placeholder),
       props.options.map((s) =>
-        h('option', { key: s.id, value: s.id },
-          (s.displayTitle || s.title || s.id.slice(0, 8)) + (s.running ? '（运行中）' : '')),
+        h(
+          'option',
+          { key: s.id, value: s.id },
+          (s.displayTitle || s.title || s.id.slice(0, 8)) +
+            (s.running ? t('split.session.running') : ''),
+        ),
       ),
     ),
   )
@@ -2396,12 +2723,7 @@ function SplitMain(props) {
   const [zooms, setZooms] = useState(() => savedZooms(saved))
 
   const zoomIn = useCallback((index, delta) => {
-    setZooms((prev) => {
-      const next = [...prev]
-      const current = next[index] ?? 1
-      next[index] = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, current + delta))
-      return next
-    })
+    setZooms((prev) => stepZoom(prev, index, delta))
   }, [])
 
   const items = list?.ids?.map((id) => list.byId[id]).filter(Boolean) ?? []
@@ -2428,11 +2750,12 @@ function SplitMain(props) {
         unsubs.push(unsub)
       } catch {}
     }
-    return () => unsubs.forEach((u) => {
-      try {
-        u()
-      } catch {}
-    })
+    return () =>
+      unsubs.forEach((u) => {
+        try {
+          u()
+        } catch {}
+      })
   }, [nonBlank.length])
 
   const total = rows * cols
@@ -2446,16 +2769,19 @@ function SplitMain(props) {
   }
 
   /** Sessions of one Workspace, in the Workspace's own order, blanks dropped. */
-  const sessionsOfWorkspace = useCallback((workspaceId) => {
-    const ws = workspaceItems.find((w) => String(w.workspaceId) === workspaceId)
-    if (!ws) return []
-    const ranked = []
-    for (const id of ws.sessionIds ?? []) {
-      const row = list?.byId?.[id]
-      if (row && !row.blank) ranked.push(row)
-    }
-    return ranked
-  }, [workspaceItems, list])
+  const sessionsOfWorkspace = useCallback(
+    (workspaceId) => {
+      const ws = workspaceItems.find((w) => String(w.workspaceId) === workspaceId)
+      if (!ws) return []
+      const ranked = []
+      for (const id of ws.sessionIds ?? []) {
+        const row = list?.byId?.[id]
+        if (row && !row.blank) ranked.push(row)
+      }
+      return ranked
+    },
+    [workspaceItems, list],
+  )
 
   /**
    * Resolve one drop into a cell assignment. Both sidebar row kinds publish a
@@ -2464,16 +2790,19 @@ function SplitMain(props) {
    * @param raw - dataTransfer text.
    * @returns the cell to assign, or null when the payload belongs to neither.
    */
-  const cellFromDrop = useCallback((raw) => {
-    const payload = String(raw ?? '').trim()
-    if (!payload) return null
-    if (list?.byId?.[payload]) return { t: 'session', id: payload }
-    const ws = workspaceItems.find((w) => String(w.workspaceId) === payload)
-    if (!ws) return null
-    const workspaceId = String(ws.workspaceId)
-    const first = sessionsOfWorkspace(workspaceId)[0]
-    return { t: 'workspace', ws: workspaceId, id: first?.id ?? null }
-  }, [list, workspaceItems, sessionsOfWorkspace])
+  const cellFromDrop = useCallback(
+    (raw) => {
+      const payload = String(raw ?? '').trim()
+      if (!payload) return null
+      if (list?.byId?.[payload]) return { t: 'session', id: payload }
+      const ws = workspaceItems.find((w) => String(w.workspaceId) === payload)
+      if (!ws) return null
+      const workspaceId = String(ws.workspaceId)
+      const first = sessionsOfWorkspace(workspaceId)[0]
+      return { t: 'workspace', ws: workspaceId, id: first?.id ?? null }
+    },
+    [list, workspaceItems, sessionsOfWorkspace],
+  )
 
   useEffect(() => {
     const size = rows * cols
@@ -2550,35 +2879,47 @@ function SplitMain(props) {
     overflow: 'hidden',
   }
 
-  return h('div', { style: gridStyle },
-    Array.from({ length: total }, (_, i) => h(SplitCell, {
-      key: i,
-      index: i,
-      cell: cells[i],
-      sessions,
-      nonBlank,
-      workspaceItems,
-      sessionsOfWorkspace,
-      active: i === activeCell,
-      dragOver: dragOver === i,
-      zoom: zooms[i] ?? 1,
-      cellStyle,
-      headerStyle: cellHeaderStyle,
-      onActivate: () => setActiveCell(i),
-      onDragOverCell: () => setDragOver(i),
-      onDragLeaveCell: () => setDragOver((current) => (current === i ? -1 : current)),
-      onDropCell: (raw) => {
-        const next = cellFromDrop(raw)
-        if (next) setCell(i, next)
-      },
-      onPick: (id) => {
-        const cell = cells[i]
-        setCell(i, id === null
-          ? null
-          : cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id } : { t: 'session', id })
-      },
-      onZoom: (delta) => zoomIn(i, delta),
-    })),
+  return h(
+    'div',
+    { style: gridStyle },
+    Array.from({ length: total }, (_, i) =>
+      h(SplitCell, {
+        key: i,
+        index: i,
+        cell: cells[i],
+        sessions,
+        nonBlank,
+        workspaceItems,
+        sessionsOfWorkspace,
+        active: i === activeCell,
+        dragOver: dragOver === i,
+        zoom: zooms[i] ?? 1,
+        cellStyle,
+        headerStyle: cellHeaderStyle,
+        onActivate: () => setActiveCell(i),
+        onDragOverCell: () => setDragOver(i),
+        onDragLeaveCell: () => setDragOver((current) => (current === i ? -1 : current)),
+        onDropCell: (raw) => {
+          // Clear the drop highlight here: a successful drop often lands without a
+          // following dragleave, which would leave the tile looking hovered.
+          setDragOver(-1)
+          const next = cellFromDrop(raw)
+          if (next) setCell(i, next)
+        },
+        onPick: (id) => {
+          const cell = cells[i]
+          setCell(
+            i,
+            id === null
+              ? null
+              : cell?.t === 'workspace'
+                ? { t: 'workspace', ws: cell.ws, id }
+                : { t: 'session', id },
+          )
+        },
+        onZoom: (delta) => zoomIn(i, delta),
+      }),
+    ),
   )
 }
 
@@ -2588,57 +2929,79 @@ function SplitMain(props) {
  */
 function SplitCell(props) {
   const {
-    index, cell, sessions, nonBlank, workspaceItems, sessionsOfWorkspace,
-    active, dragOver, zoom, cellStyle, headerStyle,
-    onActivate, onDragOverCell, onDragLeaveCell, onDropCell, onPick, onZoom,
+    index,
+    cell,
+    sessions,
+    nonBlank,
+    workspaceItems,
+    sessionsOfWorkspace,
+    active,
+    dragOver,
+    zoom,
+    cellStyle,
+    headerStyle,
+    onActivate,
+    onDragOverCell,
+    onDragLeaveCell,
+    onDropCell,
+    onPick,
+    onZoom,
   } = props
   const sid = cell?.id ?? null
-  const sess = sid === null ? null : nonBlank.find((s) => s.id === sid) ?? null
+  const sess = sid === null ? null : (nonBlank.find((s) => s.id === sid) ?? null)
   // A Workspace cell offers only that Workspace's Sessions in its picker.
   const options = cell?.t === 'workspace' ? sessionsOfWorkspace(cell.ws) : nonBlank
-  const wsTitle = cell?.t === 'workspace'
-    ? (workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ?? '项目')
-    : null
+  const wsTitle =
+    cell?.t === 'workspace'
+      ? (workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ??
+        t('split.workspace.title'))
+      : null
 
-  return h('div', {
-    style: {
-      ...cellStyle,
-      // Inset ring marks the active tile without touching the shared dividers
-      // or shifting the tile's box.
-      boxShadow: active
-        ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
-        : 'none',
-      background: dragOver
-        ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
-        : cellStyle.background,
-    },
-    onMouseDown: onActivate,
-    // Accept a Sidebar drag: a Session row or a project row.
-    onDragOver: (e) => {
-      e.preventDefault()
-      try {
-        e.dataTransfer.dropEffect = 'move'
-      } catch (_e) {}
-      onDragOverCell()
-    },
-    onDragLeave: onDragLeaveCell,
-    onDrop: (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      let raw = ''
-      try {
-        raw = e.dataTransfer?.getData('text/plain') ?? ''
-      } catch (_e) {}
-      onDropCell(raw)
-    },
-  },
-    h(CellZoom, { zoom, onZoom },
-      h('div', {
-        style: {
-          ...headerStyle,
-          background: active ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)' : 'transparent',
-        },
+  return h(
+    'div',
+    {
+      style: {
+        ...cellStyle,
+        // Inset ring marks the active tile without touching the shared dividers
+        // or shifting the tile's box.
+        boxShadow: active
+          ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
+          : 'none',
+        background: dragOver
+          ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
+          : cellStyle.background,
       },
+      onMouseDown: onActivate,
+      // Accept a Sidebar drag: a Session row or a project row.
+      onDragOver: (e) => {
+        e.preventDefault()
+        try {
+          e.dataTransfer.dropEffect = 'move'
+        } catch (_e) {}
+        onDragOverCell()
+      },
+      onDragLeave: onDragLeaveCell,
+      onDrop: (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        let raw = ''
+        try {
+          raw = e.dataTransfer?.getData('text/plain') ?? ''
+        } catch (_e) {}
+        onDropCell(raw)
+      },
+    },
+    h(
+      CellZoom,
+      { zoom, onZoom },
+      h(
+        'div',
+        {
+          style: {
+            ...headerStyle,
+            background: active ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)' : 'transparent',
+          },
+        },
         sess
           ? h(CellTitle, {
               sessions,
@@ -2646,17 +3009,35 @@ function SplitCell(props) {
               title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
               running: sess.running,
             })
-          : h('span', { style: { flex: '1 1 auto', color: 'var(--dsw-alias-label-caption, #999)', whiteSpace: 'nowrap' } }, `第 ${index + 1} 格`),
+          : h(
+              'span',
+              {
+                style: {
+                  flex: '1 1 auto',
+                  color: 'var(--dsw-alias-label-caption, #999)',
+                  whiteSpace: 'nowrap',
+                },
+              },
+              t('split.cell.empty.placeholder', { n: index + 1 }),
+            ),
         h(CellPicker, {
           value: sid ?? '',
-          placeholder: wsTitle === null ? '选择会话…' : `${wsTitle}（选会话）`,
+          placeholder:
+            wsTitle === null
+              ? t('split.session.pick')
+              : t('split.session.pickScoped', { ws: wsTitle }),
           options,
           onChange: onPick,
         }),
       ),
       cell?.t === 'workspace' && sess === null
-        ? h('div', { style: { flex: 1, padding: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
-            options.length === 0 ? `项目「${wsTitle}」还没有会话` : '从上方选择该项目的会话')
+        ? h(
+            'div',
+            { style: { flex: 1, padding: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
+            options.length === 0
+              ? t('split.workspace.empty', { ws: wsTitle })
+              : t('split.cell.pickFromAbove'),
+          )
         : h(CellView, { sessions, sessionId: sid }),
     ),
   )
@@ -2710,10 +3091,14 @@ function LimitsRow() {
     const value = Number(event.target.value)
     if (Number.isInteger(value) && value >= 1) updateLimits({ confirmOverCells: value })
   }
-  return h('div', { style: limitsRowStyles.row },
-    h('span', { style: limitsRowStyles.label }, '分屏网格'),
-    h('label', { style: limitsRowStyles.field },
-      '最多格子数',
+  return h(
+    'div',
+    { style: limitsRowStyles.row },
+    h('span', { style: limitsRowStyles.label }, t('split.settings.row.label')),
+    h(
+      'label',
+      { style: limitsRowStyles.field },
+      t('split.settings.row.maxLabel'),
       h('input', {
         type: 'number',
         min: 1,
@@ -2724,8 +3109,10 @@ function LimitsRow() {
         style: limitsRowStyles.input,
       }),
     ),
-    h('label', { style: limitsRowStyles.field },
-      '超过此数须确认',
+    h(
+      'label',
+      { style: limitsRowStyles.field },
+      t('split.settings.row.confirmLabel'),
       h('input', {
         type: 'number',
         min: 1,
@@ -2736,8 +3123,7 @@ function LimitsRow() {
         style: limitsRowStyles.input,
       }),
     ),
-    h('span', { style: limitsRowStyles.hint },
-      '默认最多 10 格；调到 10 以上即解锁。修改立即生效。'),
+    h('span', { style: limitsRowStyles.hint }, t('split.settings.row.hint')),
   )
 }
 
@@ -2760,55 +3146,78 @@ export function apply(ctx) {
     const geo = fitGeometry(start.rows, start.cols, getLimits().maxCells)
     saveLayout({ ...cur, rows: geo.rows, cols: geo.cols, inSplit })
   }
-  ctx.effect(() => () => {
-    try {
-      delete window.__dswsToggle
-      delete window.__dswsInSplit
-    } catch (_e) {}
-  }, 'workspace-split: cleanup')
+  ctx.effect(
+    () => () => {
+      try {
+        delete window.__dswsToggle
+        delete window.__dswsInSplit
+      } catch (_e) {}
+    },
+    'workspace-split: cleanup',
+  )
 
   // Placement of the sidebar control, keyed on the shell's collapsed attribute.
   ctx.effect(() => installSplitStyles(), 'workspace-split: styles')
 
   // The one control for the whole feature: left click toggles the view, right
   // click opens the grid picker, hover says so.
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action',
-    id: 'workspace-split-sidebar',
-    order: 5,
-  }, function SidebarEntry() {
-    const limits = useSyncExternalStore(subscribeLimits, getLimits)
-    return h(SidebarSplitControl, {
-      maxCells: limits.maxCells,
-      confirmCells: limits.confirmOverCells,
-    })
-  }))
+  ctx.slots.inject('sidebar.footer.action', () =>
+    ctx.slots.register(
+      {
+        name: 'sidebar.footer.action',
+        id: 'workspace-split-sidebar',
+        order: 5,
+      },
+      function SidebarEntry() {
+        const limits = useSyncExternalStore(subscribeLimits, getLimits)
+        return h(SidebarSplitControl, {
+          maxCells: limits.maxCells,
+          confirmCells: limits.confirmOverCells,
+        })
+      },
+    ),
+  )
 
-  ctx.slots.inject('conversation.hero.options', () => ctx.slots.register({
-    name: 'conversation.hero.options',
-    id: 'workspace-split-btn-hero',
-    order: 5,
-  }, SplitButton))
+  ctx.slots.inject('conversation.hero.options', () =>
+    ctx.slots.register(
+      {
+        name: 'conversation.hero.options',
+        id: 'workspace-split-btn-hero',
+        order: 5,
+      },
+      SplitButton,
+    ),
+  )
 
   // The browser half cannot read cordis.patch.yml, so the cap lives in General
   // settings; this row is the unlock entry the picker points at.
-  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
-    name: 'settings.general.item',
-    id: 'workspace-split-limits',
-    order: 30,
-  }, LimitsRow))
+  ctx.slots.inject('settings.general.item', () =>
+    ctx.slots.register(
+      {
+        name: 'settings.general.item',
+        id: 'workspace-split-limits',
+        order: 30,
+      },
+      LimitsRow,
+    ),
+  )
 
   const sessionsRef = ctx.sessions
   const workspacesRef = ctx.workspaces
-  ctx.slots.inject('main', () => ctx.slots.register({
-    name: 'main',
-    key: 'split',
-  }, function SplitPanel() {
-    return h(SplitMain, {
-      __sessions: sessionsRef,
-      __workspaces: workspacesRef,
-    })
-  }))
+  ctx.slots.inject('main', () =>
+    ctx.slots.register(
+      {
+        name: 'main',
+        key: 'split',
+      },
+      function SplitPanel() {
+        return h(SplitMain, {
+          __sessions: sessionsRef,
+          __workspaces: workspacesRef,
+        })
+      },
+    ),
+  )
 
   // Auto-enter the split panel after the panel row is registered.
   if (inSplit) {

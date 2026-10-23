@@ -27,10 +27,11 @@ export function t(key, vars = {}) {
   const source = lang === 'en' ? EN : CHINESE
   let msg = source[key] || `[missing:${key}]`
 
-  // Simple interpolation: {{key}} -> value
+  // Interpolation: {{key}} -> value. Any non-nullish value works, because some
+  // placeholders carry text (a session title) and not only numbers.
   msg = String(msg).replace(/\{\{(\w+)\}\}/g, (_, k) => {
     const v = vars[k]
-    return typeof v === 'number' ? v.toString() : ''
+    return v === undefined || v === null ? '' : String(v)
   })
 
   return msg

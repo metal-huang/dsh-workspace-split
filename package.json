@@ -7,7 +7,7 @@
   "scripts": {
     "prepare": "husky",
     "lint": "node gate/lint_runner.mjs",
-    "format": "prettier --write \"packages/*/src/**/*.{js,mjs}\" \"packages/*/*.{js,mjs}\" \"gate/**/*.mjs\" \"test/**/*.js\"",
+    "format": "prettier --write \"packages/*/src/**/*.{js,mjs}\" \"packages/*/*.{js,mjs}\" \"gate/**/*.mjs\" \"scripts/**/*.mjs\" \"test/**/*.js\"",
     "format:check": "node gate/format_check.mjs",
     "dup:check": "node gate/dup_check.mjs",
     "check:fast": "npm run lint && npm run dup:check && npm run format:check",

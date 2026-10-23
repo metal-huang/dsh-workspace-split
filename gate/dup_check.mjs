@@ -18,6 +18,7 @@ const SCAN_PATHS = [
   'packages/dsh-workspace-split/index.js',
   'packages/dsh-workspace-split/build.mjs',
   'gate',
+  'scripts',
 ]
 const MIN_TOKENS = '50'
 

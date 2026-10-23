@@ -17,7 +17,7 @@ const BASELINE_FILE = join(ROOT, 'gate', 'format_baseline.json')
 const baseline = readBaseline(BASELINE_FILE)
 const frozen = new Set(baseline?.files ?? [])
 
-const SCAN_ROOTS = ['packages/dsh-workspace-split/src', 'gate', 'test']
+const SCAN_ROOTS = ['packages/dsh-workspace-split/src', 'gate', 'test', 'scripts']
 const SCAN_FILES = [
   'packages/dsh-workspace-split/index.js',
   'packages/dsh-workspace-split/build.mjs',
