@@ -8,6 +8,9 @@ build/
 out/
 *.tsbuildinfo
 
+# 发布快照：桌面 profile 链接到这里，只在 npm run release 时更新
+.release/
+
 # 门禁报告与本地标记（基线文件在 gate/*.json，必须入库）
 gate-reports/
 gate/reports/

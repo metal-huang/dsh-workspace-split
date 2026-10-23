@@ -14,6 +14,7 @@
     "test": "node --test \"test/**/*.test.js\"",
     "check": "npm run check:fast && npm test",
     "build": "node gate/build_plugin.mjs",
+    "release": "node scripts/release.mjs",
     "check:full": "npm run check && npm run build",
     "ratchet:tighten": "node gate/ratchet_tighten.mjs"
   },

@@ -18,6 +18,9 @@ export default [
     ignores: [
       '**/node_modules/**',
       'packages/*/client.js',
+      // Published snapshot the desktop profile links to: a copy of the built
+      // artifact, never hand-written.
+      '.release/**',
       'gate/reports/**',
       'coverage/**',
       'docs/**',
@@ -34,9 +37,9 @@ export default [
     },
   },
 
-  // Host half, build script and gate scripts run in Node.
+  // Host half, build script, gate scripts and release tooling run in Node.
   {
-    files: ['packages/*/index.js', 'packages/*/build.mjs', 'gate/**/*.mjs'],
+    files: ['packages/*/index.js', 'packages/*/build.mjs', 'gate/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',

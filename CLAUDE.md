@@ -50,6 +50,21 @@ npm install     # 首次
 npm run build
 ```
 
+## 开发版与桌面版隔离
+
+桌面 profile 链接的是 `.release/dsh-workspace-split`，**不是**开发目录。
+在 `packages/` 里怎么重构、怎么重建都不会影响桌面版，只有显式发布才更新：
+
+```bash
+npm run release   # 构建 + 复制到 .release/，桌面版下次启动生效
+```
+
+- 日常验证走 web profile，它链接 `packages/dsh-workspace-split`，实时跟随源码
+- `.release/` 不入库；发布脚本只拷 `files` 里列的运行文件，并要求该包无运行时
+  依赖（有依赖直接报错，必须先打进 bundle）
+- 桌面 profile 的 `package.json` 由 Electron 独占管理，`dsh plugin` 与
+  `dsh --dump-config` 都拒绝操作它；改配置只能编辑文件后在该目录跑 `pnpm install`
+
 ## 目录结构
 
 ```text
