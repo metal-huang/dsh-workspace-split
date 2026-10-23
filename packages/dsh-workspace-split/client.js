@@ -8126,14 +8126,15 @@ var toolStyles = {
     fontSize: "var(--dsh-content-font-size-secondary, 13px)",
     lineHeight: "calc(24px + var(--dsh-content-font-delta, 0px))"
   },
+  // Copied from ui-tool ExitCodeBadge.module.css: a failed call marks itself
+  // with a 4px dot, not a filled pill, so the row keeps its quiet rhythm.
   errorFlag: {
     flex: "none",
-    fontSize: 11,
-    lineHeight: "16px",
-    padding: "0 5px",
-    borderRadius: "var(--dsw-radius-sm, 4px)",
-    background: "var(--dsw-alias-state-error-primary, #e5484d)",
-    color: "#fff"
+    width: 4,
+    height: 4,
+    marginLeft: 8,
+    borderRadius: "50%",
+    background: "var(--dsw-alias-state-error-primary, #e5484d)"
   },
   body: {
     margin: "2px 0 8px 18px",
@@ -8214,7 +8215,7 @@ function ToolRow(props) {
       h("span", { style: toolStyles.name }, name),
       summary ? h("span", { style: toolStyles.sep }) : null,
       summary ? h("span", { style: toolStyles.summary }, summary) : null,
-      isError ? h("span", { style: toolStyles.errorFlag }, "error") : null
+      isError ? h("span", { style: toolStyles.errorFlag, title: "\u6267\u884C\u5931\u8D25" }) : null
     ),
     expanded ? h(
       "div",
