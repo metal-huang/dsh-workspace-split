@@ -21,6 +21,8 @@ export default [
       // Published snapshot the desktop profile links to: a copy of the built
       // artifact, never hand-written.
       '.release/**',
+      // Scratch space for one-off probes; not part of the project.
+      '.tmp/**',
       'gate/reports/**',
       'coverage/**',
       'docs/**',
