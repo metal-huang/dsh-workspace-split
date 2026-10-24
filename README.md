@@ -1,5 +1,9 @@
 # dsh-workspace-split
 
+[![npm](https://img.shields.io/npm/v/@metal-huang/dsh-workspace-split)](https://www.npmjs.com/package/@metal-huang/dsh-workspace-split)
+[![license](https://img.shields.io/npm/l/@metal-huang/dsh-workspace-split)](LICENSE)
+[![DeepSeek Harness](https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.2-blue)](https://github.com/deepseek-ai/deepseek-harness)
+
 English · [中文说明](README.zh-CN.md)
 
 Keep several **live** sessions of DeepSeek Harness side by side and type in any

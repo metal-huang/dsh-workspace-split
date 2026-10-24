@@ -1,5 +1,9 @@
 # dsh-workspace-split
 
+[![npm](https://img.shields.io/npm/v/@metal-huang/dsh-workspace-split)](https://www.npmjs.com/package/@metal-huang/dsh-workspace-split)
+[![license](https://img.shields.io/npm/l/@metal-huang/dsh-workspace-split)](LICENSE)
+[![DeepSeek Harness](https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.2-blue)](https://github.com/deepseek-ai/deepseek-harness)
+
 [English](README.md) · 中文说明
 
 把多个**正在运行**的 DeepSeek Harness 会话并排放在同一个窗口里，每个格子都能
