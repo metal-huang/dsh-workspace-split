@@ -2,6 +2,12 @@ name: publish
 
 # Tag-triggered release: pushing v<version> publishes to npm and opens a GitHub
 # release. The tag must match packages/dsh-workspace-split/package.json.
+#
+# npm publishing uses Trusted Publishing: GitHub's OIDC token proves the
+# workflow's identity to npm, so no NPM_TOKEN secret exists to leak or expire.
+# Configure it once at
+#   https://www.npmjs.com/package/@metal-huang/dsh-workspace-split/access
+# with repository `metal-huang/dsh-workspace-split` and workflow `publish.yml`.
 on:
   push:
     tags: ['v*']
@@ -9,7 +15,7 @@ on:
 
 permissions:
   contents: write
-  id-token: write # npm provenance
+  id-token: write # required by Trusted Publishing
 
 jobs:
   publish:
@@ -20,7 +26,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing needs npm >= 11.5; Node 22 ships an older one.
+      - name: Update npm
+        run: npm install -g npm@latest
 
       - name: Install repository tooling
         run: npm ci
@@ -34,21 +43,29 @@ jobs:
       - name: Verify
         run: npm run check
 
-      - name: Check tag matches the manifest
+      # A re-pushed tag should still produce a release without failing on
+      # "version already published".
+      - name: Resolve version
+        id: version
         run: |
           version=$(node -p "require('./packages/dsh-workspace-split/package.json').version")
           if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match package version $version" >&2
             exit 1
           fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          if npm view "@metal-huang/dsh-workspace-split@$version" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish to npm
+        if: steps.version.outputs.already == 'false'
         run: npm publish --provenance
         working-directory: packages/dsh-workspace-split
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create the GitHub release
-        run: gh release create "${GITHUB_REF_NAME}" --generate-notes
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
