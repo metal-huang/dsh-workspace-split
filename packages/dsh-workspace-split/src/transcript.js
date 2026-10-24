@@ -17,7 +17,11 @@
  *   event source has already retired the transient rows);
  * - `llm/retry` drops the partial text of the attempt it abandons;
  * - an `assistant/attempt` — an attempt that settled without a surface message —
- *   still shows the text it streamed, matching the harness's interrupted node.
+ *   still shows the text it streamed, matching the harness's interrupted node;
+ * - only what a reader wrote and read reaches the cell: replacement surface
+ *   copies (compaction, pruning) stay model-only, and injected context messages
+ *   (time context, job notices, catalogs, runtime snapshots, approvals) are not
+ *   drawn as bubbles, exactly as Chat classifies them.
  *
  * Kept free of React and DOM so the rules can be tested directly.
  */
@@ -207,7 +211,49 @@ function failureReason(result) {
   return result?.error?.reason ?? result?.error?.name ?? ''
 }
 
-/** Pair tool results with the calls that answer them, in one pass. */
+/**
+ * Whether an event entered the transcript at its own log position.
+ *
+ * A surface event carries either `surfaceOp: 'append'` or a replacement range
+ * (`{ op: 'replace', startSeq, endSeq }`). Replacement copies — a compaction
+ * checkpoint, a pruned Tool result, a rewritten system message — exist for the
+ * model only: the harness deliberately keeps them out of the human transcript,
+ * because a landed replacement would erase what the reader already saw. The
+ * plugin reads the same log, so it applies the same filter (isAppendSurfaceEvent
+ * in ui-chat).
+ * @param ev - one session event.
+ * @returns true for events the transcript may draw.
+ */
+function isAppendSurface(ev) {
+  return ev?.surfaceOp === 'append'
+}
+
+/**
+ * Whether a `user/message` is a human prompt rather than injected context.
+ *
+ * Every non-human injection (time context, runtime snapshot, skill catalog,
+ * model selection, job notice, subagent settlement, approval, compaction
+ * checkpoint) is a durable `user/message` whose `source.kind` names its
+ * producer. Chat draws only `kind: 'user'` as a bubble; everything else is a
+ * folded context row with a producer label. The split cell keeps no context
+ * rows, so those messages stay out of it entirely.
+ * @param ev - one `user/message` event.
+ * @returns true when a reader typed this message.
+ */
+function isHumanPrompt(ev) {
+  if (!isAppendSurface(ev)) return false
+  const source = ev.data?.source
+  // Old logs predate `source`; a message without one can only be human input.
+  return source === undefined || source?.kind === 'user'
+}
+
+/**
+ * Pair tool results with the calls that answer them, in one pass.
+ *
+ * Only append-origin results count: a replacement copy is the pruned or
+ * rewritten model-facing body, which is exactly what the reader should not see
+ * in place of the output the call produced.
+ */
 function pairToolResults(list) {
   const results = new Map()
   const calls = new Set()
@@ -215,7 +261,7 @@ function pairToolResults(list) {
     const ev = entry?.event
     if (ev?.type === 'tool/call') {
       if (ev.data?.callId !== undefined) calls.add(ev.data.callId)
-    } else if (ev?.type === 'tool/result') {
+    } else if (ev?.type === 'tool/result' && isAppendSurface(ev)) {
       results.set(resultCallId(ev), ev.data)
     }
   }
@@ -326,6 +372,8 @@ function onAttempt(ev, ctx) {
  * row the live chunks already occupy so the answer does not jump down the list.
  */
 function onMessage(ev, ctx) {
+  // A replacement copy (compaction rewriting an earlier answer) is model-only.
+  if (!isAppendSurface(ev)) return
   const text = contentText(ev.data?.message?.content)
   const key = streamKey(ev.data?.turn, ev.data?.step)
   if (settle(ctx.streams.get(key), text)) {
@@ -368,8 +416,14 @@ function onTurnStart(ev, ctx) {
   })
 }
 
-/** User prompt: literal text, in the bubble style. */
+/**
+ * User prompt: literal text, in the bubble style.
+ *
+ * Only what a reader typed: injected context and replacement copies are the
+ * model's reading material, not the transcript's (see `isHumanPrompt`).
+ */
 function onUserMessage(ev, ctx) {
+  if (!isHumanPrompt(ev)) return
   const text = contentText(ev.data?.content)
   if (text === '') return
   ctx.rows.push({
@@ -389,6 +443,9 @@ function onToolCall(ev, ctx) {
 
 /** Orphan tool result: its call is outside the loaded window. */
 function onToolResult(ev, ctx) {
+  // A replacement copy is the pruned body the model sees; the call row keeps
+  // whatever the append-origin result in the window says.
+  if (!isAppendSurface(ev)) return
   const id = resultCallId(ev)
   // Drawn by its call row when that call is in the window.
   if (ctx.tools.calls.has(id)) return

@@ -1,11 +1,15 @@
 /**
  * Transcript folding rules.
  *
- * A live Assistant attempt reaches the cell as one transient entry per model
- * token. Rendering those entries one-to-one put every token in its own
- * paragraph, so a reply inside a split cell read as one character per line
- * (`不` / `要` / `用` / `` ` `` / `js` ...). These tests pin the fold: one row
- * per attempt, the settlement wins, and a retry drops the abandoned text.
+ * Two behaviours came straight from bug reports:
+ *
+ * - a live Assistant attempt reaches the cell as one transient entry per model
+ *   token, and rendering them one-to-one read as one character per line
+ *   (`不` / `要` / `用` / `` ` `` / `js` ...), so the fold keeps one row per
+ *   attempt;
+ * - the log also carries model-facing injections (time context, job notices,
+ *   catalogs, compaction checkpoints) as `user/message` events, which Chat does
+ *   not draw as bubbles, so the cell must not draw them either.
  */
 
 import assert from 'node:assert/strict'
@@ -16,7 +20,17 @@ import { buildTranscript, streamText } from '../packages/dsh-workspace-split/src
 /** Minimal `t` so labels do not depend on the harness language. */
 const t = (key, vars = {}) => `${key}${vars.n === undefined ? '' : `:${vars.n}`}`
 
+/** A replacement surface marker, as a compaction or pruning event carries it. */
+const REPLACED = { op: 'replace', startSeq: 1, endSeq: 2 }
+
 let seq = 0
+
+/** One durable surface event that appended to the transcript. */
+function surface(type, data, extra = {}) {
+  seq += 1
+  return { type: 'event', event: { type, seq, time: 0, surfaceOp: 'append', data, ...extra } }
+}
+
 /** One transient live-chunk entry, as the event source hands it to the cell. */
 function live(turn, step, chunk) {
   seq += 1
@@ -24,7 +38,7 @@ function live(turn, step, chunk) {
     type: 'transient',
     event: {
       type: 'assistant/live-chunk',
-      seq: 1000 - 1 / seq,
+      seq: 10000 - 1 / seq,
       time: 0,
       data: { attemptId: 'attempt-1', turn, step, chunk },
     },
@@ -34,6 +48,43 @@ function live(turn, step, chunk) {
 /** A text-delta chunk for one block index. */
 function delta(index, text) {
   return { type: 'text-delta', index, text }
+}
+
+/** A durable human prompt. */
+function prompt(text, source = { kind: 'user' }) {
+  return surface('user/message', { content: [{ type: 'text', text }], source })
+}
+
+/** A durable Assistant settlement. */
+function reply(turn, step, text, extra = {}) {
+  return surface(
+    'assistant/message',
+    { turn, step, message: { content: [{ type: 'text', text }] } },
+    extra,
+  )
+}
+
+/** A tool call row source. */
+function toolCall(callId, name, args) {
+  return {
+    type: 'event',
+    event: { type: 'tool/call', seq: (seq += 1), time: 0, data: { callId, name, arguments: args } },
+  }
+}
+
+/** A tool result, append-origin unless a replacement marker is passed. */
+function toolResult(callId, text, surfaceOp = 'append') {
+  seq += 1
+  return {
+    type: 'event',
+    event: {
+      type: 'tool/result',
+      seq,
+      time: 0,
+      surfaceOp,
+      data: { message: { toolCallId: callId, content: [{ type: 'text', text }] } },
+    },
+  }
 }
 
 describe('buildTranscript: live Assistant chunks', () => {
@@ -69,15 +120,7 @@ describe('buildTranscript: live Assistant chunks', () => {
 
   it('keeps the row where the attempt started as more tokens arrive', () => {
     const entries = [
-      {
-        type: 'event',
-        event: {
-          type: 'user/message',
-          seq: 1,
-          time: 0,
-          data: { turn: 1, content: [{ type: 'text', text: 'hi' }] },
-        },
-      },
+      prompt('hi'),
       live(1, 1, delta(0, 'a')),
       { type: 'event', event: { type: 'turn/start', seq: 2, time: 0, data: { turn: 2 } } },
       live(1, 1, delta(0, 'b')),
@@ -135,22 +178,7 @@ describe('buildTranscript: live Assistant chunks', () => {
 
 describe('buildTranscript: settlements', () => {
   it('lets the durable message supersede the folded row in place', () => {
-    const entries = [
-      live(1, 1, delta(0, 'partial')),
-      {
-        type: 'event',
-        event: {
-          type: 'assistant/message',
-          seq: 5,
-          time: 0,
-          data: {
-            turn: 1,
-            step: 1,
-            message: { content: [{ type: 'text', text: 'partial answer' }] },
-          },
-        },
-      },
-    ]
+    const entries = [live(1, 1, delta(0, 'partial')), reply(1, 1, 'partial answer')]
 
     const rows = buildTranscript(entries, t)
     assert.equal(rows.length, 1)
@@ -159,18 +187,7 @@ describe('buildTranscript: settlements', () => {
   })
 
   it('renders a durable message on its own when no live row exists', () => {
-    const entries = [
-      {
-        type: 'event',
-        event: {
-          type: 'assistant/message',
-          seq: 9,
-          time: 0,
-          data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'settled' }] } },
-        },
-      },
-    ]
-    const rows = buildTranscript(entries, t)
+    const rows = buildTranscript([reply(1, 1, 'settled')], t)
     assert.equal(rows.length, 1)
     assert.equal(rows[0].text, 'settled')
   })
@@ -179,26 +196,18 @@ describe('buildTranscript: settlements', () => {
     // A cancelled turn settles its delivered prefix as `assistant/message`, and
     // the prefix can hold text on both sides of a Tool call.
     const entries = [
-      {
-        type: 'event',
-        event: {
-          type: 'assistant/message',
-          seq: 9,
-          time: 0,
-          data: {
-            turn: 1,
-            step: 1,
-            interrupted: true,
-            message: {
-              content: [
-                { type: 'text', text: 'first' },
-                { type: 'tool_use', id: 'c1', name: 'read', input: {} },
-                { type: 'text', text: 'second' },
-              ],
-            },
-          },
+      surface('assistant/message', {
+        turn: 1,
+        step: 1,
+        interrupted: true,
+        message: {
+          content: [
+            { type: 'text', text: 'first' },
+            { type: 'tool_use', id: 'c1', name: 'read', input: {} },
+            { type: 'text', text: 'second' },
+          ],
         },
-      },
+      }),
     ]
     const rows = buildTranscript(entries, t)
     assert.equal(rows.length, 1)
@@ -227,6 +236,88 @@ describe('buildTranscript: settlements', () => {
     const rows = buildTranscript(entries, t)
     assert.equal(rows.length, 1)
     assert.equal(rows[0].text, 'interrupted')
+  })
+})
+
+describe('buildTranscript: what the transcript hides', () => {
+  it('draws a human prompt but not the context injected around it', () => {
+    // The screenshot case: the job notice and the time context arrived as
+    // `user/message` and rendered as if the reader had typed them.
+    const entries = [
+      prompt('真的问题', { kind: 'user', rpcId: 'r1' }),
+      prompt('background job pwsh-1 finished [status: killed]. Read its output with job_output.', {
+        kind: 'tool-jobs',
+        form: 'notice',
+      }),
+      prompt('Time sampled while preparing turn 98, step 1: 2026-10-24T03:54:28+08:00', {
+        kind: 'time-context',
+      }),
+      prompt(
+        'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.',
+        {
+          kind: 'runtime-context',
+          form: 'snapshot',
+        },
+      ),
+    ]
+
+    const rows = buildTranscript(entries, t)
+    assert.deepEqual(
+      rows.map((row) => row.text),
+      ['真的问题'],
+    )
+  })
+
+  it('keeps a prompt that predates the source field', () => {
+    const entries = [surface('user/message', { content: [{ type: 'text', text: 'old log' }] })]
+    assert.deepEqual(
+      buildTranscript(entries, t).map((row) => row.text),
+      ['old log'],
+    )
+  })
+
+  it('hides a compaction checkpoint replacing an earlier span', () => {
+    const entries = [
+      prompt('first prompt'),
+      reply(1, 1, 'first answer'),
+      surface(
+        'user/message',
+        {
+          content: [{ type: 'text', text: 'This is an automatically generated checkpoint...' }],
+          source: { kind: 'compact-checkpoint', compactionId: 'c1' },
+        },
+        { surfaceOp: REPLACED },
+      ),
+    ]
+
+    const rows = buildTranscript(entries, t)
+    assert.deepEqual(
+      rows.map((row) => row.kind),
+      ['user', 'assistant'],
+      'the model-only replacement copy must not be drawn',
+    )
+  })
+
+  it('hides an Assistant replacement copy', () => {
+    const entries = [reply(1, 1, 'rewritten for the model', { surfaceOp: REPLACED })]
+    assert.deepEqual(buildTranscript(entries, t), [])
+  })
+
+  it('keeps the append-origin tool result when a pruned copy follows it', () => {
+    const entries = [
+      toolCall('c1', 'read', '{"p":1}'),
+      toolResult('c1', 'real output'),
+      toolResult('c1', '[pruned 512 bytes]', REPLACED),
+    ]
+
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1, 'the pruned copy is model-only')
+    assert.equal(rows[0].tool.resultText, 'real output')
+  })
+
+  it('hides a pruned result whose call is outside the window', () => {
+    const rows = buildTranscript([toolResult('gone', '[pruned 512 bytes]', REPLACED)], t)
+    assert.deepEqual(rows, [])
   })
 })
 
@@ -300,19 +391,7 @@ describe('buildTranscript: retries and replay', () => {
       },
       { type: 'event', event: { type: 'llm/retry', seq: 5, time: 0, data: { turn: 1, step: 1 } } },
       live(1, 1, delta(0, 'Hello world')),
-      {
-        type: 'event',
-        event: {
-          type: 'assistant/message',
-          seq: 6,
-          time: 0,
-          data: {
-            turn: 1,
-            step: 1,
-            message: { content: [{ type: 'text', text: 'Hello world' }] },
-          },
-        },
-      },
+      reply(1, 1, 'Hello world'),
     ]
 
     const rows = buildTranscript(entries, t)
@@ -326,15 +405,7 @@ describe('buildTranscript: retries and replay', () => {
     // A reconnect baseline appends the reconstructed chunks at the tail of the
     // window, after the durable message they belong to.
     const entries = [
-      {
-        type: 'event',
-        event: {
-          type: 'assistant/message',
-          seq: 9,
-          time: 0,
-          data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'answer' }] } },
-        },
-      },
+      reply(1, 1, 'answer'),
       live(1, 1, delta(0, 'ans')),
       live(1, 1, delta(0, 'wer')),
     ]
@@ -347,26 +418,7 @@ describe('buildTranscript: retries and replay', () => {
 
 describe('buildTranscript: other rows', () => {
   it('pairs a tool call with the result that answers it', () => {
-    const entries = [
-      {
-        type: 'event',
-        event: {
-          type: 'tool/call',
-          seq: 1,
-          time: 0,
-          data: { callId: 'c1', name: 'read', arguments: '{"p":1}' },
-        },
-      },
-      {
-        type: 'event',
-        event: {
-          type: 'tool/result',
-          seq: 2,
-          time: 0,
-          data: { message: { toolCallId: 'c1', content: [{ type: 'text', text: 'body' }] } },
-        },
-      },
-    ]
+    const entries = [toolCall('c1', 'read', '{"p":1}'), toolResult('c1', 'body')]
 
     const rows = buildTranscript(entries, t)
     assert.equal(rows.length, 1, 'the result row folds into the call row')
@@ -380,18 +432,7 @@ describe('buildTranscript: other rows', () => {
   })
 
   it('keeps an orphan result as its own row', () => {
-    const entries = [
-      {
-        type: 'event',
-        event: {
-          type: 'tool/result',
-          seq: 2,
-          time: 0,
-          data: { message: { toolCallId: 'gone', content: [{ type: 'text', text: 'body' }] } },
-        },
-      },
-    ]
-    const rows = buildTranscript(entries, t)
+    const rows = buildTranscript([toolResult('gone', 'body')], t)
     assert.equal(rows.length, 1)
     assert.equal(rows[0].tool.name, 'toolrow.result.name')
     assert.equal(rows[0].tool.resultText, 'body')
@@ -400,15 +441,7 @@ describe('buildTranscript: other rows', () => {
   it('keeps user prompts, turn dividers, and ignores unrelated events', () => {
     const entries = [
       { type: 'event', event: { type: 'turn/start', seq: 1, time: 0, data: { turn: 2 } } },
-      {
-        type: 'event',
-        event: {
-          type: 'user/message',
-          seq: 2,
-          time: 0,
-          data: { content: [{ type: 'text', text: 'go' }] },
-        },
-      },
+      prompt('go'),
       { type: 'event', event: { type: 'step/start', seq: 3, time: 0, data: { turn: 2, step: 1 } } },
     ]
     const rows = buildTranscript(entries, t)
