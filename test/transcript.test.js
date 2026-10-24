@@ -175,6 +175,36 @@ describe('buildTranscript: settlements', () => {
     assert.equal(rows[0].text, 'settled')
   })
 
+  it('keeps an interrupted message readable when a tool call splits its text', () => {
+    // A cancelled turn settles its delivered prefix as `assistant/message`, and
+    // the prefix can hold text on both sides of a Tool call.
+    const entries = [
+      {
+        type: 'event',
+        event: {
+          type: 'assistant/message',
+          seq: 9,
+          time: 0,
+          data: {
+            turn: 1,
+            step: 1,
+            interrupted: true,
+            message: {
+              content: [
+                { type: 'text', text: 'first' },
+                { type: 'tool_use', id: 'c1', name: 'read', input: {} },
+                { type: 'text', text: 'second' },
+              ],
+            },
+          },
+        },
+      },
+    ]
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].text, 'first\n\nsecond')
+  })
+
   it('shows the streamed text of an attempt that settled without a message', () => {
     const entries = [
       {
@@ -198,7 +228,9 @@ describe('buildTranscript: settlements', () => {
     assert.equal(rows.length, 1)
     assert.equal(rows[0].text, 'interrupted')
   })
+})
 
+describe('buildTranscript: retries and replay', () => {
   it('drops the abandoned text of a retried attempt', () => {
     const entries = [
       live(1, 1, delta(0, 'oops')),
@@ -245,6 +277,71 @@ describe('buildTranscript: settlements', () => {
     assert.equal(rows.length, 1, 'the settlement must not add a second row')
     assert.equal(rows[0].text, '半句')
     assert.equal(rows[0].streaming, false)
+  })
+
+  it('drops a settled attempt when the step is retried afterwards', () => {
+    // The agent loop settles a failed attempt as `assistant/attempt` and only
+    // then emits `llm/retry`; the abandoned half-sentence must not sit above the
+    // retried answer.
+    const entries = [
+      live(1, 1, delta(0, 'Hello wor')),
+      {
+        type: 'event',
+        event: {
+          type: 'assistant/attempt',
+          seq: 4,
+          time: 0,
+          data: {
+            turn: 1,
+            step: 1,
+            stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: ['Hello wor'] }],
+          },
+        },
+      },
+      { type: 'event', event: { type: 'llm/retry', seq: 5, time: 0, data: { turn: 1, step: 1 } } },
+      live(1, 1, delta(0, 'Hello world')),
+      {
+        type: 'event',
+        event: {
+          type: 'assistant/message',
+          seq: 6,
+          time: 0,
+          data: {
+            turn: 1,
+            step: 1,
+            message: { content: [{ type: 'text', text: 'Hello world' }] },
+          },
+        },
+      },
+    ]
+
+    const rows = buildTranscript(entries, t)
+    assert.deepEqual(
+      rows.map((row) => row.text),
+      ['Hello world'],
+    )
+  })
+
+  it('does not grow a second row from chunks replayed after their settlement', () => {
+    // A reconnect baseline appends the reconstructed chunks at the tail of the
+    // window, after the durable message they belong to.
+    const entries = [
+      {
+        type: 'event',
+        event: {
+          type: 'assistant/message',
+          seq: 9,
+          time: 0,
+          data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'answer' }] } },
+        },
+      },
+      live(1, 1, delta(0, 'ans')),
+      live(1, 1, delta(0, 'wer')),
+    ]
+
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].text, 'answer')
   })
 })
 
@@ -343,7 +440,32 @@ describe('streamText', () => {
           chunk: { type: 'block-end', index: 2, block: { type: 'text', text: 'c' } },
         },
       ]),
-      'abc',
+      'ab\n\nc',
+      'a second text block is a second paragraph, not a run-on',
+    )
+  })
+
+  it('keeps the paragraph break across a tool call', () => {
+    assert.equal(
+      streamText([
+        { type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: ['first'] },
+        {
+          type: 'chunk',
+          time: 1,
+          chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'first' } },
+        },
+        {
+          type: 'chunk',
+          time: 2,
+          chunk: {
+            type: 'block-end',
+            index: 1,
+            block: { type: 'tool_use', id: 'c1', name: 'read' },
+          },
+        },
+        { type: 'text-chunks', time0: 3, index: 2, dt: [1], texts: ['second'] },
+      ]),
+      'first\n\nsecond',
     )
   })
 

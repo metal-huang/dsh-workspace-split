@@ -29,6 +29,10 @@ const keyOnly = (key) => key
 
 /**
  * Narration of an Assistant message or a user prompt.
+ *
+ * Blocks are separated by a blank line: a settlement that streamed text, a Tool
+ * call, then more text carries two text blocks, and gluing them together would
+ * read as one run-on sentence ("firstsecond").
  * @param content - content blocks.
  * @returns the joined text blocks.
  */
@@ -37,7 +41,7 @@ function contentText(content) {
   return blocks
     .filter((block) => block?.type === 'text' && typeof block.text === 'string')
     .map((block) => block.text)
-    .join('')
+    .join('\n\n')
 }
 
 /**
@@ -57,14 +61,26 @@ function recordText(record) {
   return record.chunk.text ?? ''
 }
 
+/** Block index a compact record's text belongs to. */
+function streamIndex(record) {
+  const index = record?.type === 'chunk' ? record.chunk?.index : record?.index
+  return Number.isInteger(index) ? index : 0
+}
+
 /**
  * Text streamed by one durable attempt.
  * @param records - compact stream records from `assistant/attempt`.
- * @returns joined text deltas, in stream order.
+ * @returns joined text deltas, one paragraph per text block.
  */
 export function streamText(records) {
   const list = Array.isArray(records) ? records : []
-  return list.map(recordText).join('')
+  const blocks = new Map()
+  for (const record of list) {
+    const text = recordText(record)
+    if (text === '') continue
+    accumulate(blocks, streamIndex(record), 'text', text)
+  }
+  return blockText(blocks)
 }
 
 // ---------- live chunk folding ----------
@@ -220,6 +236,10 @@ function onLiveChunk(ev, ctx) {
   const turn = ev.data?.turn
   const step = ev.data?.step
   const key = streamKey(turn, step)
+  // A reconnect baseline can replay an attempt's chunks *after* its settlement
+  // row (the event source appends them at the tail), so a settled step must not
+  // grow a second row for text it already shows.
+  if (ctx.settled.has(key)) return
   let stream = ctx.streams.get(key)
   if (stream === undefined) {
     stream = { row: undefined, blocks: new Map() }
@@ -236,6 +256,12 @@ function onLiveChunk(ev, ctx) {
   ctx.rows.push(stream.row)
 }
 
+/** Drop one row, if it is still in the list. */
+function dropRow(rows, row) {
+  const at = rows.indexOf(row)
+  if (at >= 0) rows.splice(at, 1)
+}
+
 /**
  * Drop the folded rows of abandoned attempts.
  *
@@ -249,31 +275,50 @@ function onRetry(ev, ctx) {
   const turn = ev.data?.turn
   const step = ev.data?.step
   const target = turn === undefined && step === undefined ? undefined : streamKey(turn, step)
+  dropStreams(ctx, target)
+  dropAttempts(ctx, target)
+  if (target !== undefined) ctx.settled.delete(target)
+}
+
+/** Forget the open folds of the targeted step (every step when no target). */
+function dropStreams(ctx, target) {
   for (const [attempt, stream] of ctx.streams) {
     if (target !== undefined && attempt !== target) continue
-    const at = ctx.rows.indexOf(stream.row)
-    if (at >= 0) ctx.rows.splice(at, 1)
+    dropRow(ctx.rows, stream.row)
     ctx.streams.delete(attempt)
   }
 }
 
-/** `assistant/attempt`: an attempt that settled without a surface message. */
+/** Forget the settled-attempt rows of the targeted step (every step when no target). */
+function dropAttempts(ctx, target) {
+  for (const [attempt, row] of ctx.attempts) {
+    if (target !== undefined && attempt !== target) continue
+    dropRow(ctx.rows, row)
+    ctx.attempts.delete(attempt)
+  }
+}
+
+/**
+ * `assistant/attempt`: an attempt that settled without a surface message.
+ *
+ * The row is kept but tracked: a retry in the same step removes it, while an
+ * attempt left as the step's last word keeps showing what it streamed.
+ */
 function onAttempt(ev, ctx) {
   const text = streamText(ev.data?.stream)
   const key = streamKey(ev.data?.turn, ev.data?.step)
   // Same ownership rule as a message: an attempt that already has a live row
   // keeps it, so the text does not appear twice when both rows are in the window.
-  if (settle(ctx.streams.get(key), text)) {
+  const stream = ctx.streams.get(key)
+  if (settle(stream, text)) {
+    ctx.attempts.set(key, stream.row)
     ctx.streams.delete(key)
     return
   }
   if (text.trim() === '') return
-  ctx.rows.push({
-    key: `attempt-${key}`,
-    kind: 'assistant',
-    text,
-    turn: ev.data?.turn,
-  })
+  const row = { key: `attempt-${key}`, kind: 'assistant', text, turn: ev.data?.turn }
+  ctx.rows.push(row)
+  ctx.attempts.set(key, row)
 }
 
 /**
@@ -285,9 +330,11 @@ function onMessage(ev, ctx) {
   const key = streamKey(ev.data?.turn, ev.data?.step)
   if (settle(ctx.streams.get(key), text)) {
     ctx.streams.delete(key)
+    ctx.settled.add(key)
     return
   }
   if (text === '') return
+  ctx.settled.add(key)
   ctx.rows.push({
     key: `message-${ev.seq ?? key}`,
     kind: 'assistant',
@@ -372,7 +419,16 @@ const HANDLERS = new Map([
  */
 export function buildTranscript(entries, t = keyOnly) {
   const list = Array.isArray(entries) ? entries : []
-  const ctx = { rows: [], streams: new Map(), tools: pairToolResults(list), t }
+  const ctx = {
+    rows: [],
+    streams: new Map(),
+    // Attempts that settled without a message, and steps whose settlement is
+    // already on screen, both keyed by Turn/Step.
+    attempts: new Map(),
+    settled: new Set(),
+    tools: pairToolResults(list),
+    t,
+  }
   for (const entry of list) {
     const ev = entry?.event
     if (ev === undefined || ev === null) continue
