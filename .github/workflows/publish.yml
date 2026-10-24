@@ -1,0 +1,54 @@
+name: publish
+
+# Tag-triggered release: pushing v<version> publishes to npm and opens a GitHub
+# release. The tag must match packages/dsh-workspace-split/package.json.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install repository tooling
+        run: npm ci
+
+      - name: Install plugin build dependencies
+        run: npm ci
+        working-directory: packages/dsh-workspace-split
+
+      # The gate rebuilds the committed artifact and compares it byte for byte,
+      # so a tag whose source and bundle disagree never reaches npm.
+      - name: Verify
+        run: npm run check
+
+      - name: Check tag matches the manifest
+        run: |
+          version=$(node -p "require('./packages/dsh-workspace-split/package.json').version")
+          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package version $version" >&2
+            exit 1
+          fi
+
+      - name: Publish to npm
+        run: npm publish --provenance
+        working-directory: packages/dsh-workspace-split
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create the GitHub release
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
