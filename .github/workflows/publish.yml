@@ -31,11 +31,13 @@ jobs:
       - name: Update npm
         run: npm install -g npm@latest
 
+      # The lockfile is generated on Windows and lacks Linux-only optional
+      # binaries (jscpd's native module), so resolve instead of a strict ci.
       - name: Install repository tooling
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Install plugin build dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
         working-directory: packages/dsh-workspace-split
 
       # The gate rebuilds the committed artifact and compares it byte for byte,
