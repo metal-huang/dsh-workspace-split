@@ -84,8 +84,8 @@ npm run release      # publish a snapshot for the desktop profile
 ```
 
 `packages/dsh-workspace-split/src/client.js` is the source. `client.js` next to
-it is generated — never edit it by hand; `test/artifact.test.js` rebuilds and
-byte-compares it.
+it is generated and not tracked by git — `npm install` in that package builds it
+through `prepare`, and `npm run build` rebuilds it. Never edit it by hand.
 
 See [AGENTS.md](AGENTS.md) for the repository rules and [docs/](docs) for the
 product and design notes.

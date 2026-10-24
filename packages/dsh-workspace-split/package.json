@@ -34,7 +34,8 @@
     "icon.svg"
   ],
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "prepare": "node build.mjs"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

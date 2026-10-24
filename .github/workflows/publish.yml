@@ -40,8 +40,16 @@ jobs:
         run: npm install --no-audit --no-fund
         working-directory: packages/dsh-workspace-split
 
-      # The gate rebuilds the committed artifact and compares it byte for byte,
-      # so a tag whose source and bundle disagree never reaches npm.
+      # The client artifact is generated, not tracked. Build it here so a
+      # checkout that cannot build fails before the publish step; the package's
+      # `prepare` rebuilds it again while packing, so the tarball matches this
+      # commit rather than anyone's working tree.
+      - name: Build the client artifact
+        run: npm run build
+        working-directory: packages/dsh-workspace-split
+
+      # Contract tests: loader envelope, only platform modules required, and two
+      # consecutive builds agreeing byte for byte.
       - name: Verify
         run: npm run check
 

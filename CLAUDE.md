@@ -36,7 +36,7 @@
 packages/dsh-workspace-split/
 ├── index.js          # Host 半侧，手写
 ├── src/client.js     # 客户端源码，改这个
-├── client.js         # 客户端产物，GENERATED FILE，不要直接改
+├── client.js         # 客户端产物，GENERATED FILE，不入库，`npm run build` 生成
 ├── build.mjs         # esbuild 打包脚本
 └── cordis.patch.yml  # 插件行与 Config
 ```
@@ -46,9 +46,12 @@ packages/dsh-workspace-split/
 
 ```bash
 cd packages/dsh-workspace-split
-npm install     # 首次
+npm install     # 首次；包的 prepare 会顺带构建一次
 npm run build
 ```
+
+产物不入库（`.gitignore` 挡住）：npm 包里的那份由 `prepare` 在打包前重建，
+所以 clone 下来没有 `client.js` 是正常的，构建一次即可。
 
 ## 开发版与桌面版隔离
 

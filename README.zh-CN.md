@@ -77,7 +77,8 @@ npm run release      # 发布桌面 profile 用的快照
 ```
 
 `packages/dsh-workspace-split/src/client.js` 是源码；同目录的 `client.js` 是
-构建产物，**不要手改**——`test/artifact.test.js` 会重新构建并逐字节比对。
+构建产物，**不要手改**，也不入库——在该包里 `npm install` 会走 `prepare`
+构建一次，之后改源码用 `npm run build` 重建。
 
 仓库规则见 [AGENTS.md](AGENTS.md)，产品与设计文档见 [docs/](docs)。
 

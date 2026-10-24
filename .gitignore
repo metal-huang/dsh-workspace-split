@@ -8,6 +8,10 @@ build/
 out/
 *.tsbuildinfo
 
+# 客户端产物：build.mjs 从 src/ 生成，进 npm 包但不入 git。
+# 包内 `prepare` 在打包前重建，所以 npm 上那份永远和 tag 里的源码同源。
+packages/*/client.js
+
 # 发布快照：桌面 profile 链接到这里，只在 npm run release 时更新
 .release/
 

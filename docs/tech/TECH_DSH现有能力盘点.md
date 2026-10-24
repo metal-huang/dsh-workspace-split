@@ -191,6 +191,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 本项目采用这条路径。客户端源码在 `packages/dsh-workspace-split/src/client.js`，
 用 esbuild 打包成 `packages/dsh-workspace-split/client.js`（产物顶部有
 `GENERATED FILE` 标记，不要直接改），构建命令 `npm run build`。
+产物不入库：npm 上那份由包的 `prepare` 在打包前重建，所以仓库里只有源码。
 平台模块（`react` 等 11 个）保持 external，其余全部内联，所以产物里只有
 一句 `require("react")`。
 

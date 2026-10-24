@@ -17,7 +17,7 @@ packages/dsh-workspace-split/
 │   ├── i18n.js       # 取词函数
 │   ├── messages.js   # 中文词表
 │   └── locale/en.json# 英文覆盖
-├── client.js         # 客户端产物（GENERATED，不要手改）
+├── client.js         # 客户端产物（GENERATED，不入库；npm run build 生成）
 ├── build.mjs         # esbuild 打包脚本
 └── cordis.patch.yml  # 插件行
 ```
@@ -27,9 +27,12 @@ packages/dsh-workspace-split/
 
 ## 三条不能破的
 
-**1. 不要手改产物。** `packages/dsh-workspace-split/client.js` 是 `npm run build`
-生成的。改了 `src/` 就必须重新构建，并在**同一个提交**里带上产物——否则
-`test/artifact.test.js`（重新构建 + 逐字节比对）会红。
+**1. 不手改产物，产物也不入库。** `packages/dsh-workspace-split/client.js` 由
+`npm run build` 从 `src/` 生成，`.gitignore` 已挡住它。改完 `src/` 在包目录跑一次
+构建（或 `npm install`，包的 `prepare` 会自动构建）就能在 web profile 里看到变化。
+npm 上那份也一样：CI 与 `prepare` 都在打包前重建，所以它永远和 tag 里的源码同源。
+`test/artifact.test.js` 校验的是构建结果本身——loader envelope、只 `require` 平台
+模块、两次构建逐字节一致、产物不被 git 跟踪——不再比对某个提交里的文件。
 
 **2. 只 add 自己的文件。** 用 `git add <路径>`，不用 `git add -A`、不用 `git add .`。
 提交前 `git diff --cached --stat` 逐条对一遍：暂存区里每个路径，都得是自己这轮改的。
@@ -52,7 +55,7 @@ npm run build        # 重建产物
 | lint 警告数 | `gate/lint_baseline.json` |
 | 重复代码 | `gate/dup_baseline.json` |
 | 格式豁免清单 | `gate/format_baseline.json` |
-| 产物一致性 | `test/artifact.test.js` |
+| 构建产物契约 | `test/artifact.test.js` |
 
 `npm run ratchet:tighten` **只向下写**：测出来比基线高只报警、不落盘。
 基线只在确有必要时用 `--seed` 上调，并在提交信息里写明理由。
@@ -75,7 +78,7 @@ type(scope): description
 - 主题 ≤ 72 字符，结尾不加句号
 - body 可选，用 `- ` 列条目；**写「为什么」**，不写「改了什么」
 
-一次提交只表达一件事。产物与源码同提交。
+一次提交只表达一件事。
 
 ## 改代码时
 
