@@ -14,7 +14,7 @@ import { mathFromMarkdown } from 'mdast-util-math'
 import katex from 'katex'
 
 const h = React.createElement
-const { useState, useEffect, useCallback, useSyncExternalStore, useRef } = React
+const { useState, useEffect, useLayoutEffect, useCallback, useSyncExternalStore, useRef } = React
 
 // ---------- i18n ----------
 import { t } from './i18n.js'
@@ -24,6 +24,9 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 
 // ---------- transcript folding ----------
 import { buildTranscript } from './transcript.js'
+
+// ---------- sidebar control placement ----------
+import { centerOffset } from './layout.js'
 
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
@@ -1142,9 +1145,10 @@ function panelPosition(rect) {
 /**
  * Install the stylesheet that places the sidebar control.
  *
- * Placement depends on the shell's own `data-sidebar-collapsed` attribute, so
- * it is expressed in CSS: the sidebar remounts its subtree when it collapses,
- * which defeats a width observer or a mutation listener bound to one node.
+ * Horizontal placement depends on the shell's own `data-sidebar-collapsed`
+ * attribute, so it is expressed in CSS: the sidebar remounts its subtree when it
+ * collapses, which defeats a width observer or a mutation listener bound to one
+ * node. Vertical placement is measured instead — see `useAccountRowAlignment`.
  * @returns disposer removing the stylesheet.
  */
 function installSplitStyles() {
@@ -1154,16 +1158,71 @@ function installSplitStyles() {
   style.id = SPLIT_STYLE_ID
   style.textContent = [
     // Expanded: the footer slot owns a row above the account row, so push to
-    // that row's trailing edge and drop one row to sit on the account row.
-    // The transform only moves paint, so a stack level keeps the later-painted
-    // account row from covering the control.
-    '.dsws-icon-btn{margin-left:auto;margin-right:4px;transform:translateY(40px);z-index:1}',
+    // that row's trailing edge. The measured transform moves it down onto the
+    // account row; `z-index` keeps the later-painted row from covering it.
+    '.dsws-icon-btn{margin-left:auto;margin-right:4px;z-index:1}',
     // Rail: the footer row centres its children and the account row is a later
-    // sibling, so dropping the offsets puts the control above the avatar.
-    '[data-sidebar-collapsed="true"] .dsws-icon-btn{margin-left:0;margin-right:0;transform:none;z-index:auto}',
+    // sibling, so dropping the offsets puts the control above the avatar. The
+    // measured offset is an inline style, which only `!important` can outrank —
+    // the shell's attribute stays authoritative whatever the measurement did.
+    '[data-sidebar-collapsed="true"] .dsws-icon-btn{margin-left:0;margin-right:0;z-index:auto;transform:none!important}',
   ].join('\n')
   document.head.append(style)
   return () => style.remove()
+}
+
+/**
+ * Keep the sidebar control centred on the account row.
+ *
+ * The slot renders its entries in a row of its own, above the account row. How
+ * far down that row sits is the shell's business — font scale, the account
+ * row's own padding, the other footer actions — so the old fixed `translateY(40px)`
+ * only lined up by accident and left the control floating between the two rows.
+ * Measure both boxes instead, and re-measure when either changes size.
+ *
+ * The offset is written straight to the element's style rather than held in
+ * state: it is a measurement of the layout, and routing it through a render
+ * would make every pass depend on the transform it just applied. It runs before
+ * paint so the control never shows up in its old spot first.
+ * @param ref - the control's button.
+ */
+function useAccountRowAlignment(ref) {
+  useLayoutEffect(() => {
+    // A slot entry's ref can still be empty while the node is laid out, so fall
+    // back to the rendered class; there is one control per page.
+    const button = ref.current ?? document.querySelector('.dsws-icon-btn')
+    const row = button?.parentElement?.nextElementSibling ?? null
+    if (button === null || button === undefined || row === null) return undefined
+    let frame = 0
+    const align = () => {
+      frame = 0
+      if (button.closest('[data-sidebar-collapsed="true"]') !== null) {
+        button.style.removeProperty('transform')
+        return
+      }
+      // Measure from the untransformed box: the offset IS a transform, so
+      // leaving the previous one in place would stack a delta on every pass.
+      button.style.transform = 'none'
+      const offset = centerOffset(button.getBoundingClientRect(), row.getBoundingClientRect())
+      button.style.transform = `translateY(${offset}px)`
+    }
+    const schedule = () => {
+      if (frame === 0) frame = requestAnimationFrame(align)
+    }
+    align()
+    window.addEventListener('resize', schedule)
+    let observer = null
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(schedule)
+      observer.observe(row)
+      observer.observe(button)
+    }
+    return () => {
+      window.removeEventListener('resize', schedule)
+      if (observer !== null) observer.disconnect()
+      if (frame !== 0) cancelAnimationFrame(frame)
+    }
+  }, [ref])
 }
 
 /**
@@ -1177,6 +1236,8 @@ function SidebarSplitControl(props) {
   const [tip, setTip] = useState(null)
   const [pickOpen, setPickOpen] = useState(false)
   const [anchorPos, setAnchorPos] = useState(null)
+  const buttonRef = useRef(null)
+  useAccountRowAlignment(buttonRef)
 
   // Everything below reads the box off the event's own node: a ref on a slot
   // entry can stay empty while the element is already laid out.
@@ -1204,6 +1265,7 @@ function SidebarSplitControl(props) {
       'button',
       {
         type: 'button',
+        ref: buttonRef,
         className: 'dsws-icon-btn',
         'aria-label': SIDEBAR_CONTROL_HINT,
         'aria-haspopup': 'dialog',
