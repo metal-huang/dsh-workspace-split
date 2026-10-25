@@ -111,6 +111,20 @@
 - TC-17 ⏳ 键盘焦点与窄窗口已修，待浏览器手动验证
 - TC-15 ✅ Windows web profile 689 会话下正常
 
+## 自动化回归（E2E）
+
+`npm run test:e2e` 用本机 Chrome/Chromium 的无头模式跑 `test/e2e/`：静态服务起一个
+复刻桌面端 footer 结构的页面（含 slot 的 `display: contents` 包裹层、mobile 入口
+与账号行），加载插件真实的 `src/layout.js`。
+
+- TC-E2E-01 侧栏控件垂直居中对齐账号行：断言实测偏移 ≈ 60.3px、控件中心与账号行
+  中心偏差 < 0.6px。这条是桌面端「图标浮在两行之间」的回归用例——用旧写法
+  （`parentElement.nextElementSibling`）会直接失败。
+- TC-E2E-02 折叠态：shell 的 `data-sidebar-collapsed="true"` 必须压过内联
+  `translateY`，计算样式回到 `none`。
+
+找不到浏览器时整组跳过（可设 `DSWS_CHROME` 指定路径）。
+
 ## 已知限制
 - 完整发送链路（prompt → LLM 回复）需要 API key，测试环境未覆盖
 - 格子内消息为只读简版渲染，无 Markdown/代码高亮

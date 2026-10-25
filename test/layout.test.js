@@ -15,6 +15,7 @@ import { describe, it } from 'node:test'
 
 import {
   accountRowOf,
+  alignToAccountRow,
   centerOffset,
   layoutContainer,
 } from '../packages/dsh-workspace-split/src/layout.js'
@@ -22,13 +23,15 @@ import {
 /** A viewport box with only the fields the placement math reads. */
 const box = (top, height) => ({ top, height })
 
-/** Minimal element tree: parent link, child list, and sibling wiring. */
-function element(display, parent = null) {
+/** Minimal element tree: parent link, child list, sibling wiring, and a box. */
+function element(display, parent = null, rect = null) {
   const node = {
     display,
     parentElement: parent,
     nextElementSibling: null,
     children: [],
+    style: {},
+    getBoundingClientRect: () => rect ?? box(0, 0),
     get lastElementChild() {
       return this.children.at(-1) ?? null
     },
@@ -89,6 +92,50 @@ describe('accountRowOf', () => {
     const button = element('inline-flex', wrapper)
     assert.equal(accountRowOf(button, displayOf), null)
     assert.equal(accountRowOf(null, displayOf), null)
+  })
+})
+
+describe('alignToAccountRow', () => {
+  /** Desktop-shaped footer whose button and account row are 60.3px apart. */
+  function desktopFooter() {
+    const footArea = element('flex')
+    const footerActions = element('flex', footArea)
+    const anchor = element('contents', footerActions)
+    const entry = element('contents', anchor)
+    // The button reports the box it currently occupies, transform included.
+    const button = element('inline-flex', entry)
+    button.getBoundingClientRect = () => {
+      const shift = /translateY\((-?[\d.]+)px\)/.exec(button.style.transform ?? '')
+      return box(713.7 + (shift === null ? 0 : Number(shift[1])), 28)
+    }
+    const settingsArea = element('flex', footArea, box(753.7, 68.6))
+    return { button, settingsArea }
+  }
+
+  it('writes the offset that centres the control on the account row', () => {
+    const { button } = desktopFooter()
+    const offset = alignToAccountRow(button, displayOf)
+    assert.ok(Math.abs(offset - 60.3) < 1e-9)
+    assert.equal(button.style.transform, 'translateY(60.3px)')
+  })
+
+  it('does not stack the offset when it runs twice', () => {
+    // The offset is a transform, so a second pass that measured the already
+    // moved box would add its delta again; the helper resets before measuring.
+    const { button } = desktopFooter()
+    alignToAccountRow(button, displayOf)
+    const again = alignToAccountRow(button, displayOf)
+    assert.ok(Math.abs(again - 60.3) < 1e-9)
+    assert.equal(button.style.transform, 'translateY(60.3px)')
+  })
+
+  it('leaves the control alone when the shell has no account row', () => {
+    const body = element('block')
+    const wrapper = element('contents', body)
+    const button = element('inline-flex', wrapper)
+    button.style.transform = 'translateY(7px)'
+    assert.equal(alignToAccountRow(button, displayOf), null)
+    assert.equal(button.style.transform, 'translateY(7px)')
   })
 })
 

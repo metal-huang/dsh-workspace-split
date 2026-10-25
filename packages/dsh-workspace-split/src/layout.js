@@ -56,3 +56,45 @@ export function centerOffset(self, row) {
   if (!(self.height > 0) || !(row.height > 0)) return 0
   return row.top + row.height / 2 - (self.top + self.height / 2)
 }
+
+/**
+ * Centre the control on the account row below it, in place.
+ *
+ * The offset is written straight to the element's style rather than returned for
+ * a render: it is a measurement of the layout, and routing it through React
+ * would make every pass depend on the transform it just applied.
+ * @param control - the control's button.
+ * @param displayOf - computed `display` reader (injectable for tests).
+ * @returns the applied offset in CSS pixels, or null when there is no row.
+ */
+export function alignToAccountRow(control, displayOf) {
+  const row = accountRowOf(control, displayOf)
+  if (row === null) return null
+  // Measure from the untransformed box: the offset IS a transform, so leaving
+  // the previous one in place would stack a delta on every pass.
+  control.style.transform = 'none'
+  const measured = centerOffset(control.getBoundingClientRect(), row.getBoundingClientRect())
+  // Two decimals keeps the style string readable without giving up subpixel
+  // centring (fractional layout heights produce values like 60.299999999999955).
+  const offset = Math.round(measured * 100) / 100
+  control.style.transform = `translateY(${offset}px)`
+  return offset
+}
+
+/**
+ * Stylesheet the client installs for the sidebar control.
+ *
+ * Kept here, next to the measurement it complements, so the browser test can
+ * feed the same text into a fixture instead of copying the rules.
+ */
+export const SIDEBAR_STYLES = [
+  // Expanded: the footer slot owns a row above the account row, so push to that
+  // row's trailing edge. The measured transform moves it down onto the account
+  // row; `z-index` keeps the later-painted row from covering the control.
+  '.dsws-icon-btn{margin-left:auto;margin-right:4px;z-index:1}',
+  // Rail: the footer row centres its children and the account row is a later
+  // sibling, so dropping the offsets puts the control above the avatar. The
+  // measured offset is an inline style, which only `!important` can outrank —
+  // the shell's attribute stays authoritative whatever the measurement did.
+  '[data-sidebar-collapsed="true"] .dsws-icon-btn{margin-left:0;margin-right:0;z-index:auto;transform:none!important}',
+].join('\n')

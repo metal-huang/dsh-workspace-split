@@ -45,6 +45,7 @@ npm 上那份也一样：CI 与 `prepare` 都在打包前重建，所以它永�
 ```bash
 npm run check        # 全档：lint + 重复代码 + 格式 + 测试
 npm run check:fast   # 跳过测试
+npm run test:e2e     # 浏览器 E2E（需要本机 Chrome/Chromium，找不到会跳过）
 npm run build        # 重建产物
 ```
 

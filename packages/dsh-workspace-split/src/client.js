@@ -26,7 +26,7 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 import { buildTranscript } from './transcript.js'
 
 // ---------- sidebar control placement ----------
-import { accountRowOf, centerOffset } from './layout.js'
+import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
@@ -1156,17 +1156,7 @@ function installSplitStyles() {
   if (existing !== null) return () => {}
   const style = document.createElement('style')
   style.id = SPLIT_STYLE_ID
-  style.textContent = [
-    // Expanded: the footer slot owns a row above the account row, so push to
-    // that row's trailing edge. The measured transform moves it down onto the
-    // account row; `z-index` keeps the later-painted row from covering it.
-    '.dsws-icon-btn{margin-left:auto;margin-right:4px;z-index:1}',
-    // Rail: the footer row centres its children and the account row is a later
-    // sibling, so dropping the offsets puts the control above the avatar. The
-    // measured offset is an inline style, which only `!important` can outrank —
-    // the shell's attribute stays authoritative whatever the measurement did.
-    '[data-sidebar-collapsed="true"] .dsws-icon-btn{margin-left:0;margin-right:0;z-index:auto;transform:none!important}',
-  ].join('\n')
+  style.textContent = SIDEBAR_STYLES
   document.head.append(style)
   return () => style.remove()
 }
@@ -1209,11 +1199,10 @@ function useAccountRowAlignment(ref) {
         button.style.removeProperty('transform')
         return
       }
-      // Measure from the untransformed box: the offset IS a transform, so
-      // leaving the previous one in place would stack a delta on every pass.
-      button.style.transform = 'none'
-      const offset = centerOffset(button.getBoundingClientRect(), row.getBoundingClientRect())
-      button.style.transform = `translateY(${offset}px)`
+      // `alignToAccountRow` re-reads the row on every pass, so a shell that
+      // swaps the footer subtree still lands the control on the row that exists
+      // now; `row` above only seeds the observer.
+      alignToAccountRow(button, displayOf)
     }
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(align)

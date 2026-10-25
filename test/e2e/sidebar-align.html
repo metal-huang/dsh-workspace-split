@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>sidebar control alignment</title>
+    <style>
+      /* Shell layout copied from SidebarRoot.module.css (footArea and friends),
+         plus enough chrome for a real box to measure. */
+      body {
+        margin: 0;
+        background: #1a1a1a;
+        color: #ddd;
+        font-family: system-ui, sans-serif;
+      }
+      .sidebar {
+        width: 280px;
+        height: 820px;
+        display: flex;
+        flex-direction: column;
+        background: #141414;
+      }
+      .region {
+        flex: 1;
+        min-height: 0;
+      }
+      .footArea {
+        flex: none;
+        display: flex;
+        flex-direction: column;
+      }
+      .footerActions {
+        flex: none;
+        width: 100%;
+        min-width: 0;
+        display: flex;
+        /* No align-items: the shell's row is a plain flex row, so a control with
+           a definite height sits at its top (the real desktop layout). */
+        height: 40px;
+      }
+      .settingsArea {
+        flex: none;
+        width: 100%;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 68.6px;
+        padding: 0 12px;
+        box-sizing: border-box;
+        background: #191919;
+      }
+      .avatar {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: #b07a3a;
+      }
+      .name {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .other {
+        width: 28px;
+        height: 28px;
+        margin-left: 12px;
+        border: 2px solid #eee;
+        border-radius: 6px;
+        background: transparent;
+      }
+      .dsws-icon-btn {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Desktop-shaped footer: the shell's footArea holds the footer-actions row
+      and the account row, and the slot system wraps every action entry in
+      display:contents elements (dsh-client-ui-renderer ANCHOR_STYLE). A second
+      entry (the mobile-access button) sits next to ours, which is what made the
+      "next sibling is the account row" assumption fail in the desktop client.
+    -->
+    <div class="sidebar" id="shell" data-sidebar-collapsed="false">
+      <div class="region"></div>
+      <div class="footArea">
+        <div class="footerActions">
+          <div data-slot="sidebar.footer.action" style="display: contents">
+            <div data-entry="mobile" style="display: contents">
+              <button type="button" class="other" aria-label="mobile"></button>
+            </div>
+            <div data-entry="split" style="display: contents">
+              <button type="button" class="dsws-icon-btn" id="split" aria-label="split">
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 64 64"
+                  aria-hidden="true"
+                  style="display: block"
+                >
+                  <rect x="6" y="6" width="24" height="24" rx="4" fill="#247bbf" />
+                  <rect x="34" y="6" width="24" height="24" rx="4" fill="#4a9fd8" />
+                  <rect x="6" y="34" width="24" height="24" rx="4" fill="#4a9fd8" />
+                  <rect x="34" y="34" width="24" height="24" rx="4" fill="#247bbf" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="settingsArea">
+          <div class="avatar"></div>
+          <span class="name">MEGAMETAL</span>
+        </div>
+      </div>
+    </div>
+    <script type="module">
+      import {
+        SIDEBAR_STYLES,
+        alignToAccountRow,
+      } from '../../packages/dsh-workspace-split/src/layout.js'
+
+      // The plugin injects this stylesheet itself; the fixture feeds the same
+      // text so the test cannot drift from what ships.
+      const style = document.createElement('style')
+      style.textContent = SIDEBAR_STYLES
+      document.head.append(style)
+
+      const shell = document.getElementById('shell')
+      const button = document.getElementById('split')
+      const displayOf = (el) => getComputedStyle(el).display
+
+      const offset = alignToAccountRow(button, displayOf)
+      const self = button.getBoundingClientRect()
+      const account = document.querySelector('.settingsArea').getBoundingClientRect()
+      window.__expanded = {
+        offset,
+        inlineTransform: button.style.transform,
+        computedTransform: getComputedStyle(button).transform,
+        selfCenter: self.top + self.height / 2,
+        accountCenter: account.top + account.height / 2,
+        delta: Math.abs(self.top + self.height / 2 - (account.top + account.height / 2)),
+      }
+
+      // The shell's collapsed attribute must win over the measured inline style.
+      shell.setAttribute('data-sidebar-collapsed', 'true')
+      window.__collapsed = {
+        computedTransform: getComputedStyle(button).transform,
+        inlineTransform: button.style.transform,
+      }
+      shell.setAttribute('data-sidebar-collapsed', 'false')
+
+      window.__ready = true
+    </script>
+  </body>
+</html>
