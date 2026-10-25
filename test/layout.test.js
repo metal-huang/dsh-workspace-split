@@ -1,20 +1,96 @@
 /**
  * Sidebar control placement.
  *
- * The control sits in the footer-actions row but must read as part of the
- * account row below it. A fixed translateY assumed both rows' heights, and the
- * shell's own footer changed under it — the control ended up floating between
- * the footer icons and the account row. These tests pin the arithmetic that
- * replaced the constant.
+ * The control must read as part of the account row, but the slot system wraps
+ * every `sidebar.footer.action` entry in `display: contents` elements. Those
+ * wrappers have no box, so the control's DOM parent is not the footer row and
+ * its next sibling is another entry (or nothing) — the first attempt to find the
+ * row that way centred the control on its own row, which is exactly the
+ * misalignment that came back from the desktop client. These tests pin the walk
+ * up to the layout container plus the offset arithmetic.
  */
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { centerOffset } from '../packages/dsh-workspace-split/src/layout.js'
+import {
+  accountRowOf,
+  centerOffset,
+  layoutContainer,
+} from '../packages/dsh-workspace-split/src/layout.js'
 
 /** A viewport box with only the fields the placement math reads. */
 const box = (top, height) => ({ top, height })
+
+/** Minimal element tree: parent link, child list, and sibling wiring. */
+function element(display, parent = null) {
+  const node = {
+    display,
+    parentElement: parent,
+    nextElementSibling: null,
+    children: [],
+    get lastElementChild() {
+      return this.children.at(-1) ?? null
+    },
+  }
+  if (parent !== null) {
+    const previous = parent.children.at(-1)
+    if (previous !== undefined) previous.nextElementSibling = node
+    parent.children.push(node)
+  }
+  return node
+}
+
+const displayOf = (el) => el.display
+
+describe('accountRowOf', () => {
+  it('walks past the display:contents slot wrappers to the footer row', () => {
+    // SidebarRoot.module.css: footArea > [footerActions, settingsArea], and the
+    // footer action slot renders div[data-slot] + per-entry wrappers, all with
+    // display:contents.
+    const footArea = element('flex')
+    const footerActions = element('flex', footArea)
+    const anchor = element('contents', footerActions)
+    const firstEntry = element('contents', anchor)
+    const button = element('inline-flex', firstEntry)
+    // Another plugin's footer action sits next to ours inside the anchor.
+    element('contents', anchor)
+    const settingsArea = element('flex', footArea)
+
+    assert.equal(layoutContainer(button, displayOf), footerActions)
+    assert.equal(accountRowOf(button, displayOf), settingsArea)
+  })
+
+  it('still works when the control is a direct child of the footer row', () => {
+    const footArea = element('flex')
+    const footerActions = element('flex', footArea)
+    const button = element('inline-flex', footerActions)
+    const settingsArea = element('flex', footArea)
+
+    assert.equal(accountRowOf(button, displayOf), settingsArea)
+  })
+
+  it('does not mistake a sibling slot entry for the account row', () => {
+    const footArea = element('flex')
+    const footerActions = element('flex', footArea)
+    const anchor = element('contents', footerActions)
+    const entry = element('contents', anchor)
+    const button = element('inline-flex', entry)
+    const neighbour = element('contents', anchor)
+    element('inline-flex', neighbour)
+
+    assert.notEqual(accountRowOf(button, displayOf), neighbour)
+    assert.equal(accountRowOf(button, displayOf), null)
+  })
+
+  it('returns null when the shell provides no following row', () => {
+    const body = element('block')
+    const wrapper = element('contents', body)
+    const button = element('inline-flex', wrapper)
+    assert.equal(accountRowOf(button, displayOf), null)
+    assert.equal(accountRowOf(null, displayOf), null)
+  })
+})
 
 describe('centerOffset', () => {
   it('moves a control down onto a row that sits below it', () => {

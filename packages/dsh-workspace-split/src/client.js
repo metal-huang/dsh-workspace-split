@@ -26,7 +26,7 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 import { buildTranscript } from './transcript.js'
 
 // ---------- sidebar control placement ----------
-import { centerOffset } from './layout.js'
+import { accountRowOf, centerOffset } from './layout.js'
 
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
@@ -1174,11 +1174,18 @@ function installSplitStyles() {
 /**
  * Keep the sidebar control centred on the account row.
  *
- * The slot renders its entries in a row of its own, above the account row. How
- * far down that row sits is the shell's business — font scale, the account
- * row's own padding, the other footer actions — so the old fixed `translateY(40px)`
- * only lined up by accident and left the control floating between the two rows.
- * Measure both boxes instead, and re-measure when either changes size.
+ * The slot renders its entries in a row of its own, above the account row, and
+ * wraps each entry in `display: contents` elements: those wrappers have no box,
+ * so the control's DOM parent is not the footer row and its next sibling is
+ * another slot entry (or nothing) rather than the account row. Walk up to the
+ * first ancestor that participates in layout before looking for the row — the
+ * first attempt trusted `parentElement.nextElementSibling` and, on the desktop
+ * client, centred the control on its own row instead (offset 0, visibly off).
+ *
+ * How far down that row sits is the shell's business — font scale, the account
+ * row's own padding, the other footer actions — so the old fixed
+ * `translateY(40px)` only lined up by accident. Measure both boxes instead, and
+ * re-measure when either changes size.
  *
  * The offset is written straight to the element's style rather than held in
  * state: it is a measurement of the layout, and routing it through a render
@@ -1191,8 +1198,10 @@ function useAccountRowAlignment(ref) {
     // A slot entry's ref can still be empty while the node is laid out, so fall
     // back to the rendered class; there is one control per page.
     const button = ref.current ?? document.querySelector('.dsws-icon-btn')
-    const row = button?.parentElement?.nextElementSibling ?? null
-    if (button === null || button === undefined || row === null) return undefined
+    if (button === null || button === undefined) return undefined
+    const displayOf = (el) => getComputedStyle(el).display
+    const row = accountRowOf(button, displayOf)
+    if (row === null) return undefined
     let frame = 0
     const align = () => {
       frame = 0
