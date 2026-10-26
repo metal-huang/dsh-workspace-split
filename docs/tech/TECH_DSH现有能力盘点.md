@@ -341,5 +341,16 @@ v4 的结论全部建立在下面这份可复核的证据上，取数日期 2026
 
 ### 13.3 仍未真机验证
 
-- 后台会话的审批能否到达分屏（契约层成立，模型网关不可用时无法构造真实审批）。
+- 后台会话的审批能否到达分屏（契约层成立；组件已用 DSH 页面的 `?dsws-test`
+  fixture 做过浏览器回归，但模型网关不可用时无法构造真实审批请求）。
 - 格子回答后官方 composer 面板的收起时序。
+- 真实会话的 `contextPressure` 读数（组件与格式已由浏览器 fixture 覆盖）。
+
+### 13.4 浏览器回归的测试缝
+
+`dsh-composer.test.js` 启动临时 DSH web + 临时 Chrome，在页面读取
+`localStorage['dsws-test'] === '1'`（或 URL 带 `dsws-test`）时暴露
+`window.__dswsTest.render(name, node, props)`，用假 pending/catalog 渲染
+ApprovalCard、QuestionCard、ProcessGroup、ComposerMeta、MentionPopup、
+ModelControl、PermissionControl、DraftFileStrip。真实页面不带这个开关，
+因此不会出现测试用假卡片。

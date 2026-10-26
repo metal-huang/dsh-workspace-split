@@ -6,6 +6,7 @@
  */
 
 import React from 'react'
+import { createRoot } from 'react-dom/client'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfm } from 'micromark-extension-gfm'
 import { gfmFromMarkdown } from 'mdast-util-gfm'
@@ -34,7 +35,7 @@ import { ModelControl, PermissionControl } from './composer-controls-ui.js'
 import { MentionPopup, useMentionPicker } from './mention-ui.js'
 
 // ---------- transcript folding ----------
-import { buildTranscript, groupProcessRows, runningHint } from './transcript.js'
+import { buildTranscript, formatDuration, groupProcessRows, runningHint } from './transcript.js'
 
 // ---------- composer image intake ----------
 import {
@@ -3082,6 +3083,25 @@ const reasoningStyles = {
  * body keeps the existing Tool rows.
  * @param props - one `kind: 'process'` row from `groupProcessRows`.
  */
+/** Elapsed label of one process group; ticks while the group is running. */
+function GroupDuration(props) {
+  const { group } = props
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (group.running !== true) return undefined
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [group.running])
+  if (group.startedAt === undefined) return null
+  const end = group.running === true ? now : (group.endedAt ?? group.startedAt)
+  if (!(end > group.startedAt)) return null
+  return h(
+    'span',
+    { style: reasoningStyles.preview, 'data-dsws-process-duration': 'true' },
+    formatDuration(end - group.startedAt),
+  )
+}
+
 function ProcessGroup(props) {
   const { group } = props
   const [open, setOpen] = useState(group.running === true)
@@ -3126,6 +3146,7 @@ function ProcessGroup(props) {
       group.running === true
         ? h('span', { className: 'dsws-running-dot', style: reasoningStyles.dot })
         : null,
+      h(GroupDuration, { group }),
       summary === '' ? null : h('span', { style: reasoningStyles.preview }, summary),
     ),
     open
@@ -5255,5 +5276,33 @@ export function apply(ctx) {
     try {
       ctx.layout.selectPanel('split')
     } catch (_e) {}
+  }
+}
+
+// A guarded seam for the browser regression suite: the page can render one
+// component with fake data without a live Session or approval. It is inert
+// unless the URL carries `dsws-test` or the test sets the matching localStorage
+// flag before navigation (the app rewrites the URL and drops the query).
+if (
+  typeof window !== 'undefined' &&
+  (new URLSearchParams(window.location.search).has('dsws-test') ||
+    window.localStorage?.getItem('dsws-test') === '1')
+) {
+  const fixtures = {
+    approval: ApprovalCard,
+    question: QuestionCard,
+    process: ProcessGroup,
+    meta: ComposerMeta,
+    mention: MentionPopup,
+    model: ModelControl,
+    permission: PermissionControl,
+    files: DraftFileStrip,
+  }
+  window.__dswsTest = {
+    render(name, node, props = {}) {
+      const Component = fixtures[name]
+      if (Component === undefined || node === null) throw new Error(`unknown fixture: ${name}`)
+      createRoot(node).render(h(Component, { ...props, t, lang: 'zh' }))
+    },
   }
 }

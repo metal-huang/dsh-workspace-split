@@ -17,6 +17,7 @@ import { describe, it } from 'node:test'
 
 import {
   buildTranscript,
+  formatDuration,
   groupProcessRows,
   runningHint,
   streamReasoning,
@@ -819,6 +820,29 @@ describe('buildTranscript: prompts carrying files', () => {
   })
 })
 
+describe('formatDuration', () => {
+  it('uses milliseconds below one second', () => {
+    assert.equal(formatDuration(0), '0ms')
+    assert.equal(formatDuration(849), '849ms')
+  })
+
+  it('uses one decimal below ten seconds and whole seconds above', () => {
+    assert.equal(formatDuration(1200), '1.2s')
+    assert.equal(formatDuration(12_400), '12s')
+  })
+
+  it('switches to minutes with a padded remainder', () => {
+    assert.equal(formatDuration(63_000), '1m 03s')
+    assert.equal(formatDuration(125_000), '2m 05s')
+  })
+
+  it('rejects junk', () => {
+    assert.equal(formatDuration(-1), '')
+    assert.equal(formatDuration(undefined), '')
+    assert.equal(formatDuration('nope'), '')
+  })
+})
+
 describe('groupProcessRows', () => {
   /** One tool/call event carrying the Turn/Step the group uses. */
   function callAt(turn, step, callId = 'c1', name = 'bash') {
@@ -850,6 +874,25 @@ describe('groupProcessRows', () => {
       rows[0].items.map((item) => item.kind),
       ['reasoning', 'tool'],
     )
+  })
+
+  it('records the first and last event time of a process group', () => {
+    const rows = groupProcessRows([
+      { kind: 'tool', key: 'a', turn: 1, time: 1000, tool: { name: 'bash', running: false } },
+      { kind: 'tool', key: 'b', turn: 1, time: 2500, tool: { name: 'read', running: false } },
+    ])
+    assert.equal(rows[0].startedAt, 1000)
+    assert.equal(rows[0].endedAt, 2500)
+    assert.equal(formatDuration(rows[0].endedAt - rows[0].startedAt), '1.5s')
+  })
+
+  it('leaves the end open while a tool is still running', () => {
+    const rows = groupProcessRows([
+      { kind: 'tool', key: 'a', turn: 1, time: 1000, tool: { name: 'bash', running: true } },
+    ])
+    assert.equal(rows[0].startedAt, 1000)
+    assert.equal(rows[0].endedAt, 1000)
+    assert.equal(rows[0].running, true)
   })
 
   it('keeps the answer outside the process disclosure', () => {

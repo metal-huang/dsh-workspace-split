@@ -58,8 +58,8 @@ describe('built client artifact', () => {
 
   it('requires nothing beyond the platform module table', () => {
     const required = [...built.matchAll(/require\("([^"]+)"\)/g)].map((match) => match[1])
-    // react is the only external this plugin legitimately needs.
-    assert.deepEqual([...new Set(required)], ['react'])
+    // react and react-dom/client are the only platform externals this plugin needs.
+    assert.deepEqual([...new Set(required)], ['react', 'react-dom/client'])
   })
 
   it('builds to the same bytes twice', () => {

@@ -161,6 +161,13 @@
 - 预期：正常安装下 5 条全过；缺失成员时失败信息直接打印文件与缺失符号；
   没装 DSH 的机器整组跳过
 
+### TC-24 DSH 浏览器回归（headless）
+- 步骤：`node --test test/e2e/dsh-composer.test.js`（需要本机 `dsh`、Chrome 和已构建的
+  `client.js`；缺任一项自动跳过）
+- 预期：临时 DSH home + 临时 Chrome profile 启动后，`?dsws-test`/localStorage 开关
+  通过受控 fixture 渲染审批卡、提问卡、过程组耗时、上下文 footer、@ 候选、
+  模型菜单、权限风险确认和文件草稿条；7 条全过，临时目录与进程清理干净
+
 ## 当前状态（2026-10-22 基线通过；2026-10-23 网格选择器待手动验证）
 - TC-01 ✅ 插件加载，sidebar 正常
 - TC-02 ✅ hero 页面「⊞ 分屏」按钮（conversation.hero.options）
@@ -184,9 +191,10 @@
 - TC-18 ✅ 文件菜单、上传、移除、发送、消息文件卡（web 隔离 profile 实测）
 - TC-19 ✅ 模型菜单 141 项、权限菜单与本地化标签（web 实测）；模型切换回填未单独实测
 - TC-20 ✅ 未知命令错误与草稿保留、@ 候选 19 项与插入（web 实测）；合法命令执行未单独实测
-- TC-21 ⏳ 审批/提问卡片已接入公开 pending 注册表，待真实审批触发验证
-- TC-22 ⏳ 上下文 footer 已接线；测试会话没有 contextPressure 投影，未看到真实读数
+- TC-21 ✅ 审批/提问卡的组件、回答闸门与 plan/question 分支已通过 DSH 浏览器 fixture；真实后台审批触发 ⏳（网关不可用）
+- TC-22 ✅ 上下文 footer 组件与数值格式已通过 DSH 浏览器 fixture；真实会话读数 ⏳
 - TC-23 ✅ `node test/dsh-contract.test.js` 本机 5/5 通过
+- TC-24 ✅ `node --test test/e2e/dsh-composer.test.js` 本机 7/7 通过
 
 ## 自动化回归（E2E）
 

@@ -278,6 +278,7 @@ function toolRow(key, call, result, at) {
     kind: 'tool',
     turn: at?.turn,
     step: at?.step,
+    time: at?.time,
     tool: {
       name: call.name,
       argsRaw: call.argsRaw ?? '',
@@ -459,6 +460,7 @@ function onLiveChunk(ev, ctx) {
     text,
     reasoning,
     turn,
+    time: ev.time,
     streaming: true,
   }
   ctx.rows.push(stream.row)
@@ -530,6 +532,7 @@ function onAttempt(ev, ctx) {
     text,
     reasoning,
     turn: ev.data?.turn,
+    time: ev.time,
   }
   ctx.rows.push(row)
   ctx.attempts.set(key, row)
@@ -567,6 +570,7 @@ function pushMessageRow(ctx, ev, key, content) {
     text: content.text,
     reasoning: content.reasoning,
     turn: ev.data?.turn,
+    time: ev.time,
   })
 }
 
@@ -689,6 +693,7 @@ function onToolCall(ev, ctx) {
     toolRow(`call-${id ?? ctx.rows.length}`, call, ctx.tools.results.get(id), {
       turn: ev.data?.turn,
       step: ev.data?.step,
+      time: ev.time,
     }),
   )
 }
@@ -706,6 +711,7 @@ function onToolResult(ev, ctx) {
     toolRow(`result-${id ?? ctx.rows.length}`, call, ev.data, {
       turn: ev.data?.turn,
       step: ev.data?.step,
+      time: ev.time,
     }),
   )
 }
@@ -764,6 +770,31 @@ export function buildTranscript(entries, t = keyOnly) {
  * @param rows - flat rows from `buildTranscript`.
  * @returns rows with `kind: 'process'` groups in place of their members.
  */
+/**
+ * Short elapsed text for a process group.
+ * @param milliseconds - elapsed duration.
+ * @returns `850ms`, `1.2s`, `12s`, or `1m 03s`.
+ */
+export function formatDuration(milliseconds) {
+  const value = Number(milliseconds)
+  if (!Number.isFinite(value) || value < 0) return ''
+  if (value < 1000) return `${Math.round(value)}ms`
+  const seconds = value / 1000
+  if (seconds < 10) return `${seconds.toFixed(1)}s`
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds % 60)
+  return `${String(minutes)}m ${String(rest).padStart(2, '0')}s`
+}
+
+/** Extend a group's observed time bounds with one row's event time. */
+function stampGroup(group, row) {
+  const time = typeof row.time === 'number' ? row.time : undefined
+  if (time === undefined) return
+  if (group.startedAt === undefined || time < group.startedAt) group.startedAt = time
+  if (group.endedAt === undefined || time > group.endedAt) group.endedAt = time
+}
+
 export function groupProcessRows(rows) {
   const list = Array.isArray(rows) ? rows : []
   const out = []
@@ -781,6 +812,8 @@ export function groupProcessRows(rows) {
         kind: 'process',
         turn: row.turn,
         running: false,
+        startedAt: undefined,
+        endedAt: undefined,
         items: [],
       }
     }
@@ -792,6 +825,7 @@ export function groupProcessRows(rows) {
       const current = groupFor(row)
       current.items.push({ kind: 'tool', key: row.key, tool: row.tool })
       current.running = current.running || row.tool.running === true
+      stampGroup(current, row)
       continue
     }
     if (row.kind === 'assistant' && typeof row.reasoning === 'string' && row.reasoning !== '') {
@@ -803,6 +837,7 @@ export function groupProcessRows(rows) {
         streaming: row.streaming === true,
       })
       current.running = current.running || row.streaming === true
+      stampGroup(current, row)
       if (row.text !== '') {
         flush()
         out.push({ ...row, reasoning: '' })
