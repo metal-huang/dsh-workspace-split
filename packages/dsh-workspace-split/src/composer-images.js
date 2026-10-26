@@ -55,6 +55,15 @@ export function imageMediaType(value) {
   return IMAGE_MEDIA_TYPES.includes(type) ? type : ''
 }
 
+/**
+ * Whether one browser file belongs on the inline image path.
+ * @param file - browser File (or any `{ type }` shape).
+ * @returns true for the four accepted raster types.
+ */
+export function isImageFile(file) {
+  return imageMediaType(file?.type) !== ''
+}
+
 /** File name of a browser File, or '' when the source has none. */
 function fileName(file) {
   return typeof file?.name === 'string' ? file.name : ''
@@ -150,26 +159,55 @@ export function dataUrlPayload(dataUrl) {
 }
 
 /**
- * Prompt parts for one send: the images in the order the reader added them, then
- * the text block (when any was typed).
- *
- * The order copies the harness's own composer (`sendSession` serializes
- * attachments first, then appends the text part), so a message that travelled
- * through a split cell reads the same way in the official transcript. One
- * `prompt` call carries the whole list; sending text and images separately would
- * let the Host admit them as two messages and reorder the reader's intent.
- * @param text - draft text.
- * @param images - image parts, in draft order.
- * @returns ordered PromptContentPart list.
+ * Prompt part for a staged generic-file receipt.
+ * @param receiptId - opaque receipt id returned by `ctx.fileUpload.upload`.
+ * @returns a file PromptContentPart, or null for an unusable receipt.
  */
-export function buildPromptParts(text, images) {
+export function filePart(receiptId) {
+  if (typeof receiptId !== 'string' || receiptId === '') return null
+  return { type: 'file', receiptId }
+}
+
+/** Image parts in draft order. */
+function imageParts(images) {
   const parts = []
   for (const image of Array.isArray(images) ? images : []) {
     if (image?.type === 'image') parts.push(image)
   }
-  const trimmed = typeof text === 'string' ? text.trim() : ''
-  if (trimmed !== '') parts.push({ type: 'text', text: trimmed })
   return parts
+}
+
+/** File parts in draft order, dropping malformed receipts. */
+function fileParts(files) {
+  const parts = []
+  for (const file of Array.isArray(files) ? files : []) {
+    if (file?.type === 'file' && typeof file.receiptId === 'string') parts.push(file)
+  }
+  return parts
+}
+
+/** The optional trailing text block. */
+function textPart(text) {
+  const trimmed = typeof text === 'string' ? text.trim() : ''
+  return trimmed === '' ? [] : [{ type: 'text', text: trimmed }]
+}
+
+/**
+ * Prompt parts for one send: images in the order the reader added them, then
+ * staged generic files, then the text block (when any was typed).
+ *
+ * The order copies the harness's own composer (`sendSession` serializes
+ * attachments first, then appends the text part), so a message that travelled
+ * through a split cell reads the same way in the official transcript. One
+ * `prompt` call carries the whole list; sending text and attachments separately
+ * would let the Host admit them as two messages and reorder the reader's intent.
+ * @param text - draft text.
+ * @param images - image parts, in draft order.
+ * @param files - file parts, in draft order.
+ * @returns ordered PromptContentPart list.
+ */
+export function buildPromptParts(text, images, files = []) {
+  return [...imageParts(images), ...fileParts(files), ...textPart(text)]
 }
 
 /**

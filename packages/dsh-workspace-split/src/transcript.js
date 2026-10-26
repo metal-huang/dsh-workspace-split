@@ -231,6 +231,18 @@ function contentImages(content) {
 }
 
 /**
+ * File attachments attached to a content block list.
+ * @param content - content blocks of a `user/message`.
+ * @returns durable file refs, in block order.
+ */
+function contentFiles(content) {
+  const blocks = Array.isArray(content) ? content : []
+  return blocks
+    .filter((block) => block?.type === 'file' && typeof block.attachment?.attachmentId === 'string')
+    .map((block) => block.attachment)
+}
+
+/**
  * Reasoning blocks of a durable Assistant message.
  * @param content - content blocks of an `assistant/message`.
  * @returns joined reasoning text, or ''.
@@ -657,12 +669,14 @@ function onUserMessage(ev, ctx) {
   if (!isHumanPrompt(ev)) return
   const text = contentText(ev.data?.content)
   const images = contentImages(ev.data?.content)
-  if (text === '' && images.length === 0) return
+  const files = contentFiles(ev.data?.content)
+  if (text === '' && images.length === 0 && files.length === 0) return
   ctx.rows.push({
     key: `user-${ev.seq ?? ctx.rows.length}`,
     kind: 'user',
     text,
     images,
+    files,
     turn: ev.data?.turn,
   })
 }

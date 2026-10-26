@@ -17,6 +17,7 @@ import {
   buildPromptParts,
   bytesToBase64,
   dataUrlPayload,
+  filePart,
   imageMediaType,
   imagePart,
   intakeImages,
@@ -181,6 +182,22 @@ describe('buildPromptParts', () => {
       second,
       { type: 'text', text: 'look' },
     ])
+  })
+
+  it('puts staged files between images and text', () => {
+    const file = filePart('receipt-1')
+    assert.deepEqual(buildPromptParts('read', [image], [file]), [
+      image,
+      file,
+      { type: 'text', text: 'read' },
+    ])
+    assert.equal(buildPromptParts('', [], [file]).length, 1)
+  })
+
+  it('drops an empty receipt instead of sending a malformed file part', () => {
+    assert.equal(filePart(''), null)
+    assert.equal(filePart(undefined), null)
+    assert.deepEqual(buildPromptParts('', [], [filePart('')]), [])
   })
 
   it('sends an image-only prompt without an empty text block', () => {

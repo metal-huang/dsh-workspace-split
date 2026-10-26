@@ -17,10 +17,21 @@ const h = React.createElement
 const { useState, useEffect, useLayoutEffect, useCallback, useSyncExternalStore, useRef } = React
 
 // ---------- i18n ----------
-import { t } from './i18n.js'
+import { detectLanguage, t } from './i18n.js'
 
 // ---------- cell text scaling ----------
 import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
+
+// ---------- composer metadata ----------
+import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
+
+// ---------- pending interactions ----------
+import { interactionKey, pendingOf } from './pending.js'
+import { ApprovalCard, QuestionCard } from './pending-ui.js'
+
+// ---------- composer seats ----------
+import { ModelControl, PermissionControl } from './composer-controls-ui.js'
+import { MentionPopup, useMentionPicker } from './mention-ui.js'
 
 // ---------- transcript folding ----------
 import { buildTranscript, groupProcessRows, runningHint } from './transcript.js'
@@ -32,8 +43,10 @@ import {
   buildPromptParts,
   bytesToBase64,
   dataUrlPayload,
+  filePart,
   imagePart,
   intakeImages,
+  isImageFile,
 } from './composer-images.js'
 
 // ---------- sidebar control placement ----------
@@ -1371,6 +1384,7 @@ const EXPANDED_MIN_HEIGHT = 96
 const COMPOSER_CONTROL = 30
 
 const composerWrapStyle = {
+  position: 'relative',
   display: 'flex',
   flexDirection: 'column',
   gap: 4,
@@ -1552,6 +1566,29 @@ const composerErrorStyle = {
   padding: '0 2px',
   wordBreak: 'break-word',
 }
+const composerContextStyle = {
+  padding: '0 2px',
+  textAlign: 'end',
+  color: 'var(--dsw-alias-label-caption, #888)',
+  fontSize: 10,
+  lineHeight: '14px',
+  flexShrink: 0,
+}
+const composerMetaRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 6,
+  minWidth: 0,
+  flexShrink: 0,
+}
+const composerControlsStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  minWidth: 0,
+  overflow: 'visible',
+}
 
 /**
  * Read one image File as canonical base64 (no `data:` prefix).
@@ -1732,6 +1769,157 @@ function useDraftImages() {
   return { images, error, setError, addFiles, removeImage, clearImages }
 }
 
+/** Precheck cap for generic attachments; the Host still owns the real budget. */
+const FILE_INTAKE_MAX = 20
+let draftFileSeq = 0
+
+/** Human-readable byte count for a draft file row. */
+function formatFileSize(bytes) {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`
+}
+
+/**
+ * Draft generic files and their staged Host receipts.
+ *
+ * Images travel inline through the prompt, but ordinary files must be uploaded
+ * first and referenced by receipt. The upload starts when the file joins the
+ * draft so the reader sees progress; send stays disabled until every upload
+ * settles, and removing a row aborts its upload.
+ * @param fileUpload - injected `ctx.fileUpload` service, if available.
+ * @param sessionId - Session that owns the staged receipts.
+ * @returns draft files, upload state, and the operations that change them.
+ */
+function useDraftFiles(fileUpload, sessionId) {
+  const [files, setFiles] = useState([])
+  const [error, setError] = useState('')
+  const filesRef = useRef(files)
+  filesRef.current = files
+  const controllers = useRef(new Map())
+
+  useEffect(
+    () => () => {
+      for (const controller of controllers.current.values()) controller.abort()
+      controllers.current.clear()
+    },
+    [],
+  )
+
+  const patch = useCallback((id, changes) => {
+    setFiles((previous) =>
+      previous.map((file) => (file.id === id ? { ...file, ...changes } : file)),
+    )
+  }, [])
+
+  const start = useCallback(
+    (entries) => {
+      for (const entry of entries) {
+        Promise.resolve()
+          .then(() =>
+            fileUpload.upload(
+              sessionId,
+              entry.file,
+              entry.name,
+              entry.controller.signal,
+              (progress) =>
+                patch(entry.id, {
+                  progress: progress.loaded,
+                  total: progress.total ?? entry.size,
+                }),
+            ),
+          )
+          .then(
+            (result) => {
+              if (entry.controller.signal.aborted) return
+              if (result?.ok !== true) {
+                patch(entry.id, {
+                  status: 'error',
+                  error: remoteFailureText(result?.error),
+                })
+                return
+              }
+              controllers.current.delete(entry.id)
+              patch(entry.id, {
+                status: 'ready',
+                receiptId: result.value.receiptId,
+                progress: result.value.file?.bytes ?? entry.size,
+              })
+            },
+            (failure) => {
+              if (entry.controller.signal.aborted) return
+              patch(entry.id, { status: 'error', error: thrownText(failure) })
+            },
+          )
+          .catch(() => {})
+      }
+    },
+    [fileUpload, sessionId, patch],
+  )
+
+  const addFiles = useCallback(
+    (picked) => {
+      const list = Array.from(picked ?? []).filter((file) => !isImageFile(file))
+      if (list.length === 0) return
+      if (fileUpload === undefined || fileUpload === null || sessionId === undefined) {
+        setError(t('composer.file.unavailable'))
+        return
+      }
+      const room = Math.max(0, FILE_INTAKE_MAX - filesRef.current.length)
+      if (room === 0) {
+        setError(t('composer.file.tooMany', { count: FILE_INTAKE_MAX }))
+        return
+      }
+      const accepted = list.slice(0, room)
+      const entries = accepted.map((file) => {
+        draftFileSeq += 1
+        const controller = new AbortController()
+        const entry = {
+          id: `draft-file-${draftFileSeq}`,
+          file,
+          name: typeof file.name === 'string' && file.name !== '' ? file.name : 'file',
+          size: Number(file.size) || 0,
+          status: 'uploading',
+          progress: 0,
+          total: Number(file.size) || 0,
+          receiptId: '',
+          error: '',
+          controller,
+        }
+        controllers.current.set(entry.id, controller)
+        return entry
+      })
+      setFiles((previous) => [...previous, ...entries])
+      setError(list.length > room ? t('composer.file.tooMany', { count: FILE_INTAKE_MAX }) : '')
+      start(entries)
+    },
+    [fileUpload, sessionId, start],
+  )
+
+  const removeFile = useCallback((id) => {
+    controllers.current.get(id)?.abort()
+    controllers.current.delete(id)
+    setFiles((previous) => previous.filter((file) => file.id !== id))
+    setError('')
+  }, [])
+
+  const clearFiles = useCallback(() => {
+    for (const controller of controllers.current.values()) controller.abort()
+    controllers.current.clear()
+    setFiles([])
+  }, [])
+
+  const uploading = files.some((file) => file.status === 'uploading')
+  const failed = files.find((file) => file.status === 'error')
+  const ready = files
+    .filter((file) => file.status === 'ready')
+    .map((file) => filePart(file.receiptId))
+    .filter((part) => part !== null)
+  return { files, error, setError, addFiles, removeFile, clearFiles, uploading, failed, ready }
+}
+
 /** Picture glyph for the attach button, drawn in the button's text color. */
 function ImageIcon(props) {
   const size = props.size ?? 14
@@ -1765,8 +1953,8 @@ function ImageIcon(props) {
   )
 }
 
-/** Up arrow for the send seat; a glyph was too thin at split-cell zoom. */
-function SendIcon(props) {
+/** Shared 16×16 glyph frame. */
+function Glyph(props) {
   const size = props.size ?? 15
   return h(
     'svg',
@@ -1778,6 +1966,57 @@ function SendIcon(props) {
       'aria-hidden': true,
       style: { display: 'block' },
     },
+    props.children,
+  )
+}
+
+/** Plus glyph for the attach menu, matching the main composer's add control. */
+function PlusIcon(props) {
+  return h(
+    Glyph,
+    { size: props.size ?? 15 },
+    h('path', {
+      d: 'M8 3v10M3 8h10',
+      stroke: 'currentColor',
+      strokeWidth: 1.7,
+      strokeLinecap: 'round',
+    }),
+  )
+}
+
+/** Document glyph for one staged generic file. */
+function FileIcon(props) {
+  const size = props.size ?? 14
+  return h(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 16 16',
+      fill: 'none',
+      'aria-hidden': true,
+      style: { display: 'block', flex: 'none' },
+    },
+    h('path', {
+      d: 'M4 1.8h5l3 3v9.4H4z',
+      stroke: 'currentColor',
+      strokeWidth: 1.2,
+      strokeLinejoin: 'round',
+    }),
+    h('path', {
+      d: 'M9 1.8v3.4h3',
+      stroke: 'currentColor',
+      strokeWidth: 1.2,
+      strokeLinejoin: 'round',
+    }),
+  )
+}
+
+/** Up arrow for the send seat; a glyph was too thin at split-cell zoom. */
+function SendIcon(props) {
+  return h(
+    Glyph,
+    { size: props.size ?? 15 },
     h('path', {
       d: 'M8 13V3M8 3L4 7M8 3l4 4',
       stroke: 'currentColor',
@@ -1786,6 +2025,40 @@ function SendIcon(props) {
       strokeLinejoin: 'round',
     }),
   )
+}
+
+/** Add menu above the plus button: images go inline, other files upload. */
+const attachMenuStyles = {
+  wrap: { position: 'relative', flex: 'none', display: 'inline-flex' },
+  panel: {
+    position: 'absolute',
+    bottom: 'calc(100% + 6px)',
+    left: 0,
+    zIndex: 40,
+    minWidth: 132,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    padding: 4,
+    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-1, #1e1e1e)',
+    boxShadow: 'var(--dsw-elevation-panel, 0 4px 16px rgba(0,0,0,.35))',
+  },
+  item: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '5px 8px',
+    border: 'none',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-primary, inherit)',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    lineHeight: '18px',
+    textAlign: 'start',
+    cursor: 'pointer',
+  },
 }
 
 /** Chevron for the composer expander; points down when closed, up when open. */
@@ -1860,6 +2133,103 @@ function DraftImageStrip(props) {
   )
 }
 
+/** Row/name geometry shared by staged and transcript file cards. */
+const attachmentRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
+  fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+  lineHeight: '18px',
+  color: 'var(--dsw-alias-label-secondary, #999)',
+}
+const attachmentNameStyle = {
+  flex: '1 1 auto',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  color: 'var(--dsw-alias-label-primary, inherit)',
+}
+
+const fileStyles = {
+  strip: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    padding: '2px 2px 0',
+    maxHeight: 120,
+    overflowY: 'auto',
+    flexShrink: 0,
+  },
+  row: attachmentRowStyle,
+  name: attachmentNameStyle,
+  meta: (error) => ({
+    flex: 'none',
+    fontSize: 11,
+    color: error
+      ? 'var(--dsw-alias-state-error-primary, #e5484d)'
+      : 'var(--dsw-alias-label-caption, #888)',
+  }),
+  remove: {
+    flex: 'none',
+    width: 20,
+    height: 20,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+    borderRadius: 10,
+    background: 'var(--dsw-alias-bg-layer-1, rgba(20,20,20,.88))',
+    color: 'var(--dsw-alias-label-primary, #fff)',
+    fontSize: 13,
+    lineHeight: 1,
+    cursor: 'pointer',
+  },
+}
+
+/** Upload state of one generic-file draft row. */
+function fileMetaText(file) {
+  if (file.status === 'error') return t('composer.file.failed')
+  if (file.status === 'uploading') {
+    return t('composer.file.progress', {
+      loaded: formatFileSize(file.progress),
+      total: formatFileSize(file.total || file.size),
+    })
+  }
+  return formatFileSize(file.size)
+}
+
+/** Generic-file drafts above the composer, each removable on its own. */
+function DraftFileStrip(props) {
+  const { files, onRemove } = props
+  return h(
+    'div',
+    { style: fileStyles.strip, 'data-dsws-files': 'true' },
+    files.map((file) =>
+      h(
+        'div',
+        { key: file.id, style: fileStyles.row },
+        h(FileIcon, { size: 14 }),
+        h('span', { style: fileStyles.name, title: file.name }, file.name),
+        h('span', { style: fileStyles.meta(file.status === 'error') }, fileMetaText(file)),
+        h(
+          'button',
+          {
+            type: 'button',
+            title: t('composer.file.remove'),
+            'aria-label': t('composer.file.remove'),
+            onClick: () => onRemove(file.id),
+            style: fileStyles.remove,
+          },
+          '×',
+        ),
+      ),
+    ),
+  )
+}
+
 /**
  * The cell's input bar: text, images, and one ordered prompt per send.
  *
@@ -1872,16 +2242,73 @@ function DraftImageStrip(props) {
  *   cell-owned draft text.
  */
 function Composer(props) {
-  const { session, text, onText, running } = props
+  const { session, text, onText, running, fileUpload, occupancy, controls, metaError, remote } =
+    props
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [focused, setFocused] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [hoverExpand, setHoverExpand] = useState(false)
-  const { images, error, setError, addFiles, removeImage, clearImages } = useDraftImages()
+  const [attachOpen, setAttachOpen] = useState(false)
+  const {
+    images,
+    error: imageError,
+    setError: setImageError,
+    addFiles: addImageFiles,
+    removeImage,
+    clearImages,
+  } = useDraftImages()
+  const {
+    files,
+    error: fileError,
+    setError: setFileError,
+    addFiles: addGenericFiles,
+    removeFile,
+    clearFiles,
+    uploading,
+    failed,
+    ready: fileParts,
+  } = useDraftFiles(fileUpload, session?.sessionId)
   const textareaRef = useRef(null)
+  const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
+  const attachRef = useRef(null)
+  const attachPanelRef = useRef(null)
+  const mention = useMentionPicker({
+    remote,
+    sessionId: session?.sessionId,
+    text,
+    onText,
+    textareaRef,
+    t,
+  })
+  const error = imageError || fileError || (failed === undefined ? '' : failed.error || '')
+  const setError = useCallback(
+    (message) => {
+      setImageError(message)
+      setFileError('')
+    },
+    [setImageError, setFileError],
+  )
+
+  useEffect(() => {
+    if (!attachOpen) return undefined
+    const close = (event) => {
+      if (attachRef.current?.contains(event.target)) return
+      if (attachPanelRef.current?.contains(event.target)) return
+      setAttachOpen(false)
+    }
+    const key = (event) => {
+      if (event.key === 'Escape') setAttachOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', key)
+    }
+  }, [attachOpen])
 
   // A plain textarea with rows=1 scrolls inside a single line instead of growing,
   // so a multi-line draft could not be read without scrolling. Size it from its
@@ -1902,7 +2329,33 @@ function Composer(props) {
 
   const send = useCallback(async () => {
     if (session === undefined || session === null || sending) return
-    if (text.trim() === '' && images.length === 0) return
+    const line = parseSlashLine(text)
+    if (line !== null) {
+      if (images.length > 0 || files.length > 0) {
+        setError(t('composer.commandAttachments'))
+        return
+      }
+      setSending(true)
+      setError('')
+      try {
+        const result = await session.command(text.trim())
+        if (result?.ok !== true) {
+          setError(t('composer.commandFailed', { error: remoteFailureText(result?.error) }))
+        } else if (result.value?.matched !== true) {
+          setError(t('composer.unknownCommand', { name: line.name }))
+        } else {
+          onText('')
+          setExpanded(false)
+        }
+      } catch (failure) {
+        setError(t('composer.commandFailed', { error: thrownText(failure) }))
+      } finally {
+        setSending(false)
+      }
+      return
+    }
+    if (uploading || failed !== undefined) return
+    if (text.trim() === '' && images.length === 0 && files.length === 0) return
     setSending(true)
     setError('')
     let parts
@@ -1910,7 +2363,7 @@ function Composer(props) {
       const encoded = await Promise.all(
         images.map((image) => imagePart(image.file, readFileBase64)),
       )
-      parts = buildPromptParts(text, encoded)
+      parts = buildPromptParts(text, encoded, fileParts)
     } catch (failure) {
       setSending(false)
       setError(t('composer.image.readFailed', { error: thrownText(failure) }))
@@ -1923,6 +2376,7 @@ function Composer(props) {
         return
       }
       clearImages()
+      clearFiles()
       onText('')
       setExpanded(false)
       textareaRef.current?.focus()
@@ -1931,7 +2385,20 @@ function Composer(props) {
     } finally {
       setSending(false)
     }
-  }, [session, text, onText, images, sending, setError, clearImages])
+  }, [
+    session,
+    text,
+    onText,
+    images,
+    files.length,
+    fileParts,
+    uploading,
+    failed,
+    sending,
+    setError,
+    clearImages,
+    clearFiles,
+  ])
 
   const stop = useCallback(async () => {
     if (session === undefined || session === null || stopping) return
@@ -1950,12 +2417,20 @@ function Composer(props) {
   }, [session, stopping, setError])
 
   const onKeyDown = (event) => {
+    if (mention.onKeyDown(event)) return
     if (event.key !== 'Enter' || event.shiftKey) return
     // Enter also confirms a Chinese/Japanese IME candidate. Sending there would
     // submit half-composed text, so the key belongs to the IME until it commits.
     if (event.nativeEvent?.isComposing === true || event.keyCode === 229) return
     event.preventDefault()
     send()
+  }
+
+  const classifyPicked = (picked) => {
+    const imageList = picked.filter((file) => isImageFile(file))
+    const fileList = picked.filter((file) => !isImageFile(file))
+    if (imageList.length > 0) addImageFiles(imageList)
+    if (fileList.length > 0) addGenericFiles(fileList)
   }
 
   const onPaste = (event) => {
@@ -1969,7 +2444,7 @@ function Composer(props) {
     }
     if (picked.length === 0) return
     event.preventDefault()
-    addFiles(picked)
+    classifyPicked(picked)
     const pasted = clipboard.getData('text/plain')
     if (pasted !== '') insertAtCaret(event.currentTarget, pasted, onText)
   }
@@ -1994,23 +2469,33 @@ function Composer(props) {
   }
 
   const onDrop = (event) => {
-    const files = Array.from(event.dataTransfer?.files ?? [])
-    if (files.length === 0) return
+    const dropped = Array.from(event.dataTransfer?.files ?? [])
+    if (dropped.length === 0) return
     // The tile behind the composer also accepts drops (a sidebar session move);
     // a file drop must stop here or it would also be read as "pick this session".
     event.preventDefault()
     event.stopPropagation()
     setDragging(false)
-    addFiles(files)
+    classifyPicked(dropped)
   }
 
   const onFilesPicked = (event) => {
     const picked = Array.from(event.target.files ?? [])
     event.target.value = ''
-    if (picked.length > 0) addFiles(picked)
+    if (picked.length > 0) addImageFiles(picked)
   }
 
-  const canSend = !sending && (text.trim() !== '' || images.length > 0)
+  const onGenericFilesPicked = (event) => {
+    const picked = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (picked.length > 0) addGenericFiles(picked)
+  }
+
+  const canSend =
+    !sending &&
+    !uploading &&
+    failed === undefined &&
+    (text.trim() !== '' || images.length > 0 || files.length > 0)
   const canStop = running === true && !canSend && !sending && !stopping
   const primaryAction = canStop ? stop : send
   const primaryLabel = canStop
@@ -2021,35 +2506,100 @@ function Composer(props) {
 
   return h(
     'div',
-    { style: composerWrapStyle },
+    {
+      style: composerWrapStyle,
+      'data-dsws-controls': controls === null ? 'none' : 'ready',
+    },
     error === '' ? null : h('div', { role: 'status', style: composerErrorStyle }, error),
     images.length === 0 ? null : h(DraftImageStrip, { images, onRemove: removeImage }),
+    files.length === 0 ? null : h(DraftFileStrip, { files, onRemove: removeFile }),
+    mention.state.open
+      ? h(MentionPopup, {
+          candidates: mention.state.candidates,
+          index: mention.state.index,
+          onChoose: mention.choose,
+          t,
+        })
+      : null,
     h(
       'div',
       { style: composerCardStyle(dragging, focused), onDragOver, onDragLeave, onDrop },
       h(
-        'button',
-        {
-          type: 'button',
-          title: t('composer.image.attach'),
-          'aria-label': t('composer.image.attach'),
-          onClick: () => fileInputRef.current?.click(),
-          style: composerIconBtnStyle,
-        },
-        h(ImageIcon, { size: 17 }),
+        'span',
+        { ref: attachRef, style: attachMenuStyles.wrap },
+        h(
+          'button',
+          {
+            type: 'button',
+            title: t('composer.attach'),
+            'aria-label': t('composer.attach'),
+            'aria-expanded': attachOpen,
+            onClick: () => setAttachOpen((open) => !open),
+            style: composerIconBtnStyle,
+          },
+          h(PlusIcon, { size: 17 }),
+        ),
+        attachOpen
+          ? h(
+              'div',
+              { ref: attachPanelRef, style: attachMenuStyles.panel, role: 'menu' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  role: 'menuitem',
+                  style: attachMenuStyles.item,
+                  onClick: () => {
+                    setAttachOpen(false)
+                    imageInputRef.current?.click()
+                  },
+                },
+                h(ImageIcon, { size: 15 }),
+                t('composer.attach.image'),
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  role: 'menuitem',
+                  disabled: fileUpload === undefined,
+                  style: {
+                    ...attachMenuStyles.item,
+                    opacity: fileUpload === undefined ? 0.4 : 1,
+                  },
+                  onClick: () => {
+                    setAttachOpen(false)
+                    fileInputRef.current?.click()
+                  },
+                },
+                h(FileIcon, { size: 15 }),
+                t('composer.attach.file'),
+              ),
+            )
+          : null,
       ),
       h('input', {
-        ref: fileInputRef,
+        ref: imageInputRef,
         type: 'file',
         accept: IMAGE_MEDIA_TYPES.join(','),
         multiple: true,
         style: { display: 'none' },
         onChange: onFilesPicked,
       }),
+      h('input', {
+        ref: fileInputRef,
+        type: 'file',
+        multiple: true,
+        style: { display: 'none' },
+        onChange: onGenericFilesPicked,
+      }),
       h('textarea', {
         ref: textareaRef,
         value: text,
-        onChange: (event) => onText(event.target.value),
+        onChange: (event) => {
+          onText(event.target.value)
+          mention.refresh(event.target.value, event.target.selectionStart)
+        },
         onKeyDown,
         onPaste,
         onFocus: () => setFocused(true),
@@ -2093,6 +2643,32 @@ function Composer(props) {
         canStop ? h(StopIcon, { size: 11 }) : sending ? '…' : h(SendIcon, { size: 15 }),
       ),
     ),
+    h(ComposerMeta, { controls, occupancy, metaError }),
+  )
+}
+
+/** Footer row of the composer: model/permission seats and context occupancy. */
+function ComposerMeta(props) {
+  const { controls, occupancy, metaError } = props
+  if (metaError !== '') {
+    return h('div', { role: 'status', style: composerErrorStyle }, metaError)
+  }
+  if (controls === null && occupancy === null) return null
+  return h(
+    'div',
+    { style: composerMetaRowStyle, 'data-dsws-composer-meta': 'true' },
+    h('div', { style: composerControlsStyle }, controls),
+    occupancy === null
+      ? null
+      : h(
+          'span',
+          { style: composerContextStyle, 'data-dsws-context': 'true' },
+          t('composer.context', {
+            percent: occupancy.percent,
+            used: formatTokens(occupancy.usedTokens),
+            window: formatTokens(occupancy.contextWindow),
+          }),
+        ),
   )
 }
 
@@ -2848,6 +3424,89 @@ function UserImageStrip(props) {
   )
 }
 
+const userFileStyles = {
+  strip: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    minWidth: 0,
+    marginBottom: 6,
+  },
+  row: attachmentRowStyle,
+  name: attachmentNameStyle,
+  size: {
+    flex: 'none',
+    color: 'var(--dsw-alias-label-caption, #888)',
+  },
+}
+
+/** File attachments one user prompt carried, read straight from its refs. */
+function UserFileStrip(props) {
+  return h(
+    'div',
+    { style: userFileStyles.strip, 'data-dsws-user-files': 'true' },
+    props.files.map((file, index) =>
+      h(
+        'div',
+        { key: `${file.attachmentId}-${index}`, style: userFileStyles.row },
+        h(FileIcon, { size: 14 }),
+        h('span', { style: userFileStyles.name, title: file.name }, file.name),
+        h('span', { style: userFileStyles.size }, formatFileSize(file.bytes)),
+      ),
+    ),
+  )
+}
+
+/** Attachment stack of one user prompt; null when it carried none. */
+function UserAttachments(props) {
+  const { row, session } = props
+  const files = Array.isArray(row.files) ? row.files : []
+  const images = Array.isArray(row.images) ? row.images : []
+  if (files.length === 0 && images.length === 0) return null
+  return h(
+    React.Fragment,
+    null,
+    files.length === 0 ? null : h(UserFileStrip, { files }),
+    images.length === 0 ? null : h(UserImageStrip, { session, images, hasText: row.text !== '' }),
+  )
+}
+
+/** One user prompt row: attachments above the literal text. */
+function UserRow(props) {
+  const { row, session } = props
+  return h(
+    'div',
+    { key: row.key, style: eventStyle('user') },
+    h(UserAttachments, { row, session }),
+    row.text === '' ? null : h('div', null, row.text),
+  )
+}
+
+/**
+ * Render one transcript row by kind.
+ *
+ * Split out of CellView so its render arrow stays small enough for the lint
+ * complexity budget; each branch is a component that owns its own details.
+ * @param props - one transcript row and the bound Session face.
+ */
+function TranscriptRow(props) {
+  const { row, session } = props
+  if (row.kind === 'tool') return h(ToolRow, { ...row.tool })
+  if (row.kind === 'process') return h(ProcessGroup, { group: row })
+  if (row.kind === 'assistant') {
+    return h('div', { style: eventStyle('assistant') }, h(Markdown, { text: row.text, k: row.key }))
+  }
+  if (row.kind === 'user') return h(UserRow, { row, session })
+  return h(
+    'div',
+    {
+      style: eventStyle(row.kind),
+      'data-turn': row.kind === 'divider' ? row.turn : undefined,
+    },
+    row.text,
+  )
+}
+
 /**
  * Queued inbox messages of one bound Session.
  *
@@ -2856,17 +3515,168 @@ function UserImageStrip(props) {
  * @param binding - current Session binding, or null while opening.
  * @returns the `next-turn` queue, empty when the projection is unavailable.
  */
-function useInboxQueue(binding) {
-  const face = binding?.session?.projections?.faceOf?.('inbox')
+function useProjectionFace(binding, key) {
+  const face = binding?.session?.projections?.faceOf?.(key)
   const subscribe = useCallback((cb) => face?.subscribe(cb) ?? (() => {}), [face])
   const snapshot = useCallback(() => face?.getSnapshot(), [face])
-  const inbox = useSyncExternalStore(subscribe, snapshot)
+  return useSyncExternalStore(subscribe, snapshot)
+}
+
+function useInboxQueue(binding) {
+  const inbox = useProjectionFace(binding, 'inbox')
   return Array.isArray(inbox?.['next-turn']) ? inbox['next-turn'] : []
+}
+
+/** Subscribe to the official pending-interaction registry for one Session. */
+function usePendingInteraction(uiSession, sessionId) {
+  const source = uiSession?.sessionStatus
+  const subscribe = useCallback((cb) => source?.subscribe(cb) ?? (() => {}), [source])
+  const snapshot = useCallback(() => source?.getSnapshot(), [source])
+  const statusMap = useSyncExternalStore(subscribe, snapshot)
+  return pendingOf(statusMap, sessionId)
+}
+
+/** Two-letter language prefix for requester-supplied copies. */
+function languagePrefix() {
+  return detectLanguage().startsWith('en') ? 'en' : 'zh'
+}
+
+/**
+ * Model / permission seats plus their catalogs and mutation callbacks.
+ *
+ * Kept in one hook so CellView's render stays under the lint complexity budget;
+ * the catalogs are Remote services and the selections are Session projections.
+ * @param remote - injected `ctx.remote`.
+ * @param binding - current Session binding.
+ * @param sessionId - current Session identity.
+ * @returns `{ controls, metaError }`.
+ */
+function useComposerSeats(remote, binding, sessionId) {
+  const modelSelection = useProjectionFace(binding, 'modelSelection')
+  const permissionSelection = useProjectionFace(binding, 'permissions')
+  const [modelCatalog, setModelCatalog] = useState(null)
+  const [permissionCatalog, setPermissionCatalog] = useState(null)
+  const [metaError, setMetaError] = useState('')
+
+  useEffect(() => {
+    const api = remote?.session
+    if (api?.modelCatalog === undefined) return undefined
+    let alive = true
+    Promise.resolve()
+      .then(() => api.modelCatalog())
+      .then(
+        (result) => {
+          if (alive && result?.ok === true) setModelCatalog(result.value)
+        },
+        () => {},
+      )
+    return () => {
+      alive = false
+    }
+  }, [remote])
+
+  useEffect(() => {
+    const api = remote?.permissionPresets
+    if (api?.catalog === undefined) return undefined
+    let alive = true
+    Promise.resolve()
+      .then(() => api.catalog())
+      .then(
+        (result) => {
+          if (alive && result?.ok === true) setPermissionCatalog(result.value)
+        },
+        () => {},
+      )
+    return () => {
+      alive = false
+    }
+  }, [remote])
+
+  const chooseModel = useCallback(
+    (selection) => {
+      const api = remote?.session
+      if (api?.selectModel === undefined) return
+      setMetaError('')
+      Promise.resolve()
+        .then(() =>
+          api.selectModel({
+            sessionId,
+            provider: selection.provider,
+            model: selection.model,
+            ...(selection.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: selection.reasoningEffort }),
+          }),
+        )
+        .then(
+          (result) => {
+            if (result?.ok !== true) setMetaError(remoteFailureText(result?.error))
+          },
+          (failure) => setMetaError(thrownText(failure)),
+        )
+    },
+    [remote, sessionId],
+  )
+
+  const choosePermission = useCallback(
+    (value) => {
+      const session = binding?.session
+      if (session === undefined) return
+      setMetaError('')
+      Promise.resolve()
+        .then(() => session.command(`/permission ${value}`))
+        .then(
+          (result) => {
+            if (result?.ok !== true) {
+              setMetaError(remoteFailureText(result?.error))
+            } else if (result.value?.matched !== true) {
+              setMetaError(t('composer.permission.unavailable'))
+            }
+          },
+          (failure) => setMetaError(thrownText(failure)),
+        )
+    },
+    [binding],
+  )
+
+  const controls =
+    remote === undefined
+      ? null
+      : h(
+          React.Fragment,
+          null,
+          h(PermissionControl, {
+            catalog: permissionCatalog,
+            current: permissionSelection?.currentValue,
+            onSelect: choosePermission,
+            t,
+          }),
+          h(ModelControl, {
+            catalog: modelCatalog,
+            selection: modelSelection,
+            onSelect: chooseModel,
+            t,
+          }),
+        )
+  return { controls, metaError }
+}
+
+/**
+ * One seat: the pending interaction takes over the composer, exactly like the
+ * main conversation; otherwise the normal composer renders.
+ */
+function PendingSeat(props) {
+  const { pending, t, composer } = props
+  if (pending === undefined) return composer
+  if (pending.kind === 'approval') {
+    return h(ApprovalCard, { key: pending.key, pending, t, lang: languagePrefix() })
+  }
+  return h(QuestionCard, { key: interactionKey(pending), pending, t })
 }
 
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
-  const { sessions, sessionId } = props
+  const { sessions, sessionId, fileUpload, uiSession, remote } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
@@ -2894,6 +3704,13 @@ function CellView(props) {
   // Host inbox projection: queued prompts are not in the event window until the
   // Host admits them, so the dock needs this separate source.
   const queueItems = useInboxQueue(binding)
+  const contextPressure = useProjectionFace(binding, 'contextPressure')
+  const occupancy = contextOccupancy(contextPressure)
+
+  // Official approval / question packages publish their pending objects here;
+  // one registry entry per Session, and answer() is the object's own method.
+  const pending = usePendingInteraction(uiSession, sessionId)
+  const { controls, metaError } = useComposerSeats(remote, binding, sessionId)
 
   // Retain session once catalogued.
   useEffect(() => {
@@ -3092,43 +3909,7 @@ function CellView(props) {
             minWidth: 0,
           },
         },
-        rows.map((row) => {
-          if (row.kind === 'tool') return h(ToolRow, { key: row.key, ...row.tool })
-          if (row.kind === 'process') return h(ProcessGroup, { key: row.key, group: row })
-          // Assistant narration is Markdown. Reasoning and Tool rows are grouped
-          // above by `groupProcessRows`, so this branch is the final answer only.
-          if (row.kind === 'assistant') {
-            return h(
-              'div',
-              { key: row.key, style: eventStyle('assistant') },
-              h(Markdown, { text: row.text, k: row.key }),
-            )
-          }
-          // A prompt that carried pictures draws them above its text in the same
-          // bubble; an image-only prompt therefore still has a visible message.
-          if (row.kind === 'user' && row.images.length > 0) {
-            return h(
-              'div',
-              { key: row.key, style: eventStyle('user') },
-              h(UserImageStrip, {
-                session: binding.session,
-                images: row.images,
-                hasText: row.text !== '',
-              }),
-              row.text === '' ? null : h('div', null, row.text),
-            )
-          }
-          return h(
-            'div',
-            {
-              key: row.key,
-              style: eventStyle(row.kind),
-              // The turn rail scrolls to this anchor, so a divider keeps its turn.
-              'data-turn': row.kind === 'divider' ? row.turn : undefined,
-            },
-            row.text,
-          )
-        }),
+        rows.map((row) => h(TranscriptRow, { key: row.key, row, session: binding.session })),
         running ? h(RunningStatus, { text: runningHint(visible, t) }) : null,
         h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
       ),
@@ -3137,7 +3918,21 @@ function CellView(props) {
     // the typed text stays in this cell's state because the old bar kept it
     // across a session switch on the same tile.
     h(QueueDock, { items: queueItems, session: binding.session }),
-    h(Composer, { session: binding.session, text: inputText, onText: setInputText, running }),
+    h(PendingSeat, {
+      pending,
+      t,
+      composer: h(Composer, {
+        session: binding.session,
+        text: inputText,
+        onText: setInputText,
+        running,
+        fileUpload,
+        occupancy,
+        controls,
+        metaError,
+        remote,
+      }),
+    }),
   )
 }
 
@@ -3903,6 +4698,9 @@ function CellPicker(props) {
 function SplitMain(props) {
   const sessions = props.__sessions
   const workspaces = props.__workspaces
+  const fileUpload = props.__fileUpload
+  const uiSession = props.__uiSession
+  const remote = props.__remote
   const subscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions])
   const getSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions])
   const list = useSyncExternalStore(subscribe, getSnapshot)
@@ -4095,6 +4893,9 @@ function SplitMain(props) {
         index: i,
         cell: cells[i],
         sessions,
+        fileUpload,
+        uiSession,
+        remote,
         nonBlank,
         workspaceItems,
         sessionsOfWorkspace,
@@ -4139,6 +4940,9 @@ function SplitCell(props) {
     index,
     cell,
     sessions,
+    fileUpload,
+    uiSession,
+    remote,
     nonBlank,
     workspaceItems,
     sessionsOfWorkspace,
@@ -4247,7 +5051,7 @@ function SplitCell(props) {
               ? t('split.workspace.empty', { ws: wsTitle })
               : t('split.cell.pickFromAbove'),
           )
-        : h(CellView, { sessions, sessionId: sid }),
+        : h(CellView, { sessions, sessionId: sid, fileUpload, uiSession, remote }),
     ),
   )
 }
@@ -4336,7 +5140,19 @@ function LimitsRow() {
   )
 }
 
-export const inject = ['slots', 'layout', 'sessions', 'workspaces']
+export const inject = [
+  'slots',
+  'layout',
+  'sessions',
+  'workspaces',
+  'fileUpload',
+  'uiSession',
+  'remote',
+  'remote.session',
+  'remote.permissionPresets',
+  'remote.fileReferences',
+  'remote.sessionReferenceResolver',
+]
 
 export function apply(ctx) {
   // Restore split state from the previous page load.
@@ -4413,6 +5229,9 @@ export function apply(ctx) {
 
   const sessionsRef = ctx.sessions
   const workspacesRef = ctx.workspaces
+  const fileUploadRef = ctx.fileUpload
+  const uiSessionRef = ctx.uiSession
+  const remoteRef = ctx.remote
   ctx.slots.inject('main', () =>
     ctx.slots.register(
       {
@@ -4423,6 +5242,9 @@ export function apply(ctx) {
         return h(SplitMain, {
           __sessions: sessionsRef,
           __workspaces: workspacesRef,
+          __fileUpload: fileUploadRef,
+          __uiSession: uiSessionRef,
+          __remote: remoteRef,
         })
       },
     ),

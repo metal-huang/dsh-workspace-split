@@ -309,3 +309,37 @@ v4 的结论全部建立在下面这份可复核的证据上，取数日期 2026
    Known Limitations，以及 `packages/client/web/src/seed.ts` 的模块表；
 2. 用 `npm view @deepseek-ai/dsh dist-tags` 取到最新版本，对照发布包里的同名 README；
 3. 三处结论一致才递增本页版本号。
+
+## 十三、2026-10-27 补能力：公开服务与契约测试（v5）
+
+分屏格子的输入区已补齐主会话的常用能力，全部通过公开服务/Remote 命名空间，
+没有复制官方 UI 源码。逐项接线见下表。
+
+| 能力 | 读取 | 写入 | 证据 |
+|---|---|---|---|
+| 图片/文件附件 | `ctx.fileUpload.upload` | prompt `file` part `{type:'file',receiptId}` | `dsh-client-file-upload/lib/types/client/contract.d.ts` |
+| 模型/推理等级 | `faceOf('modelSelection')`、`remote.session.modelCatalog()` | `remote.session.selectModel({sessionId,provider,model,reasoningEffort?})` | `dsh-api-session-controller/lib/types/types.d.ts` |
+| 访问模式 | `faceOf('permissions')`、`remote.permissionPresets.catalog()` | `session.command('/permission <preset>')` | `dsh-permission-presets/lib/types/types.d.ts` |
+| 斜杠命令 | — | `session.command('/name args')` | `session.d.ts` |
+| `@` 文件/会话 | `remote.fileReferences.list`、`remote.sessionReferenceResolver.candidates` | 纯文本插入 | `dsh-file-reference/lib/types/grammar.js` |
+| 上下文占用 | `faceOf('contextPressure')` | — | `dsh-token-meter/lib/types/projection.d.ts` |
+| 审批/提问 | `ctx.uiSession.sessionStatus` | `pending.answer(...)` | `ui-approval` / `ui-user-questions` 的 contract |
+
+### 13.1 两条硬限制
+
+1. **每个会话只暴露一个 pending interaction**（approval / question / plan-review
+   按 sessionId 归并），所以格子里只有一张交互卡，不是列表。
+2. **审批没有 Remote 方法**；唯一入口是 pending 对象自己的 `answer()`。自行
+   `remote.$on('approval/request')` 抢 waterfall 不可行（官方先注册且不 `next()`）。
+
+### 13.2 契约测试
+
+`test/dsh-contract.test.js` 读取本机 DSH 安装包的 `.d.ts` / `grammar.js`，断言本插件
+实际用到的成员名与类型名仍存在；`DSH_CONTRACT_ROOT` 可改安装路径，未安装 DSH 时
+整组跳过。这样官方改名或删除会变成一条带缺失符号的失败，而不是运行时静默坏掉。
+升级 DSH 后先跑这条测试，再跑 `npm run check` 与浏览器验收。
+
+### 13.3 仍未真机验证
+
+- 后台会话的审批能否到达分屏（契约层成立，模型网关不可用时无法构造真实审批）。
+- 格子回答后官方 composer 面板的收起时序。

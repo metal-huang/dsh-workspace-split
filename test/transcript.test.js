@@ -782,6 +782,43 @@ describe('buildTranscript: turn close rows', () => {
   })
 })
 
+describe('buildTranscript: prompts carrying files', () => {
+  const fileBlock = (attachmentId, name = 'notes.txt') => ({
+    type: 'file',
+    attachment: { attachmentId, name, bytes: 1024 },
+  })
+
+  it('keeps a file-only prompt and its refs', () => {
+    const rows = buildTranscript([promptBlocks([fileBlock('f1')])], t)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'user')
+    assert.equal(rows[0].text, '')
+    assert.deepEqual(
+      rows[0].files.map((file) => [file.attachmentId, file.name]),
+      [['f1', 'notes.txt']],
+    )
+  })
+
+  it('keeps image, file, and text on the same row in block order', () => {
+    const rows = buildTranscript(
+      [promptBlocks([imageBlock('a1'), fileBlock('f1'), { type: 'text', text: 'please read' }])],
+      t,
+    )
+    assert.equal(rows[0].images.length, 1)
+    assert.equal(rows[0].files.length, 1)
+    assert.equal(rows[0].text, 'please read')
+  })
+
+  it('gives a text-only prompt empty file refs', () => {
+    const rows = buildTranscript([prompt('plain')], t)
+    assert.deepEqual(rows[0].files, [])
+  })
+
+  it('ignores a file block without a ref', () => {
+    assert.deepEqual(buildTranscript([promptBlocks([{ type: 'file' }])], t), [])
+  })
+})
+
 describe('groupProcessRows', () => {
   /** One tool/call event carrying the Turn/Step the group uses. */
   function callAt(turn, step, callId = 'c1', name = 'bash') {

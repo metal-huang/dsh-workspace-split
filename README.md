@@ -16,9 +16,23 @@ progress on one screen instead of clicking through tabs.
 
 - **A grid of live sessions.** Rows and columns are yours to choose, up to 5 × 6.
   Each tile holds a running session with its full transcript.
-- **Every tile is typable, images included.** Each cell has its own composer;
-  paste, drop, or pick a PNG / JPEG / WebP / GIF and it goes out with the text.
-  The split layout never changes on its own.
+- **Every tile is typable, attachments included.** Each cell has its own
+  composer; paste, drop, or pick a PNG / JPEG / WebP / GIF, or attach any other
+  file through the `+` menu. Uploads are staged through `ctx.fileUpload` and sent
+  as file parts with the text. The split layout never changes on its own.
+- **Model, reasoning effort, and access mode per tile.** The seat under the
+  composer reads the same Session projections and Remote catalogs as Chat, and
+  writes through `session.selectModel` / `/permission <preset>`; switching to
+  full access asks for the same risk confirmation.
+- **Slash commands and `@` references.** A `/command` line runs through
+  `session.command` without spending a turn, and `@` lists files and sessions
+  through the public reference providers before inserting the same plain-text
+  token Chat uses.
+- **Approvals and questions answer in the tile.** An approval or
+  `ask_user_question` waiting on that Session replaces the composer with a
+  compact card; answering calls the same pending object Chat's panel uses.
+- **Context occupancy.** The footer shows the same `projected / window` token
+  reading as Chat, and hides itself when the projection is absent.
 - **Session or project per tile.** Pin one session, or pin a project and switch
   between that project's sessions inside the tile.
 - **Real-time status.** A dot on each title shows whether the session is working.
@@ -44,6 +58,15 @@ Sessions come from the public `ctx.sessions` API (`list`, `retain`, the event
 source), and input goes out through `session.prompt`. Each tile's transcript,
 Markdown, tool cards, and composer are rendered by this plugin itself, with
 styles built on DSH's theme variables and visual rules so they match the app.
+
+Everything DSH-specific is consumed through public services and Remote
+namespaces — `ctx.fileUpload`, `ctx.uiSession`, `ctx.remote.session`,
+`ctx.remote.permissionPresets`, `ctx.remote.fileReferences`, and
+`ctx.remote.sessionReferenceResolver`. `test/dsh-contract.test.js` asserts those
+methods and type names against the installed DSH build, so an upstream rename
+fails a gate with the exact missing symbol instead of silently breaking a tile.
+Set `DSH_CONTRACT_ROOT` to check another installation; the test skips when no DSH
+install is present.
 
 ## Requirements
 

@@ -15,8 +15,19 @@
 
 - **活的会话网格**。行列自己选，最多 5 行 × 6 列，每个格子是一个运行中的会话，
   带完整对话记录。
-- **每个格子都能打字，也能放图**。每格有独立输入框，可以粘贴、拖入或选择
-  PNG / JPEG / WebP / GIF，图片随文字一起发出；分屏布局不会自己变。
+- **每个格子都能打字，也能放附件**。每格有独立输入框，可以粘贴、拖入或选择
+  PNG / JPEG / WebP / GIF，也可以从 `+` 菜单附加任意文件；上传走
+  `ctx.fileUpload`，文件随文字一起发出；分屏布局不会自己变。
+- **每格可选模型、推理等级和访问模式**。输入框下方的座位读取与主会话相同的
+  Session 投影和 Remote 目录，写入走 `session.selectModel` 与
+  `/permission <preset>`；切到完全权限时同样要求风险确认。
+- **斜杠命令与 `@` 引用**。`/命令` 走 `session.command`，不消耗一轮对话；
+  `@` 通过公开引用接口列出文件与会话，插入的文本与主会话一致。
+- **审批与提问直接在格子里回答**。该会话有等待中的审批或
+  `ask_user_question` 时，输入框会换成一张紧凑卡片；回答调用的是主会话面板
+  同一个 pending 对象。
+- **上下文占用**。底部显示与主会话一致的 `projected / window` token 读数；
+  投影缺失时整块隐藏。
 - **一格放会话，或放项目**。可以钉住某个会话，也可以钉住一个项目，在格子里
   切换这个项目的不同会话。
 - **实时状态**。标题上的圆点表示该会话是否正在跑。
@@ -37,6 +48,13 @@
 会话数据走公开的 `ctx.sessions` 接口（`list`、`retain`、事件源），输入走
 `session.prompt`。每个格子的对话记录、Markdown、工具卡和输入框都由本插件自己
 渲染，样式沿用 DSH 的主题变量与视觉规则，跟随应用主题。
+
+所有 DSH 相关能力都走公开服务与 Remote 命名空间：`ctx.fileUpload`、
+`ctx.uiSession`、`ctx.remote.session`、`ctx.remote.permissionPresets`、
+`ctx.remote.fileReferences`、`ctx.remote.sessionReferenceResolver`。
+`test/dsh-contract.test.js` 会对照本机安装的 DSH 断言这些方法与类型名；官方
+改名或删除时，门禁会带着缺失的符号失败，而不是让某个格子静默坏掉。用
+`DSH_CONTRACT_ROOT` 可指定别的安装目录；没装 DSH 时该测试自动跳过。
 
 ## 环境要求
 
