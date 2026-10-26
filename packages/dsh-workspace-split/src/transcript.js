@@ -68,6 +68,13 @@ function recordText(record) {
   return record.chunk.text ?? ''
 }
 
+/** Reasoning one compact stream record contributes. */
+function recordReasoning(record) {
+  if (record?.type !== 'chunk') return ''
+  if (record.chunk?.type !== 'reasoning-delta') return ''
+  return record.chunk.text ?? ''
+}
+
 /** Block index a compact record's text belongs to. */
 function streamIndex(record) {
   const index = record?.type === 'chunk' ? record.chunk?.index : record?.index
@@ -88,6 +95,26 @@ export function streamText(records) {
     accumulate(blocks, streamIndex(record), 'text', text)
   }
   return blockText(blocks)
+}
+
+/**
+ * Reasoning a settled attempt streamed.
+ *
+ * `assistant/attempt` keeps the same compact records as a message but marks
+ * reasoning deltas separately; the cell shows them in the same disclosure row
+ * as live reasoning.
+ * @param records - compact stream records from `assistant/attempt`.
+ * @returns joined reasoning text.
+ */
+export function streamReasoning(records) {
+  const list = Array.isArray(records) ? records : []
+  const blocks = new Map()
+  for (const record of list) {
+    const text = recordReasoning(record)
+    if (text === '') continue
+    accumulate(blocks, streamIndex(record), 'reasoning', text)
+  }
+  return blockReasoning(blocks)
 }
 
 // ---------- live chunk folding ----------
@@ -114,7 +141,8 @@ function accumulate(blocks, index, kind, text) {
 /** Block map entry for an assembled block. */
 function blockState(block) {
   const kind = block?.type ?? ''
-  return { kind, text: kind === 'text' ? (block.text ?? '') : '' }
+  const text = kind === 'text' || kind === 'reasoning' ? (block.text ?? '') : ''
+  return { kind, text }
 }
 
 /**
@@ -161,6 +189,15 @@ function blockText(blocks) {
     .join('\n\n')
 }
 
+/** Reasoning of one attempt: its reasoning blocks, in block order. */
+function blockReasoning(blocks) {
+  return [...blocks.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .filter(([, block]) => block.kind === 'reasoning' && block.text.trim() !== '')
+    .map(([, block]) => block.text.trim())
+    .join('\n\n')
+}
+
 // ---------- rows ----------
 
 /**
@@ -193,6 +230,20 @@ function contentImages(content) {
     .map((block) => block.attachment)
 }
 
+/**
+ * Reasoning blocks of a durable Assistant message.
+ * @param content - content blocks of an `assistant/message`.
+ * @returns joined reasoning text, or ''.
+ */
+function contentReasoning(content) {
+  const blocks = Array.isArray(content) ? content : []
+  return blocks
+    .filter((block) => block?.type === 'reasoning' && typeof block.text === 'string')
+    .map((block) => block.text.trim())
+    .filter((text) => text !== '')
+    .join('\n\n')
+}
+
 /** One content block's readable label for the tool row. */
 function blockLabel(block) {
   if (block?.type === 'text') return block.text
@@ -219,6 +270,9 @@ function toolRow(key, call, result) {
       resultText: result === undefined ? '' : toolResultText(result),
       isError: resultFailed(result),
       errorReason: failureReason(result),
+      // The call landed but its result has not: the row is the reader's proof
+      // that the harness is executing rather than stuck.
+      running: result === undefined,
     },
   }
 }
@@ -295,6 +349,69 @@ function resultCallId(ev) {
   return ev?.data?.message?.toolCallId ?? ev?.data?.toolCallId
 }
 
+/** Tool calls in the window, in order. */
+function toolCalls(entries) {
+  const calls = []
+  for (const entry of entries) {
+    const ev = entry?.event
+    if (ev?.type === 'tool/call') {
+      calls.push({ id: ev.data?.callId, name: ev.data?.name ?? 'tool' })
+    }
+  }
+  return calls
+}
+
+/** Ids of Tool results that appended to the transcript. */
+function answeredToolIds(entries) {
+  const results = new Set()
+  for (const entry of entries) {
+    const ev = entry?.event
+    if (ev?.type === 'tool/result' && isAppendSurface(ev)) results.add(resultCallId(ev))
+  }
+  return results
+}
+
+/** Last live chunk in the window, if any. */
+function lastLiveChunk(entries) {
+  let chunk = null
+  for (const entry of entries) {
+    if (entry?.event?.type === 'assistant/live-chunk') chunk = entry.event.data?.chunk ?? null
+  }
+  return chunk
+}
+
+/** Status text for one stream chunk kind. */
+function chunkHint(chunk, t) {
+  if (chunk === null) return t('running.generic')
+  if (chunk.type === 'reasoning-delta') return t('running.thinking')
+  if (chunk.type === 'block-start' && chunk.blockType === 'reasoning') {
+    return t('running.thinking')
+  }
+  if (chunk.type === 'text-delta') return t('running.replying')
+  return t('running.generic')
+}
+
+/**
+ * One line describing what a running session is doing right now.
+ *
+ * The main conversation shows a live status while a turn runs; a split cell
+ * gets the same confidence by naming the pending Tool call first, then the kind
+ * of stream chunk that arrived last. The caller only renders this while the
+ * Session snapshot says it is running.
+ * @param entries - session event entries in window order.
+ * @param t - translation function, injectable for tests.
+ * @returns the status line.
+ */
+export function runningHint(entries, t = keyOnly) {
+  const list = Array.isArray(entries) ? entries : []
+  const results = answeredToolIds(list)
+  const pending = toolCalls(list)
+    .reverse()
+    .find((call) => !results.has(call.id))
+  if (pending !== undefined) return t('running.tool', { name: pending.name })
+  return chunkHint(lastLiveChunk(list), t)
+}
+
 /**
  * Live chunk: extend the attempt it belongs to, creating its row on first text.
  * @param ev - one `assistant/live-chunk` event.
@@ -315,12 +432,21 @@ function onLiveChunk(ev, ctx) {
   }
   applyChunk(stream.blocks, ev.data?.chunk)
   const text = blockText(stream.blocks)
-  if (text === '') return
+  const reasoning = blockReasoning(stream.blocks)
+  if (text === '' && reasoning === '') return
   if (stream.row !== undefined) {
     stream.row.text = text
+    stream.row.reasoning = reasoning
     return
   }
-  stream.row = { key: `live-${key}`, kind: 'assistant', text, turn, streaming: true }
+  stream.row = {
+    key: `live-${key}`,
+    kind: 'assistant',
+    text,
+    reasoning,
+    turn,
+    streaming: true,
+  }
   ctx.rows.push(stream.row)
 }
 
@@ -374,19 +500,60 @@ function dropAttempts(ctx, target) {
  */
 function onAttempt(ev, ctx) {
   const text = streamText(ev.data?.stream)
+  const reasoning = streamReasoning(ev.data?.stream)
   const key = streamKey(ev.data?.turn, ev.data?.step)
   // Same ownership rule as a message: an attempt that already has a live row
   // keeps it, so the text does not appear twice when both rows are in the window.
-  const stream = ctx.streams.get(key)
-  if (settle(stream, text)) {
-    ctx.attempts.set(key, stream.row)
-    ctx.streams.delete(key)
+  const settled = settleStep(ctx, key, text, reasoning)
+  if (settled !== null) {
+    ctx.attempts.set(key, settled)
     return
   }
-  if (text.trim() === '') return
-  const row = { key: `attempt-${key}`, kind: 'assistant', text, turn: ev.data?.turn }
+  if (text.trim() === '' && reasoning === '') return
+  const row = {
+    key: `attempt-${key}`,
+    kind: 'assistant',
+    text,
+    reasoning,
+    turn: ev.data?.turn,
+  }
   ctx.rows.push(row)
   ctx.attempts.set(key, row)
+}
+
+/**
+ * Settle the open row of one Turn/Step, when it has one.
+ * @param ctx - shared build state.
+ * @param key - Turn/Step key.
+ * @param text - settled text.
+ * @param reasoning - settled reasoning.
+ * @returns the settled row, or null when no live row owned this step.
+ */
+function settleStep(ctx, key, text, reasoning) {
+  const stream = ctx.streams.get(key)
+  if (stream === undefined) return null
+  if (!settle(stream, text, reasoning)) return null
+  ctx.streams.delete(key)
+  ctx.settled.add(key)
+  return stream.row
+}
+
+/** Text and reasoning of one durable Assistant message. */
+function messageContent(ev) {
+  const content = ev.data?.message?.content
+  return { text: contentText(content), reasoning: contentReasoning(content) }
+}
+
+/** Push the settled row of a message that did not own a live row. */
+function pushMessageRow(ctx, ev, key, content) {
+  ctx.settled.add(key)
+  ctx.rows.push({
+    key: `message-${ev.seq ?? key}`,
+    kind: 'assistant',
+    text: content.text,
+    reasoning: content.reasoning,
+    turn: ev.data?.turn,
+  })
 }
 
 /**
@@ -396,32 +563,24 @@ function onAttempt(ev, ctx) {
 function onMessage(ev, ctx) {
   // A replacement copy (compaction rewriting an earlier answer) is model-only.
   if (!isAppendSurface(ev)) return
-  const text = contentText(ev.data?.message?.content)
+  const { text, reasoning } = messageContent(ev)
   const key = streamKey(ev.data?.turn, ev.data?.step)
-  if (settle(ctx.streams.get(key), text)) {
-    ctx.streams.delete(key)
-    ctx.settled.add(key)
-    return
-  }
-  if (text === '') return
-  ctx.settled.add(key)
-  ctx.rows.push({
-    key: `message-${ev.seq ?? key}`,
-    kind: 'assistant',
-    text,
-    turn: ev.data?.turn,
-  })
+  if (settleStep(ctx, key, text, reasoning) !== null) return
+  if (text === '' && reasoning === '') return
+  pushMessageRow(ctx, ev, key, { text, reasoning })
 }
 
 /**
  * Hand one settlement to the row the attempt already owns, when it has one.
  * @param stream - the attempt's fold state, if still open.
  * @param text - settled message text.
+ * @param reasoning - settled reasoning text.
  * @returns whether the settlement took over an existing row.
  */
-function settle(stream, text) {
+function settle(stream, text, reasoning) {
   if (stream === undefined || stream.row === undefined) return false
   if (text !== '') stream.row.text = text
+  if (reasoning !== '') stream.row.reasoning = reasoning
   stream.row.streaming = false
   return true
 }
@@ -436,6 +595,50 @@ function onTurnStart(ev, ctx) {
     text: ctx.t('turn.divider', { n: turn }),
     turn,
   })
+}
+
+/** Muted one-line label for a turn that ended without an error. */
+function turnNotice(reason, t) {
+  switch (reason.kind) {
+    case 'aborted':
+      return t('turn.aborted')
+    case 'max-tokens':
+      return t('turn.maxTokens')
+    case 'interrupted':
+      return t('turn.interrupted')
+    default:
+      return t('turn.blocked')
+  }
+}
+
+/** Text for a failed turn, keeping both the message and its routing code. */
+function turnErrorText(error, t) {
+  const message = error?.message ?? ''
+  const code = error?.code ?? ''
+  return t('turn.error', { message, code })
+}
+
+/**
+ * Turn close. A failed turn is the reader's only proof that the prompt did not
+ * run, so it becomes a visible error row instead of ending as silence; the
+ * shorter non-completed causes become one muted notice row.
+ */
+function onTurnEnd(ev, ctx) {
+  const turn = ev.data?.turn
+  const reason = ev.data?.reason
+  if (reason === undefined || reason === null) return
+  if (reason.kind === 'completed' || reason.kind === 'forked') return
+  const key = `turn-end-${turn === undefined ? ctx.rows.length : turn}`
+  if (reason.kind === 'error') {
+    ctx.rows.push({
+      key,
+      kind: 'error',
+      text: turnErrorText(reason.error, ctx.t),
+      turn,
+    })
+    return
+  }
+  ctx.rows.push({ key, kind: 'notice', text: turnNotice(reason, ctx.t), turn })
 }
 
 /**
@@ -488,6 +691,7 @@ const HANDLERS = new Map([
   ['assistant/attempt', onAttempt],
   ['assistant/message', onMessage],
   ['turn/start', onTurnStart],
+  ['turn/end', onTurnEnd],
   ['user/message', onUserMessage],
   ['tool/call', onToolCall],
   ['tool/result', onToolResult],

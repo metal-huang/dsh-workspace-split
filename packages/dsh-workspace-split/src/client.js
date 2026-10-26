@@ -23,7 +23,7 @@ import { t } from './i18n.js'
 import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
 
 // ---------- transcript folding ----------
-import { buildTranscript } from './transcript.js'
+import { buildTranscript, runningHint } from './transcript.js'
 
 // ---------- composer image intake ----------
 import {
@@ -1133,6 +1133,11 @@ function SplitIcon(props) {
 }
 
 const SPLIT_STYLE_ID = 'dsws-split-styles'
+/** Running-row animation, kept beside the placement rules for the same stylesheet. */
+const TRANSCRIPT_STYLES = `
+@keyframes dsws-pulse{0%,100%{opacity:.3}50%{opacity:1}}
+.dsws-running-dot{animation:dsws-pulse 1.1s ease-in-out infinite}
+`
 
 /**
  * Place the picker panel against the control that opened it.
@@ -1167,7 +1172,7 @@ function installSplitStyles() {
   if (existing !== null) return () => {}
   const style = document.createElement('style')
   style.id = SPLIT_STYLE_ID
-  style.textContent = SIDEBAR_STYLES
+  style.textContent = `${SIDEBAR_STYLES}\n${TRANSCRIPT_STYLES}`
   document.head.append(style)
   return () => style.remove()
 }
@@ -1807,6 +1812,22 @@ function ChevronIcon(props) {
   )
 }
 
+/** Square stop glyph, the compact counterpart of the main composer's Stop. */
+function StopIcon(props) {
+  const size = props.size ?? 11
+  return h(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 16 16',
+      'aria-hidden': true,
+      style: { display: 'block' },
+    },
+    h('rect', { x: 3.5, y: 3.5, width: 9, height: 9, rx: 1.5, fill: 'currentColor' }),
+  )
+}
+
 /**
  * Thumbnails of the images waiting in the draft, each removable on its own.
  * @param props - draft `images` and the `onRemove(id)` handler.
@@ -1851,8 +1872,9 @@ function DraftImageStrip(props) {
  *   cell-owned draft text.
  */
 function Composer(props) {
-  const { session, text, onText } = props
+  const { session, text, onText, running } = props
   const [sending, setSending] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [focused, setFocused] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -1910,6 +1932,22 @@ function Composer(props) {
       setSending(false)
     }
   }, [session, text, onText, images, sending, setError, clearImages])
+
+  const stop = useCallback(async () => {
+    if (session === undefined || session === null || stopping) return
+    setStopping(true)
+    setError('')
+    try {
+      const result = await session.cancel()
+      if (result?.ok !== true) {
+        setError(t('composer.stopFailed', { error: remoteFailureText(result?.error) }))
+      }
+    } catch (failure) {
+      setError(t('composer.stopFailed', { error: thrownText(failure) }))
+    } finally {
+      setStopping(false)
+    }
+  }, [session, stopping, setError])
 
   const onKeyDown = (event) => {
     if (event.key !== 'Enter' || event.shiftKey) return
@@ -1973,6 +2011,13 @@ function Composer(props) {
   }
 
   const canSend = !sending && (text.trim() !== '' || images.length > 0)
+  const canStop = running === true && !canSend && !sending && !stopping
+  const primaryAction = canStop ? stop : send
+  const primaryLabel = canStop
+    ? t('composer.stop')
+    : sending
+      ? t('composer.sending')
+      : t('composer.send')
 
   return h(
     'div',
@@ -2035,17 +2080,17 @@ function Composer(props) {
         'button',
         {
           type: 'button',
-          title: sending ? t('composer.sending') : t('composer.send'),
-          'aria-label': sending ? t('composer.sending') : t('composer.send'),
-          onClick: send,
-          disabled: !canSend,
+          title: primaryLabel,
+          'aria-label': primaryLabel,
+          onClick: primaryAction,
+          disabled: !canSend && !canStop,
           style: {
             ...composerSendStyle,
-            opacity: canSend ? 1 : 0.35,
-            cursor: canSend ? 'pointer' : 'default',
+            opacity: canSend || canStop ? 1 : 0.35,
+            cursor: canSend || canStop ? 'pointer' : 'default',
           },
         },
-        sending ? '…' : h(SendIcon, { size: 15 }),
+        canStop ? h(StopIcon, { size: 11 }) : sending ? '…' : h(SendIcon, { size: 15 }),
       ),
     ),
   )
@@ -2114,6 +2159,23 @@ const toolStyles = {
     borderRadius: '50%',
     background: 'var(--dsw-alias-state-error-primary, #e5484d)',
   },
+  running: {
+    flex: 'none',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 8,
+    color: 'var(--dsw-alias-state-business-primary, #4a9eff)',
+    fontSize: 11,
+    lineHeight: '16px',
+  },
+  runningDot: {
+    flex: 'none',
+    width: 5,
+    height: 5,
+    borderRadius: '50%',
+    background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
+  },
   body: {
     margin: '2px 0 8px 18px',
     paddingLeft: 12,
@@ -2174,7 +2236,7 @@ function toolSummary(name, argsRaw) {
 
 /** Expandable tool call row: name, summary, and arguments/result on demand. */
 function ToolRow(props) {
-  const { name, argsRaw, resultText, isError, errorReason } = props
+  const { name, argsRaw, resultText, isError, errorReason, running } = props
   const [expanded, setExpanded] = useState(false)
   const [hover, setHover] = useState(false)
   const summary = toolSummary(name, argsRaw)
@@ -2186,7 +2248,11 @@ function ToolRow(props) {
 
   return h(
     'div',
-    { style: { display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' } },
+    {
+      style: { display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' },
+      'data-dsws-tool': name,
+      'data-running': running === true ? 'true' : 'false',
+    },
     h(
       'div',
       {
@@ -2202,6 +2268,14 @@ function ToolRow(props) {
       h('span', { style: toolStyles.name }, name),
       summary ? h('span', { style: toolStyles.sep }) : null,
       summary ? h('span', { style: toolStyles.summary }, summary) : null,
+      running
+        ? h(
+            'span',
+            { style: toolStyles.running, title: t('toolrow.running') },
+            h('span', { className: 'dsws-running-dot', style: toolStyles.runningDot }),
+            t('toolrow.running'),
+          )
+        : null,
       isError ? h('span', { style: toolStyles.errorFlag, title: t('toolrow.failed') }) : null,
     ),
     expanded
@@ -2239,9 +2313,124 @@ function ToolRow(props) {
                 ),
                 h('pre', { style: toolStyles.pre }, resultText),
               )
-            : h('div', { style: toolStyles.label }, t('toolrow.noOutput')),
+            : h(
+                'div',
+                { style: toolStyles.label },
+                running ? t('toolrow.running') : t('toolrow.noOutput'),
+              ),
         )
       : null,
+  )
+}
+
+const reasoningStyles = {
+  label: {
+    flex: 'none',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    fontWeight: 600,
+    color: 'var(--dsw-alias-label-secondary, #999)',
+  },
+  preview: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    color: 'var(--dsw-alias-label-tertiary, #888)',
+  },
+  dot: {
+    flex: 'none',
+    width: 5,
+    height: 5,
+    borderRadius: '50%',
+    background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
+  },
+  body: {
+    margin: '2px 0 8px 18px',
+    paddingLeft: 12,
+    borderLeft: '2px solid var(--dsw-alias-border-l2, #4a4a4a)',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    lineHeight: 1.6,
+    color: 'var(--dsw-alias-label-secondary, #999)',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    maxHeight: 220,
+    overflow: 'auto',
+  },
+}
+
+/**
+ * Collapsible reasoning of one Assistant attempt.
+ *
+ * The main conversation shows reasoning as its own disclosure row; the split
+ * cell reuses the Tool row's 24px rhythm so a live attempt reads as a process,
+ * not as a wall of text. It opens by itself while reasoning streams, then keeps
+ * whatever state the reader left it in after settlement.
+ * @param props - `text` and whether the attempt is still streaming.
+ */
+function ReasoningRow(props) {
+  const { text, streaming } = props
+  const [open, setOpen] = useState(streaming === true)
+  const [hover, setHover] = useState(false)
+  const preview = text.replace(/\s+/g, ' ').trim().slice(0, 140)
+  return h(
+    'div',
+    { style: { minWidth: 0, maxWidth: '100%' }, 'data-dsws-reasoning': 'true' },
+    h(
+      'div',
+      {
+        style: toolStyles.row(hover, open),
+        onMouseEnter: () => setHover(true),
+        onMouseLeave: () => setHover(false),
+        onClick: () => setOpen((value) => !value),
+        role: 'button',
+        'aria-expanded': open,
+        'data-streaming': streaming === true ? 'true' : 'false',
+        title: open ? t('reasoning.collapse') : t('reasoning.expand'),
+      },
+      h('span', { style: toolStyles.chevron(open) }, '▶'),
+      h(
+        'span',
+        { style: reasoningStyles.label },
+        streaming ? t('reasoning.streaming') : t('reasoning.label'),
+      ),
+      streaming ? h('span', { className: 'dsws-running-dot', style: reasoningStyles.dot }) : null,
+      preview ? h('span', { style: reasoningStyles.preview }, preview) : null,
+    ),
+    open ? h('div', { style: reasoningStyles.body }, text) : null,
+  )
+}
+
+const runningStyles = {
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 0 2px',
+    color: 'var(--dsw-alias-label-secondary, #999)',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    lineHeight: '18px',
+  },
+  dot: {
+    flex: 'none',
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
+  },
+}
+
+/**
+ * One live line under the transcript while the Session is running.
+ * @param props - the status text chosen by `runningHint`.
+ */
+function RunningStatus(props) {
+  return h(
+    'div',
+    { style: runningStyles.row, 'data-dsws-running': 'true' },
+    h('span', { className: 'dsws-running-dot', style: runningStyles.dot }),
+    h('span', null, props.text),
   )
 }
 
@@ -2296,6 +2485,29 @@ function eventStyle(kind) {
       fontSize: 'var(--dsh-content-font-size-secondary, 11px)',
       padding: '2px 0',
       marginBottom: 6,
+    }
+  if (kind === 'error')
+    return {
+      ...base,
+      maxWidth: '100%',
+      alignSelf: 'stretch',
+      background: 'rgba(229,72,77,.08)',
+      borderLeft: '2px solid var(--dsw-alias-state-error-primary, #e5484d)',
+      borderRadius: 6,
+      padding: '6px 10px',
+      color: 'var(--dsw-alias-state-error-primary, #e5484d)',
+      fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+      lineHeight: '18px',
+    }
+  if (kind === 'notice')
+    return {
+      ...base,
+      maxWidth: '100%',
+      alignSelf: 'stretch',
+      color: 'var(--dsw-alias-label-caption, #999)',
+      fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+      lineHeight: '18px',
+      padding: '2px 0',
     }
   return base
 }
@@ -2422,10 +2634,18 @@ function UserImageThumb(props) {
 
   const name = typeof attachment.name === 'string' && attachment.name !== '' ? attachment.name : ''
   if (failed) {
-    return h('div', { style: userImageStyles.placeholder, title: t('transcript.image.failed') }, '×')
+    return h(
+      'div',
+      { style: userImageStyles.placeholder, title: t('transcript.image.failed') },
+      '×',
+    )
   }
   if (url === '') {
-    return h('div', { style: userImageStyles.placeholder, title: t('transcript.image.loading') }, '…')
+    return h(
+      'div',
+      { style: userImageStyles.placeholder, title: t('transcript.image.loading') },
+      '…',
+    )
   }
   return h('img', {
     src: url,
@@ -2472,6 +2692,16 @@ function CellView(props) {
   const catalogSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions])
   const catalog = useSyncExternalStore(catalogSubscribe, catalogSnapshot)
   const cataloged = !!sessionId && !!catalog?.ids?.includes(sessionId)
+
+  // The live status needs the Session's own running flag, not just the event tail:
+  // a turn can be between events while a Tool runs, and settlement has no chunk.
+  const sessionSubscribe = useCallback(
+    (cb) => binding?.session?.subscribe(cb) ?? (() => {}),
+    [binding],
+  )
+  const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
+  const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
+  const running = sessionState?.running === true
 
   // Retain session once catalogued.
   useEffect(() => {
@@ -2553,7 +2783,7 @@ function CellView(props) {
   useEffect(() => {
     const el = bodyRef.current
     if (el && followRef.current) el.scrollTop = el.scrollHeight
-  }, [events.length])
+  }, [events.length, running])
 
   // On scroll: remember whether we are at the tail, and page older history in
   // when the reader reaches the top.
@@ -2672,12 +2902,17 @@ function CellView(props) {
         },
         rows.map((row) => {
           if (row.kind === 'tool') return h(ToolRow, { key: row.key, ...row.tool })
-          // Assistant narration is Markdown; user prompts and status rows stay literal.
+          // Assistant narration is Markdown; reasoning is a disclosure row above
+          // it. A row with only reasoning still draws, so a thinking attempt is
+          // visible before the first answer token arrives.
           if (row.kind === 'assistant') {
             return h(
               'div',
               { key: row.key, style: eventStyle('assistant') },
-              h(Markdown, { text: row.text, k: row.key }),
+              row.reasoning === '' || row.reasoning === undefined
+                ? null
+                : h(ReasoningRow, { text: row.reasoning, streaming: row.streaming === true }),
+              row.text === '' ? null : h(Markdown, { text: row.text, k: row.key }),
             )
           }
           // A prompt that carried pictures draws them above its text in the same
@@ -2705,13 +2940,14 @@ function CellView(props) {
             row.text,
           )
         }),
+        running ? h(RunningStatus, { text: runningHint(visible, t) }) : null,
         h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
       ),
     ),
     // Image previews need the Composer's unmount hook, so the images live there;
     // the typed text stays in this cell's state because the old bar kept it
     // across a session switch on the same tile.
-    h(Composer, { session: binding.session, text: inputText, onText: setInputText }),
+    h(Composer, { session: binding.session, text: inputText, onText: setInputText, running }),
   )
 }
 

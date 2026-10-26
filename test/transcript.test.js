@@ -15,7 +15,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { buildTranscript, streamText } from '../packages/dsh-workspace-split/src/transcript.js'
+import {
+  buildTranscript,
+  runningHint,
+  streamReasoning,
+  streamText,
+} from '../packages/dsh-workspace-split/src/transcript.js'
 
 /** Minimal `t` so labels do not depend on the harness language. */
 const t = (key, vars = {}) => `${key}${vars.n === undefined ? '' : `:${vars.n}`}`
@@ -516,6 +521,7 @@ describe('buildTranscript: other rows', () => {
       resultText: 'body',
       isError: false,
       errorReason: '',
+      running: false,
     })
   })
 
@@ -593,5 +599,184 @@ describe('streamText', () => {
   it('returns an empty string for a missing stream', () => {
     assert.equal(streamText(undefined), '')
     assert.equal(streamText([]), '')
+  })
+})
+
+describe('buildTranscript: reasoning rows', () => {
+  /** One reasoning delta for a block index. */
+  const reasoning = (index, text) => ({ type: 'reasoning-delta', index, text })
+
+  it('keeps a reasoning-only attempt visible before the first answer token', () => {
+    const entries = [
+      live(1, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }),
+      live(1, 1, reasoning(0, '先看看')),
+      live(1, 1, reasoning(0, '目录')),
+    ]
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'assistant')
+    assert.equal(rows[0].text, '')
+    assert.equal(rows[0].reasoning, '先看看目录')
+    assert.equal(rows[0].streaming, true)
+  })
+
+  it('keeps reasoning and answer on the same attempt row', () => {
+    const entries = [
+      live(1, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }),
+      live(1, 1, reasoning(0, '想一想')),
+      live(1, 1, { type: 'block-end', index: 0, block: { type: 'reasoning', text: '想一想' } }),
+      live(1, 1, { type: 'block-start', index: 1, blockType: 'text' }),
+      live(1, 1, delta(1, '答案')),
+    ]
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1, 'one row owns the whole step')
+    assert.equal(rows[0].reasoning, '想一想')
+    assert.equal(rows[0].text, '答案')
+  })
+
+  it('settles reasoning from a durable Assistant message', () => {
+    const entries = [
+      live(2, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }),
+      live(2, 1, reasoning(0, '草稿')),
+      surface('assistant/message', {
+        turn: 2,
+        step: 1,
+        message: {
+          content: [
+            { type: 'reasoning', text: '最终推理' },
+            { type: 'text', text: '最终回答' },
+          ],
+        },
+      }),
+    ]
+    const rows = buildTranscript(entries, t)
+    assert.equal(rows.length, 1, 'the settlement owns the live row')
+    assert.equal(rows[0].reasoning, '最终推理')
+    assert.equal(rows[0].text, '最终回答')
+    assert.equal(rows[0].streaming, false)
+  })
+
+  it('draws an image-only prompt and its reasoning separately', () => {
+    const rows = buildTranscript(
+      [
+        promptBlocks([imageBlock('a1')]),
+        surface('assistant/message', {
+          turn: 1,
+          step: 1,
+          message: {
+            content: [
+              { type: 'reasoning', text: '看图' },
+              { type: 'text', text: '看到了' },
+            ],
+          },
+        }),
+      ],
+      t,
+    )
+    assert.equal(rows[0].kind, 'user')
+    assert.equal(rows[1].kind, 'assistant')
+    assert.equal(rows[1].reasoning, '看图')
+  })
+})
+
+describe('streamReasoning', () => {
+  it('joins packed reasoning deltas per block', () => {
+    assert.equal(
+      streamReasoning([
+        { type: 'chunk', time: 0, chunk: { type: 'reasoning-delta', index: 0, text: '想' } },
+        { type: 'chunk', time: 1, chunk: { type: 'reasoning-delta', index: 0, text: '了' } },
+        { type: 'chunk', time: 2, chunk: { type: 'text-delta', index: 1, text: 'no' } },
+      ]),
+      '想了',
+    )
+  })
+
+  it('returns an empty string for a missing stream', () => {
+    assert.equal(streamReasoning(undefined), '')
+    assert.equal(streamReasoning([]), '')
+  })
+})
+
+describe('tool rows: live execution state', () => {
+  it('marks a call without its result as running', () => {
+    const rows = buildTranscript([toolCall('c1', 'bash', '{"command":"echo hi"}')], t)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].tool.running, true)
+    assert.equal(rows[0].tool.resultText, '')
+  })
+
+  it('clears running once the answering result is in the window', () => {
+    const rows = buildTranscript(
+      [toolCall('c1', 'bash', '{"command":"echo hi"}'), toolResult('c1', 'hi')],
+      t,
+    )
+    assert.equal(rows[0].tool.running, false)
+    assert.equal(rows[0].tool.resultText, 'hi')
+  })
+})
+
+describe('runningHint', () => {
+  const named = (key, vars = {}) => `${key}${vars.name === undefined ? '' : `:${vars.name}`}`
+
+  it('names the tool that has not answered yet', () => {
+    assert.equal(
+      runningHint([toolCall('c1', 'bash', '{}'), toolCall('c2', 'read', '{}')], named),
+      'running.tool:read',
+    )
+    assert.equal(
+      runningHint([toolCall('c1', 'bash', '{}'), toolResult('c1', 'done')], named),
+      'running.generic',
+    )
+  })
+
+  it('distinguishes thinking from writing a reply', () => {
+    assert.equal(
+      runningHint([live(1, 1, { type: 'block-start', index: 0, blockType: 'reasoning' })], named),
+      'running.thinking',
+    )
+    assert.equal(
+      runningHint([live(1, 1, { type: 'reasoning-delta', index: 0, text: '想' })], named),
+      'running.thinking',
+    )
+    assert.equal(runningHint([live(1, 1, delta(1, '答'))], named), 'running.replying')
+  })
+})
+
+describe('buildTranscript: turn close rows', () => {
+  const labelled = (key, vars = {}) =>
+    `${key}${vars.message === undefined ? '' : `:${vars.message}:${vars.code}`}`
+
+  it('draws a failed turn where the reader would otherwise see silence', () => {
+    const rows = buildTranscript(
+      [
+        prompt('run it'),
+        surface('turn/end', {
+          turn: 1,
+          reason: { kind: 'error', error: { message: 'boom', code: 'E_PROVIDER' } },
+        }),
+      ],
+      labelled,
+    )
+    assert.equal(rows.length, 2)
+    assert.equal(rows[1].kind, 'error')
+    assert.equal(rows[1].text, 'turn.error:boom:E_PROVIDER')
+  })
+
+  it('does not add a row for a completed turn', () => {
+    const rows = buildTranscript(
+      [prompt('go'), surface('turn/end', { turn: 1, reason: { kind: 'completed' } })],
+      t,
+    )
+    assert.equal(rows.length, 1, 'the prompt is the only visible row')
+  })
+
+  it('turns other non-completed causes into one notice', () => {
+    const rows = buildTranscript(
+      [surface('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } })],
+      t,
+    )
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'notice')
+    assert.equal(rows[0].text, 'turn.aborted')
   })
 })
