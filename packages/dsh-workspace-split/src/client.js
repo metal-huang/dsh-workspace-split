@@ -2510,8 +2510,11 @@ function ProcessGroup(props) {
   const { group } = props
   const [open, setOpen] = useState(group.running === true)
   const [hover, setHover] = useState(false)
+  // Chat's standard view keeps a running process open and folds it once the
+  // turn settles; a reader who opens a completed group keeps it open because the
+  // effect only runs when `running` changes.
   useEffect(() => {
-    if (group.running === true) setOpen(true)
+    setOpen(group.running === true)
   }, [group.running])
 
   const tools = group.items.filter((item) => item.kind === 'tool').map((item) => item.tool.name)
