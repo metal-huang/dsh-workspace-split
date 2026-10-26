@@ -23,7 +23,7 @@ import { t } from './i18n.js'
 import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
 
 // ---------- transcript folding ----------
-import { buildTranscript, runningHint } from './transcript.js'
+import { buildTranscript, groupProcessRows, runningHint } from './transcript.js'
 
 // ---------- composer image intake ----------
 import {
@@ -2096,6 +2096,143 @@ function Composer(props) {
   )
 }
 
+const queueStyles = {
+  wrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    margin: '0 6px',
+    padding: '6px 8px',
+    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-1, rgba(30,30,30,.7))',
+    maxHeight: 160,
+    overflowY: 'auto',
+    flexShrink: 0,
+  },
+  header: {
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    lineHeight: '16px',
+    fontWeight: 600,
+    color: 'var(--dsw-alias-label-secondary, #999)',
+  },
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    lineHeight: '18px',
+  },
+  text: {
+    flex: '1 1 auto',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: 'var(--dsw-alias-label-primary, inherit)',
+  },
+  action: {
+    flex: 'none',
+    padding: '0 6px',
+    height: 20,
+    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-secondary, #999)',
+    fontSize: 11,
+    lineHeight: '18px',
+    cursor: 'pointer',
+  },
+  error: {
+    fontSize: 11,
+    lineHeight: '16px',
+    color: 'var(--dsw-alias-state-error-primary, #e5484d)',
+  },
+}
+
+/** Readable text of one queued user message. */
+function queueText(message) {
+  const blocks = Array.isArray(message?.content) ? message.content : []
+  return (
+    blocks
+      .map((block) =>
+        block?.type === 'text' ? block.text : block?.type === 'image' ? '[image]' : '',
+      )
+      .filter((text) => text !== '')
+      .join(' ')
+      .trim() || t('queue.imageOnly')
+  )
+}
+
+/**
+ * Queued prompts above the cell composer, matching Chat's QueueDock.
+ *
+ * `session.prompt(..., 'queue')` appends to the Host inbox while a turn runs;
+ * without this dock the reader could not see that a message is waiting, remove
+ * it, or steer it into the running turn. The dock is session-projection driven,
+ * so another client's queued message appears here too.
+ * @param props - queued inbox messages and the bound Session face.
+ */
+function QueueDock(props) {
+  const { items, session } = props
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+  if (items.length === 0) return null
+
+  const act = async (item, action) => {
+    setBusy(item.id)
+    setError('')
+    try {
+      const result = await session.updateQueue(item.id, action)
+      if (result?.ok !== true) {
+        setError(t('queue.failed', { error: remoteFailureText(result?.error) }))
+      }
+    } catch (failure) {
+      setError(t('queue.failed', { error: thrownText(failure) }))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return h(
+    'div',
+    { style: queueStyles.wrap, 'data-dsws-queue': 'true' },
+    h('div', { style: queueStyles.header }, t('queue.title', { count: items.length })),
+    error === '' ? null : h('div', { style: queueStyles.error }, error),
+    items.map((item) =>
+      h(
+        'div',
+        { key: item.id, style: queueStyles.row },
+        h('span', { style: queueStyles.text, title: queueText(item) }, queueText(item)),
+        h(
+          'button',
+          {
+            type: 'button',
+            style: queueStyles.action,
+            disabled: busy === item.id,
+            title: t('queue.steer'),
+            onClick: () => act(item, { kind: 'steer' }),
+          },
+          t('queue.steer'),
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            style: queueStyles.action,
+            disabled: busy === item.id,
+            title: t('queue.remove'),
+            'aria-label': t('queue.remove'),
+            onClick: () => act(item, { kind: 'remove' }),
+          },
+          '×',
+        ),
+      ),
+    ),
+  )
+}
+
 // ---------- tool call row ----------
 // Disclosure pattern copied from ui-primitives DisclosureRow.module.css
 // (24px row, 16px leading box, 13/24 title, tertiary → secondary on hover)
@@ -2361,22 +2498,35 @@ const reasoningStyles = {
 }
 
 /**
- * Collapsible reasoning of one Assistant attempt.
+ * One Turn's process group: reasoning text and Tool rows under one disclosure.
  *
- * The main conversation shows reasoning as its own disclosure row; the split
- * cell reuses the Tool row's 24px rhythm so a live attempt reads as a process,
- * not as a wall of text. It opens by itself while reasoning streams, then keeps
- * whatever state the reader left it in after settlement.
- * @param props - `text` and whether the attempt is still streaming.
+ * Chat's standard view folds a completed Turn's process rows and leaves the
+ * answer outside; a running group stays open. This is the same shape, sized for
+ * a tile: the header names the tools and whether reasoning is present, and the
+ * body keeps the existing Tool rows.
+ * @param props - one `kind: 'process'` row from `groupProcessRows`.
  */
-function ReasoningRow(props) {
-  const { text, streaming } = props
-  const [open, setOpen] = useState(streaming === true)
+function ProcessGroup(props) {
+  const { group } = props
+  const [open, setOpen] = useState(group.running === true)
   const [hover, setHover] = useState(false)
-  const preview = text.replace(/\s+/g, ' ').trim().slice(0, 140)
+  useEffect(() => {
+    if (group.running === true) setOpen(true)
+  }, [group.running])
+
+  const tools = group.items.filter((item) => item.kind === 'tool').map((item) => item.tool.name)
+  const hasReasoning = group.items.some((item) => item.kind === 'reasoning')
+  const summaryParts = []
+  if (tools.length > 0) summaryParts.push([...new Set(tools)].join(', '))
+  if (hasReasoning) summaryParts.push(t('reasoning.label'))
+  const summary = summaryParts.join(' · ')
   return h(
     'div',
-    { style: { minWidth: 0, maxWidth: '100%' }, 'data-dsws-reasoning': 'true' },
+    {
+      style: { minWidth: 0, maxWidth: '100%' },
+      'data-dsws-process': 'true',
+      'data-running': group.running === true ? 'true' : 'false',
+    },
     h(
       'div',
       {
@@ -2386,19 +2536,30 @@ function ReasoningRow(props) {
         onClick: () => setOpen((value) => !value),
         role: 'button',
         'aria-expanded': open,
-        'data-streaming': streaming === true ? 'true' : 'false',
-        title: open ? t('reasoning.collapse') : t('reasoning.expand'),
+        title: open ? t('process.collapse') : t('process.expand'),
       },
       h('span', { style: toolStyles.chevron(open) }, '▶'),
       h(
         'span',
         { style: reasoningStyles.label },
-        streaming ? t('reasoning.streaming') : t('reasoning.label'),
+        group.running === true ? t('process.running') : t('process.label'),
       ),
-      streaming ? h('span', { className: 'dsws-running-dot', style: reasoningStyles.dot }) : null,
-      preview ? h('span', { style: reasoningStyles.preview }, preview) : null,
+      group.running === true
+        ? h('span', { className: 'dsws-running-dot', style: reasoningStyles.dot })
+        : null,
+      summary === '' ? null : h('span', { style: reasoningStyles.preview }, summary),
     ),
-    open ? h('div', { style: reasoningStyles.body }, text) : null,
+    open
+      ? h(
+          'div',
+          { style: { minWidth: 0 } },
+          group.items.map((item) =>
+            item.kind === 'tool'
+              ? h(ToolRow, { key: item.key, ...item.tool })
+              : h('div', { key: item.key, style: reasoningStyles.body }, item.text),
+          ),
+        )
+      : null,
   )
 }
 
@@ -2676,6 +2837,22 @@ function UserImageStrip(props) {
   )
 }
 
+/**
+ * Queued inbox messages of one bound Session.
+ *
+ * Kept as a hook so CellView's render branches stay about rows, not about the
+ * projection face and its optional chain.
+ * @param binding - current Session binding, or null while opening.
+ * @returns the `next-turn` queue, empty when the projection is unavailable.
+ */
+function useInboxQueue(binding) {
+  const face = binding?.session?.projections?.faceOf?.('inbox')
+  const subscribe = useCallback((cb) => face?.subscribe(cb) ?? (() => {}), [face])
+  const snapshot = useCallback(() => face?.getSnapshot(), [face])
+  const inbox = useSyncExternalStore(subscribe, snapshot)
+  return Array.isArray(inbox?.['next-turn']) ? inbox['next-turn'] : []
+}
+
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
   const { sessions, sessionId } = props
@@ -2702,6 +2879,10 @@ function CellView(props) {
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
   const running = sessionState?.running === true
+
+  // Host inbox projection: queued prompts are not in the event window until the
+  // Host admits them, so the dock needs this separate source.
+  const queueItems = useInboxQueue(binding)
 
   // Retain session once catalogued.
   useEffect(() => {
@@ -2863,7 +3044,7 @@ function CellView(props) {
   // entry per token; drawing those one-to-one put every token in its own
   // paragraph (see transcript.js).
   const visible = events
-  const rows = buildTranscript(visible, t)
+  const rows = groupProcessRows(buildTranscript(visible, t))
   const railItems = turnRailItems(visible)
 
   return h(
@@ -2902,17 +3083,14 @@ function CellView(props) {
         },
         rows.map((row) => {
           if (row.kind === 'tool') return h(ToolRow, { key: row.key, ...row.tool })
-          // Assistant narration is Markdown; reasoning is a disclosure row above
-          // it. A row with only reasoning still draws, so a thinking attempt is
-          // visible before the first answer token arrives.
+          if (row.kind === 'process') return h(ProcessGroup, { key: row.key, group: row })
+          // Assistant narration is Markdown. Reasoning and Tool rows are grouped
+          // above by `groupProcessRows`, so this branch is the final answer only.
           if (row.kind === 'assistant') {
             return h(
               'div',
               { key: row.key, style: eventStyle('assistant') },
-              row.reasoning === '' || row.reasoning === undefined
-                ? null
-                : h(ReasoningRow, { text: row.reasoning, streaming: row.streaming === true }),
-              row.text === '' ? null : h(Markdown, { text: row.text, k: row.key }),
+              h(Markdown, { text: row.text, k: row.key }),
             )
           }
           // A prompt that carried pictures draws them above its text in the same
@@ -2947,6 +3125,7 @@ function CellView(props) {
     // Image previews need the Composer's unmount hook, so the images live there;
     // the typed text stays in this cell's state because the old bar kept it
     // across a session switch on the same tile.
+    h(QueueDock, { items: queueItems, session: binding.session }),
     h(Composer, { session: binding.session, text: inputText, onText: setInputText, running }),
   )
 }

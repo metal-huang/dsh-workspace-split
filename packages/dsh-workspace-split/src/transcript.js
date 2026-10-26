@@ -260,10 +260,12 @@ function blockLabel(block) {
  * @param call - name and raw arguments.
  * @param result - the answering result's `data`, when the window has it.
  */
-function toolRow(key, call, result) {
+function toolRow(key, call, result, at) {
   return {
     key,
     kind: 'tool',
+    turn: at?.turn,
+    step: at?.step,
     tool: {
       name: call.name,
       argsRaw: call.argsRaw ?? '',
@@ -669,7 +671,12 @@ function onUserMessage(ev, ctx) {
 function onToolCall(ev, ctx) {
   const id = ev.data?.callId
   const call = { name: ev.data?.name ?? 'tool', argsRaw: ev.data?.arguments }
-  ctx.rows.push(toolRow(`call-${id ?? ctx.rows.length}`, call, ctx.tools.results.get(id)))
+  ctx.rows.push(
+    toolRow(`call-${id ?? ctx.rows.length}`, call, ctx.tools.results.get(id), {
+      turn: ev.data?.turn,
+      step: ev.data?.step,
+    }),
+  )
 }
 
 /** Orphan tool result: its call is outside the loaded window. */
@@ -681,7 +688,12 @@ function onToolResult(ev, ctx) {
   // Drawn by its call row when that call is in the window.
   if (ctx.tools.calls.has(id)) return
   const call = { name: ctx.t('toolrow.result.name'), argsRaw: '' }
-  ctx.rows.push(toolRow(`result-${id ?? ctx.rows.length}`, call, ev.data))
+  ctx.rows.push(
+    toolRow(`result-${id ?? ctx.rows.length}`, call, ev.data, {
+      turn: ev.data?.turn,
+      step: ev.data?.step,
+    }),
+  )
 }
 
 /** Event type -> row builder. A Map keeps prototype keys out of the dispatch. */
@@ -725,4 +737,67 @@ export function buildTranscript(entries, t = keyOnly) {
     if (handle !== undefined) handle(ev, ctx)
   }
   return ctx.rows
+}
+
+/**
+ * Fold reasoning and Tool rows of one Turn into the process group Chat shows.
+ *
+ * Chat's standard view folds a completed Turn's process rows under one header
+ * and keeps the final answer outside; a running group stays open. The split cell
+ * gets the same shape: a group owns its reasoning text and Tool rows, and an
+ * Assistant row that carried both reasoning and an answer is split so the answer
+ * never hides inside the disclosure.
+ * @param rows - flat rows from `buildTranscript`.
+ * @returns rows with `kind: 'process'` groups in place of their members.
+ */
+export function groupProcessRows(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  const out = []
+  let group = null
+
+  const flush = () => {
+    if (group !== null) out.push(group)
+    group = null
+  }
+  const groupFor = (row) => {
+    if (group === null || group.turn !== row.turn) {
+      flush()
+      group = {
+        key: `process-${row.turn}-${row.key}`,
+        kind: 'process',
+        turn: row.turn,
+        running: false,
+        items: [],
+      }
+    }
+    return group
+  }
+
+  for (const row of list) {
+    if (row.kind === 'tool') {
+      const current = groupFor(row)
+      current.items.push({ kind: 'tool', key: row.key, tool: row.tool })
+      current.running = current.running || row.tool.running === true
+      continue
+    }
+    if (row.kind === 'assistant' && typeof row.reasoning === 'string' && row.reasoning !== '') {
+      const current = groupFor(row)
+      current.items.push({
+        kind: 'reasoning',
+        key: `${row.key}-reasoning`,
+        text: row.reasoning,
+        streaming: row.streaming === true,
+      })
+      current.running = current.running || row.streaming === true
+      if (row.text !== '') {
+        flush()
+        out.push({ ...row, reasoning: '' })
+      }
+      continue
+    }
+    flush()
+    out.push(row)
+  }
+  flush()
+  return out
 }

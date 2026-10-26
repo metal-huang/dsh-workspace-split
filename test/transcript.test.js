@@ -17,6 +17,7 @@ import { describe, it } from 'node:test'
 
 import {
   buildTranscript,
+  groupProcessRows,
   runningHint,
   streamReasoning,
   streamText,
@@ -778,5 +779,83 @@ describe('buildTranscript: turn close rows', () => {
     assert.equal(rows.length, 1)
     assert.equal(rows[0].kind, 'notice')
     assert.equal(rows[0].text, 'turn.aborted')
+  })
+})
+
+describe('groupProcessRows', () => {
+  /** One tool/call event carrying the Turn/Step the group uses. */
+  function callAt(turn, step, callId = 'c1', name = 'bash') {
+    return {
+      type: 'event',
+      event: {
+        type: 'tool/call',
+        seq: (seq += 1),
+        time: 0,
+        data: { callId, name, arguments: '{}', turn, step },
+      },
+    }
+  }
+
+  it('folds reasoning and Tool rows of one Turn under one process row', () => {
+    const flat = buildTranscript(
+      [
+        live(1, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }),
+        live(1, 1, { type: 'reasoning-delta', index: 0, text: '想一想' }),
+        callAt(1, 1),
+      ],
+      t,
+    )
+    const rows = groupProcessRows(flat)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'process')
+    assert.equal(rows[0].running, true)
+    assert.deepEqual(
+      rows[0].items.map((item) => item.kind),
+      ['reasoning', 'tool'],
+    )
+  })
+
+  it('keeps the answer outside the process disclosure', () => {
+    const flat = buildTranscript(
+      [
+        live(2, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }),
+        live(2, 1, { type: 'reasoning-delta', index: 0, text: '推理' }),
+        surface('assistant/message', {
+          turn: 2,
+          step: 1,
+          message: { content: [{ type: 'text', text: '答案' }] },
+        }),
+      ],
+      t,
+    )
+    const rows = groupProcessRows(flat)
+    assert.deepEqual(
+      rows.map((row) => row.kind),
+      ['process', 'assistant'],
+    )
+    assert.equal(rows[0].items[0].text, '推理')
+    assert.equal(rows[1].text, '答案')
+    assert.equal(rows[1].reasoning, '')
+    assert.equal(rows[0].running, false)
+  })
+
+  it('starts a new group when the Turn changes', () => {
+    const flat = buildTranscript(
+      [
+        live(1, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }),
+        live(1, 1, { type: 'reasoning-delta', index: 0, text: 'A' }),
+        callAt(2, 1),
+      ],
+      t,
+    )
+    const rows = groupProcessRows(flat)
+    assert.equal(rows.length, 2)
+    assert.equal(rows[0].turn, 1)
+    assert.equal(rows[1].turn, 2)
+  })
+
+  it('leaves non-process rows untouched', () => {
+    const flat = buildTranscript([prompt('go')], t)
+    assert.deepEqual(groupProcessRows(flat), flat)
   })
 })
