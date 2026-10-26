@@ -55,6 +55,26 @@ function prompt(text, source = { kind: 'user' }) {
   return surface('user/message', { content: [{ type: 'text', text }], source })
 }
 
+/** One image content block, as a prompt that carried a picture stores it. */
+function imageBlock(attachmentId, name = 'shot.png') {
+  return {
+    type: 'image',
+    attachment: {
+      attachmentId,
+      mediaType: 'image/png',
+      bytes: 2048,
+      width: 800,
+      height: 600,
+      name,
+    },
+  }
+}
+
+/** A human prompt made of arbitrary content blocks. */
+function promptBlocks(blocks, source = { kind: 'user' }) {
+  return surface('user/message', { content: blocks, source })
+}
+
 /** A durable Assistant settlement. */
 function reply(turn, step, text, extra = {}) {
   return surface(
@@ -413,6 +433,74 @@ describe('buildTranscript: retries and replay', () => {
     const rows = buildTranscript(entries, t)
     assert.equal(rows.length, 1)
     assert.equal(rows[0].text, 'answer')
+  })
+})
+
+describe('buildTranscript: prompts carrying images', () => {
+  it('keeps an image-only prompt that has no text', () => {
+    // The old rule drew only messages with text, so a pasted screenshot was
+    // answered by the model but never appeared in the cell.
+    const rows = buildTranscript([promptBlocks([imageBlock('a1')])], t)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'user')
+    assert.equal(rows[0].text, '')
+    assert.deepEqual(
+      rows[0].images.map((image) => [image.attachmentId, image.mediaType]),
+      [['a1', 'image/png']],
+    )
+  })
+
+  it('keeps text and images on the same row, in block order', () => {
+    const rows = buildTranscript(
+      [promptBlocks([{ type: 'text', text: 'look at this' }, imageBlock('a1'), imageBlock('a2')])],
+      t,
+    )
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].text, 'look at this')
+    assert.deepEqual(
+      rows[0].images.map((image) => image.attachmentId),
+      ['a1', 'a2'],
+    )
+  })
+
+  it('gives a text-only prompt an empty image list', () => {
+    const rows = buildTranscript([prompt('plain')], t)
+    assert.equal(rows.length, 1)
+    assert.deepEqual(rows[0].images, [])
+  })
+
+  it('ignores an image block without an attachment ref', () => {
+    const rows = buildTranscript([promptBlocks([{ type: 'image' }])], t)
+    assert.deepEqual(rows, [], 'nothing readable and no ref: nothing to draw')
+  })
+
+  it('still hides an injected context message that carries images', () => {
+    const rows = buildTranscript(
+      [
+        promptBlocks([imageBlock('a1')], { kind: 'time-context' }),
+        promptBlocks([{ type: 'text', text: 'real' }, imageBlock('a2')]),
+      ],
+      t,
+    )
+    assert.deepEqual(
+      rows.map((row) => row.text),
+      ['real'],
+    )
+    assert.deepEqual(
+      rows[0].images.map((image) => image.attachmentId),
+      ['a2'],
+    )
+  })
+
+  it('still hides a replacement copy that carries images', () => {
+    const rows = buildTranscript(
+      [promptBlocks([imageBlock('a1')], { kind: 'user' })].map((entry) => ({
+        ...entry,
+        event: { ...entry.event, surfaceOp: REPLACED },
+      })),
+      t,
+    )
+    assert.deepEqual(rows, [])
   })
 })
 

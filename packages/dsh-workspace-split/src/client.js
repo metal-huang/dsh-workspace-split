@@ -25,6 +25,17 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 // ---------- transcript folding ----------
 import { buildTranscript } from './transcript.js'
 
+// ---------- composer image intake ----------
+import {
+  IMAGE_INTAKE_LIMITS,
+  IMAGE_MEDIA_TYPES,
+  buildPromptParts,
+  bytesToBase64,
+  dataUrlPayload,
+  imagePart,
+  intakeImages,
+} from './composer-images.js'
+
 // ---------- sidebar control placement ----------
 import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 
@@ -1341,32 +1352,44 @@ function SplitButton() {
 }
 
 // ---------- composer ----------
-// Copied from ui-conversation InputBar.module.css `.card` / `.input`.
+// Compact on purpose: a split cell spends its height on the transcript, so the
+// empty bar is one 24px control row plus 3px card padding and 4px wrap padding
+// (about 38px), not the 48px the previous card took. Colors and radii are --dsw-*
+// theme tokens; the two --dsh-content-* tokens are the harness content-scale
+// values the transcript already uses, so ctrl+wheel cell zoom scales the bar
+// together with its text instead of leaving it at a fixed pixel size.
 const composerWrapStyle = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  padding: '6px 8px',
+  gap: 4,
+  padding: '4px 6px',
+  minWidth: 0,
   flexShrink: 0,
 }
-const composerCardStyle = {
+const composerCardStyle = (dragging) => ({
   boxSizing: 'border-box',
   display: 'flex',
-  alignItems: 'flex-end',
-  gap: 8,
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
   borderRadius: 'var(--dsw-radius-panel, 12px)',
   background: 'var(--dsw-specific-input-major, var(--dsw-alias-bg-elevated, #2a2a2a))',
-  boxShadow: 'var(--dsw-elevation-soft, 0 1px 2px rgba(0,0,0,.12))',
-  padding: '6px 8px 6px 12px',
-}
+  // The drop ring reuses the active-cell accent and is inset, so a drag reads as
+  // "the composer takes files" without moving the card or its neighbours.
+  boxShadow: dragging
+    ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
+    : 'var(--dsw-elevation-soft, 0 1px 2px rgba(0,0,0,.12))',
+  padding: '3px 4px 3px 8px',
+})
 const composerInputStyle = {
   flex: 1,
+  minWidth: 0,
   resize: 'none',
   border: 'none',
   outline: 'none',
   padding: 0,
   fontSize: 'var(--dsh-content-font-size, 13px)',
-  lineHeight: 'calc(20px + var(--dsh-content-font-delta, 0px))',
+  lineHeight: 'calc(18px + var(--dsh-content-font-delta, 0px))',
   fontFamily: 'var(--dsw-font-family, inherit)',
   background: 'transparent',
   color: 'var(--dsw-alias-label-primary, inherit)',
@@ -1374,19 +1397,510 @@ const composerInputStyle = {
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
   overflowWrap: 'anywhere',
-  minHeight: 20,
-  maxHeight: 80,
+  minHeight: 18,
+  maxHeight: 72,
 }
 const composerBtnStyle = {
   flex: 'none',
-  padding: '3px 10px',
-  fontSize: 12,
-  lineHeight: '18px',
-  cursor: 'pointer',
+  height: 24,
+  padding: '0 8px',
   border: 'none',
-  borderRadius: 'var(--dsw-radius-md, 8px)',
-  background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
-  color: '#fff',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background:
+    'var(--dsw-alias-button-primary-fill, var(--dsw-alias-state-business-primary, #4a9eff))',
+  color: 'var(--dsw-alias-label-primary-inverted, #fff)',
+  fontSize: 11,
+  lineHeight: '24px',
+  cursor: 'pointer',
+}
+const composerIconBtnStyle = {
+  flex: 'none',
+  width: 24,
+  height: 24,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  border: 'none',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary, #999)',
+  cursor: 'pointer',
+}
+const composerStripStyle = {
+  display: 'flex',
+  gap: 4,
+  // Room for the remove buttons, which overhang each 36px thumbnail; without it
+  // `overflowY: hidden` clips them and the reader cannot delete one image.
+  padding: '4px 4px 0',
+  minWidth: 0,
+  overflowX: 'auto',
+  overflowY: 'hidden',
+  flexShrink: 0,
+}
+const composerThumbStyle = {
+  position: 'relative',
+  flex: 'none',
+  width: 36,
+  height: 36,
+}
+const composerThumbImageStyle = {
+  display: 'block',
+  width: 36,
+  height: 36,
+  objectFit: 'cover',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.18))',
+}
+const composerThumbFallbackStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 36,
+  height: 36,
+  padding: 2,
+  boxSizing: 'border-box',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.18))',
+  color: 'var(--dsw-alias-label-caption, #999)',
+  fontSize: 9,
+  lineHeight: '11px',
+  textAlign: 'center',
+}
+const composerThumbRemoveStyle = {
+  position: 'absolute',
+  top: -4,
+  right: -4,
+  width: 14,
+  height: 14,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  border: 'none',
+  borderRadius: 7,
+  background: 'var(--dsw-alias-bg-mask-3, rgba(0,0,0,.55))',
+  color: 'var(--dsw-alias-label-primary-inverted, #fff)',
+  fontSize: 10,
+  lineHeight: '14px',
+  cursor: 'pointer',
+}
+const composerErrorStyle = {
+  color: 'var(--dsw-alias-state-error-primary, #e5484d)',
+  fontSize: 'var(--dsh-content-font-size-secondary, 11px)',
+  lineHeight: '14px',
+  padding: '0 2px',
+  wordBreak: 'break-word',
+}
+
+/**
+ * Read one image File as canonical base64 (no `data:` prefix).
+ *
+ * FileReader's data URL is the browser's native encoder; decoding the bytes by
+ * hand would put a large image's byte loop on the main thread.
+ * @param file - browser File.
+ * @returns base64 payload for the prompt part.
+ */
+function readFileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        resolve(dataUrlPayload(reader.result))
+      } catch (failure) {
+        reject(failure)
+      }
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('image read failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * One readable line for a RemoteFailure.
+ *
+ * The RPC answers `{ ok: false, error: { code, message } }`; the old code
+ * swallowed that result entirely, so a refused prompt looked like a sent one.
+ * Both halves are shown: the code is what a reader can quote in a bug report,
+ * the message is what says why.
+ * @param error - RemoteFailure, or undefined.
+ * @returns `code: message`, whichever halves exist.
+ */
+function remoteFailureText(error) {
+  if (error === undefined || error === null) return ''
+  if (typeof error === 'string') return error
+  const code = error.code === undefined ? '' : String(error.code)
+  const message = error.message === undefined ? '' : String(error.message)
+  if (code === '' && message === '') return String(error)
+  return message === '' ? code : `${code === '' ? '' : `${code}: `}${message}`
+}
+
+/** Message of a thrown value, for a composer error line. */
+function thrownText(failure) {
+  return failure instanceof Error ? failure.message : String(failure)
+}
+
+/** Running id for draft images; React keys only need stability within a draft. */
+let draftImageSeq = 0
+
+/**
+ * Draft entry for one accepted file.
+ *
+ * The preview URL is created once, when the file joins the draft: a `blob:` URL
+ * stays alive until revoked, so its owner must be the entry that gets removed
+ * (or the unmount cleanup) rather than a render function that runs again.
+ * @param file - browser File.
+ * @returns draft image record.
+ */
+function draftImageOf(file) {
+  draftImageSeq += 1
+  let url = ''
+  if (typeof URL.createObjectURL === 'function') {
+    try {
+      url = URL.createObjectURL(file)
+    } catch {
+      url = ''
+    }
+  }
+  return {
+    id: `draft-image-${draftImageSeq}`,
+    file,
+    name: typeof file.name === 'string' ? file.name : '',
+    url,
+  }
+}
+
+/** Revoke one draft preview URL (a no-op for the missing-URL fallback). */
+function releaseDraftImage(image) {
+  if (typeof image?.url === 'string' && image.url.startsWith('blob:')) {
+    URL.revokeObjectURL(image.url)
+  }
+}
+
+/**
+ * Local copy for a file the intake refused.
+ *
+ * A refused drop must explain itself: silently ignoring a file is what made the
+ * missing image support look like a broken picker. Bytes and pixels are not
+ * checked here — the Host owns those limits and its refusal is shown verbatim.
+ * @param rejection - `{ reason, name }` from `intakeImages`.
+ * @returns the message the composer shows.
+ */
+function imageRejectText(rejection) {
+  if (rejection?.reason === 'too-many') {
+    return t('composer.image.tooMany', { count: IMAGE_INTAKE_LIMITS.maxImages })
+  }
+  return t('composer.image.unsupported', { name: rejection?.name ?? '' })
+}
+
+/** Whether a drag carries files, so a session drag keeps its own drop effect. */
+function hasFilePayload(dataTransfer) {
+  if (dataTransfer === null || dataTransfer === undefined) return false
+  if (dataTransfer.types === undefined) return true
+  return Array.from(dataTransfer.types).includes('Files')
+}
+
+/**
+ * Write pasted text at the caret after image intake claimed the paste event.
+ *
+ * The browser's default paste is prevented when the clipboard also held images,
+ * so the text half must be written by hand or it would be dropped. The caret is
+ * restored on the next frame because React rewrites the textarea's value.
+ * @param area - the textarea element.
+ * @param text - pasted plain text.
+ * @param onChange - draft text setter.
+ */
+function insertAtCaret(area, text, onChange) {
+  if (area === null || area === undefined) return
+  const start = area.selectionStart ?? area.value.length
+  const end = area.selectionEnd ?? start
+  onChange(`${area.value.slice(0, start)}${text}${area.value.slice(end)}`)
+  requestAnimationFrame(() => {
+    const at = start + text.length
+    try {
+      area.setSelectionRange(at, at)
+    } catch {}
+  })
+}
+
+/**
+ * Draft images plus their preview URLs.
+ *
+ * Kept as one hook so the ownership rule lives in one place: every `blob:` URL is
+ * created when a file joins the draft and revoked when it leaves or the cell
+ * unmounts, because a leaked URL keeps the full image in memory for the life of
+ * the page.
+ * @returns draft images, the intake error, and the operations that change them.
+ */
+function useDraftImages() {
+  const [images, setImages] = useState([])
+  const [error, setError] = useState('')
+  const imagesRef = useRef(images)
+  imagesRef.current = images
+
+  useEffect(
+    () => () => {
+      for (const image of imagesRef.current) releaseDraftImage(image)
+    },
+    [],
+  )
+
+  const addFiles = useCallback((picked) => {
+    const { accepted, rejected } = intakeImages(
+      picked,
+      imagesRef.current.length,
+      IMAGE_INTAKE_LIMITS,
+    )
+    if (accepted.length > 0) {
+      const added = accepted.map((entry) => draftImageOf(entry.file))
+      setImages((previous) => [...previous, ...added])
+    }
+    setError(rejected.length > 0 ? imageRejectText(rejected[0]) : '')
+  }, [])
+
+  const removeImage = useCallback((id) => {
+    releaseDraftImage(imagesRef.current.find((image) => image.id === id))
+    setImages((previous) => previous.filter((image) => image.id !== id))
+    setError('')
+  }, [])
+
+  const clearImages = useCallback(() => {
+    for (const image of imagesRef.current) releaseDraftImage(image)
+    setImages([])
+  }, [])
+
+  return { images, error, setError, addFiles, removeImage, clearImages }
+}
+
+/** Picture glyph for the attach button, drawn in the button's text color. */
+function ImageIcon(props) {
+  const size = props.size ?? 14
+  return h(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 16 16',
+      fill: 'none',
+      'aria-hidden': true,
+      style: { display: 'block' },
+    },
+    h('rect', {
+      x: 1.6,
+      y: 2.6,
+      width: 12.8,
+      height: 10.8,
+      rx: 2.4,
+      stroke: 'currentColor',
+      strokeWidth: 1.2,
+    }),
+    h('circle', { cx: 5.4, cy: 6, r: 1.15, fill: 'currentColor' }),
+    h('path', {
+      d: 'M2.4 12.2l3.3-3.4 2.5 2.5 2.1-2.2 3.3 3.1',
+      stroke: 'currentColor',
+      strokeWidth: 1.2,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    }),
+  )
+}
+
+/**
+ * Thumbnails of the images waiting in the draft, each removable on its own.
+ * @param props - draft `images` and the `onRemove(id)` handler.
+ */
+function DraftImageStrip(props) {
+  const { images, onRemove } = props
+  return h(
+    'div',
+    { style: composerStripStyle },
+    images.map((image) =>
+      h(
+        'div',
+        { key: image.id, style: composerThumbStyle, title: image.name },
+        image.url === ''
+          ? h('span', { style: composerThumbFallbackStyle }, t('composer.image.noPreview'))
+          : h('img', { src: image.url, alt: image.name, style: composerThumbImageStyle }),
+        h(
+          'button',
+          {
+            type: 'button',
+            title: t('composer.image.remove'),
+            'aria-label': t('composer.image.remove'),
+            onClick: () => onRemove(image.id),
+            style: composerThumbRemoveStyle,
+          },
+          '×',
+        ),
+      ),
+    ),
+  )
+}
+
+/**
+ * The cell's input bar: text, images, and one ordered prompt per send.
+ *
+ * Images and the send state live here because the previews need an unmount hook;
+ * the typed text is owned by CellView so changing a cell's session does not
+ * silently discard it (the old bar kept it across the same switch). An
+ * image-only draft is sendable: requiring text is what made a screenshot
+ * impossible to submit.
+ * @param props - `session` is the binding's session face, `text`/`onText` the
+ *   cell-owned draft text.
+ */
+function Composer(props) {
+  const { session, text, onText } = props
+  const [sending, setSending] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const { images, error, setError, addFiles, removeImage, clearImages } = useDraftImages()
+  const textareaRef = useRef(null)
+  const fileInputRef = useRef(null)
+
+  const send = useCallback(async () => {
+    if (session === undefined || session === null || sending) return
+    if (text.trim() === '' && images.length === 0) return
+    setSending(true)
+    setError('')
+    let parts
+    try {
+      const encoded = await Promise.all(
+        images.map((image) => imagePart(image.file, readFileBase64)),
+      )
+      parts = buildPromptParts(text, encoded)
+    } catch (failure) {
+      setSending(false)
+      setError(t('composer.image.readFailed', { error: thrownText(failure) }))
+      return
+    }
+    try {
+      const result = await session.prompt(parts, 'queue')
+      if (result?.ok !== true) {
+        setError(t('composer.sendFailed', { error: remoteFailureText(result?.error) }))
+        return
+      }
+      clearImages()
+      onText('')
+      textareaRef.current?.focus()
+    } catch (failure) {
+      setError(t('composer.sendFailed', { error: thrownText(failure) }))
+    } finally {
+      setSending(false)
+    }
+  }, [session, text, onText, images, sending, setError, clearImages])
+
+  const onKeyDown = (event) => {
+    if (event.key !== 'Enter' || event.shiftKey) return
+    // Enter also confirms a Chinese/Japanese IME candidate. Sending there would
+    // submit half-composed text, so the key belongs to the IME until it commits.
+    if (event.nativeEvent?.isComposing === true || event.keyCode === 229) return
+    event.preventDefault()
+    send()
+  }
+
+  const onPaste = (event) => {
+    const clipboard = event.clipboardData
+    if (clipboard === null || clipboard === undefined) return
+    const picked = []
+    for (const item of clipboard.items ?? []) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (file !== null) picked.push(file)
+    }
+    if (picked.length === 0) return
+    event.preventDefault()
+    addFiles(picked)
+    const pasted = clipboard.getData('text/plain')
+    if (pasted !== '') insertAtCaret(event.currentTarget, pasted, onText)
+  }
+
+  const onDragOver = (event) => {
+    if (!hasFilePayload(event.dataTransfer)) return
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      event.dataTransfer.dropEffect = 'copy'
+    } catch {}
+    setDragging(true)
+  }
+
+  const onDragLeave = (event) => {
+    // A drag leaving for a child still fires dragleave on the card; only a real
+    // exit clears the highlight. relatedTarget can be null (left the window) or
+    // a non-Node, which `contains` would reject.
+    const next = event.relatedTarget
+    if (next instanceof Node && event.currentTarget.contains(next)) return
+    setDragging(false)
+  }
+
+  const onDrop = (event) => {
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    if (files.length === 0) return
+    // The tile behind the composer also accepts drops (a sidebar session move);
+    // a file drop must stop here or it would also be read as "pick this session".
+    event.preventDefault()
+    event.stopPropagation()
+    setDragging(false)
+    addFiles(files)
+  }
+
+  const onFilesPicked = (event) => {
+    const picked = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (picked.length > 0) addFiles(picked)
+  }
+
+  const canSend = !sending && (text.trim() !== '' || images.length > 0)
+
+  return h(
+    'div',
+    { style: composerWrapStyle },
+    error === '' ? null : h('div', { role: 'status', style: composerErrorStyle }, error),
+    images.length === 0 ? null : h(DraftImageStrip, { images, onRemove: removeImage }),
+    h(
+      'div',
+      { style: composerCardStyle(dragging), onDragOver, onDragLeave, onDrop },
+      h(
+        'button',
+        {
+          type: 'button',
+          title: t('composer.image.attach'),
+          'aria-label': t('composer.image.attach'),
+          onClick: () => fileInputRef.current?.click(),
+          style: composerIconBtnStyle,
+        },
+        h(ImageIcon, { size: 14 }),
+      ),
+      h('input', {
+        ref: fileInputRef,
+        type: 'file',
+        accept: IMAGE_MEDIA_TYPES.join(','),
+        multiple: true,
+        style: { display: 'none' },
+        onChange: onFilesPicked,
+      }),
+      h('textarea', {
+        ref: textareaRef,
+        value: text,
+        onChange: (event) => onText(event.target.value),
+        onKeyDown,
+        onPaste,
+        placeholder: t('composer.placeholder'),
+        'aria-label': t('composer.placeholder'),
+        rows: 1,
+        style: composerInputStyle,
+      }),
+      h(
+        'button',
+        {
+          type: 'button',
+          onClick: send,
+          disabled: !canSend,
+          style: { ...composerBtnStyle, opacity: canSend ? 1 : 0.4 },
+        },
+        sending ? t('composer.sending') : t('composer.send'),
+      ),
+    ),
+  )
 }
 
 // ---------- tool call row ----------
@@ -1638,18 +2152,172 @@ function eventStyle(kind) {
   return base
 }
 
+// ---------- transcript images ----------
+// A user prompt stores its pictures as attachment refs, so the cell has to read
+// them through the public `readAttachment` API and show the bytes it gets back.
+// Everything here is sized for a narrow tile: thumbnails are 64px tall with a
+// 120px cap, and they sit above the prompt text inside the same bubble.
+const USER_IMAGE_HEIGHT = 64
+const USER_IMAGE_MAX_WIDTH = 120
+
+const userImageStyles = {
+  strip: (hasText) => ({
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 4,
+    minWidth: 0,
+    marginBottom: hasText ? 6 : 0,
+  }),
+  image: {
+    display: 'block',
+    height: USER_IMAGE_HEIGHT,
+    maxWidth: USER_IMAGE_MAX_WIDTH,
+    objectFit: 'cover',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.18))',
+  },
+  placeholder: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: USER_IMAGE_HEIGHT,
+    height: USER_IMAGE_HEIGHT,
+    padding: 4,
+    boxSizing: 'border-box',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.18))',
+    color: 'var(--dsw-alias-label-caption, #999)',
+    fontSize: 'var(--dsh-content-font-size-secondary, 11px)',
+    lineHeight: '14px',
+    textAlign: 'center',
+  },
+}
+
+/**
+ * Display URL for one attachment's bytes.
+ *
+ * A `blob:` URL avoids base64-inflating the image in the DOM; the data-URL
+ * fallback keeps the thumbnail working in a context without Blob URLs, the same
+ * two-step the harness's own conversation service uses.
+ * @param bytes - `Uint8Array` from `readAttachment`.
+ * @param mediaType - the attachment's media type.
+ * @returns a URL usable as an `img src`.
+ */
+function imageUrlOf(bytes, mediaType) {
+  const list = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes ?? [])
+  if (typeof URL.createObjectURL === 'function') {
+    // Copy the array: a Uint8Array decoded from base64 can be a view over a
+    // larger buffer, and a Blob built from that buffer would carry the slack.
+    return URL.createObjectURL(new Blob([Uint8Array.from(list).buffer], { type: mediaType }))
+  }
+  return `data:${mediaType ?? ''};base64,${bytesToBase64(list)}`
+}
+
+/** Revoke a thumbnail URL when it is a `blob:` one. */
+function releaseImageUrl(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
+}
+
+/**
+ * One image from a user message, loaded from its attachment ref.
+ *
+ * The effect keys on the ref's own primitive fields rather than the attachment
+ * object: `buildTranscript` rebuilds its rows on every streamed chunk, and a new
+ * object identity would refetch the bytes (and recreate the blob URL) once per
+ * token of the answer.
+ * @param props - `session` and the row's `attachment` ref.
+ */
+function UserImageThumb(props) {
+  const { session, attachment } = props
+  const attachmentId = attachment.attachmentId
+  const fallbackMediaType = attachment.mediaType
+  const [url, setUrl] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    let created = ''
+    setUrl('')
+    setFailed(false)
+    // A host build without the attachment face must show the placeholder rather
+    // than throw out of an effect and take the whole cell down.
+    if (typeof session.readAttachment !== 'function') {
+      setFailed(true)
+      return undefined
+    }
+    session.readAttachment(attachmentId).then(
+      (result) => {
+        if (cancelled) return
+        if (result?.ok !== true) {
+          setFailed(true)
+          return
+        }
+        try {
+          const mediaType = result.value?.attachment?.mediaType ?? fallbackMediaType
+          created = imageUrlOf(result.value?.data, mediaType)
+        } catch {
+          setFailed(true)
+          return
+        }
+        setUrl(created)
+      },
+      () => {
+        if (!cancelled) setFailed(true)
+      },
+    )
+    return () => {
+      cancelled = true
+      releaseImageUrl(created)
+      created = ''
+    }
+  }, [session, attachmentId, fallbackMediaType])
+
+  const name = typeof attachment.name === 'string' && attachment.name !== '' ? attachment.name : ''
+  if (failed) {
+    return h('div', { style: userImageStyles.placeholder, title: t('transcript.image.failed') }, '×')
+  }
+  if (url === '') {
+    return h('div', { style: userImageStyles.placeholder, title: t('transcript.image.loading') }, '…')
+  }
+  return h('img', {
+    src: url,
+    alt: name === '' ? t('transcript.image.alt') : name,
+    title: name,
+    style: userImageStyles.image,
+  })
+}
+
+/**
+ * Thumbnails of the images one user message carried.
+ * @param props - `session`, the row's image refs, and whether text follows.
+ */
+function UserImageStrip(props) {
+  const { session, images, hasText } = props
+  return h(
+    'div',
+    { style: userImageStyles.strip(hasText) },
+    images.map((attachment, index) =>
+      h(UserImageThumb, {
+        // The same picture can legally appear twice in one prompt, so the ref id
+        // alone is not a unique React key.
+        key: `${attachment.attachmentId}-${index}`,
+        session,
+        attachment,
+      }),
+    ),
+  )
+}
+
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
   const { sessions, sessionId } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
-  const [sending, setSending] = useState(false)
   const [retry, setRetry] = useState(0)
   const refRef = useRef(null)
   const openTimerRef = useRef(null)
   const bodyRef = useRef(null)
-  const textareaRef = useRef(null)
 
   // Wait until the session appears in the host catalog before retaining.
   const catalogSubscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions])
@@ -1763,25 +2431,6 @@ function CellView(props) {
     }
   }, [binding])
 
-  const send = useCallback(async () => {
-    const text = inputText.trim()
-    if (!text || !binding?.session || sending) return
-    setSending(true)
-    try {
-      await binding.session.prompt([{ type: 'text', text }], 'queue')
-      setInputText('')
-    } catch (_e) {}
-    setSending(false)
-    textareaRef.current?.focus()
-  }, [inputText, binding, sending])
-
-  const onKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      send()
-    }
-  }
-
   if (!sessionId) {
     return h(
       'div',
@@ -1883,6 +2532,20 @@ function CellView(props) {
               h(Markdown, { text: row.text, k: row.key }),
             )
           }
+          // A prompt that carried pictures draws them above its text in the same
+          // bubble; an image-only prompt therefore still has a visible message.
+          if (row.kind === 'user' && row.images.length > 0) {
+            return h(
+              'div',
+              { key: row.key, style: eventStyle('user') },
+              h(UserImageStrip, {
+                session: binding.session,
+                images: row.images,
+                hasText: row.text !== '',
+              }),
+              row.text === '' ? null : h('div', null, row.text),
+            )
+          }
           return h(
             'div',
             {
@@ -1897,32 +2560,10 @@ function CellView(props) {
         h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
       ),
     ),
-    h(
-      'div',
-      { style: composerWrapStyle },
-      h(
-        'div',
-        { style: composerCardStyle },
-        h('textarea', {
-          ref: textareaRef,
-          value: inputText,
-          onChange: (e) => setInputText(e.target.value),
-          onKeyDown,
-          placeholder: t('composer.placeholder'),
-          rows: 1,
-          style: composerInputStyle,
-        }),
-        h(
-          'button',
-          {
-            onClick: send,
-            disabled: !inputText.trim() || sending,
-            style: { ...composerBtnStyle, opacity: !inputText.trim() || sending ? 0.4 : 1 },
-          },
-          t('composer.send'),
-        ),
-      ),
-    ),
+    // Image previews need the Composer's unmount hook, so the images live there;
+    // the typed text stays in this cell's state because the old bar kept it
+    // across a session switch on the same tile.
+    h(Composer, { session: binding.session, text: inputText, onText: setInputText }),
   )
 }
 

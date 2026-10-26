@@ -12,7 +12,9 @@ it too: nothing here is agent-specific except the tone.
 packages/dsh-workspace-split/
 ├── index.js          # Host 半侧（手写）：持久化，走 ctx.storageDomain
 ├── src/
-│   ├── client.js     # 客户端源码（手写，2600+ 行）：布局、格子、渲染
+│   ├── client.js     # 客户端源码（手写）：布局、格子、渲染、输入框
+│   ├── composer-images.js # 图片入队与 prompt parts 的纯函数（有测试）
+│   ├── transcript.js # 事件窗口折叠成渲染行（有测试）
 │   ├── zoom.js       # 格子文字缩放的纯函数（有测试）
 │   ├── i18n.js       # 取词函数
 │   ├── messages.js   # 中文词表

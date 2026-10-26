@@ -21,7 +21,10 @@
  * - only what a reader wrote and read reaches the cell: replacement surface
  *   copies (compaction, pruning) stay model-only, and injected context messages
  *   (time context, job notices, catalogs, runtime snapshots, approvals) are not
- *   drawn as bubbles, exactly as Chat classifies them.
+ *   drawn as bubbles, exactly as Chat classifies them;
+ * - a human prompt keeps the image attachment refs it carried, and an image-only
+ *   prompt stays a row: dropping it removed a pasted screenshot from the cell
+ *   while the model still answered it.
  *
  * Kept free of React and DOM so the rules can be tested directly.
  */
@@ -169,6 +172,25 @@ export function toolResultText(ev) {
   const blocks = ev?.message?.content ?? ev?.data?.message?.content
   const list = Array.isArray(blocks) ? blocks : []
   return list.map(blockLabel).join('\n')
+}
+
+/**
+ * Image attachments attached to a content block list.
+ *
+ * A prompt that carried pictures stores them as `{ type: 'image', attachment }`
+ * blocks next to the text. They are refs, not bytes: the cell resolves each one
+ * through `session.readAttachment` when it draws the row, because the transcript
+ * fold is pure and the bytes arrive asynchronously.
+ * @param content - content blocks of a `user/message`.
+ * @returns attachment refs, in block order.
+ */
+function contentImages(content) {
+  const blocks = Array.isArray(content) ? content : []
+  return blocks
+    .filter(
+      (block) => block?.type === 'image' && typeof block.attachment?.attachmentId === 'string',
+    )
+    .map((block) => block.attachment)
 }
 
 /** One content block's readable label for the tool row. */
@@ -417,19 +439,25 @@ function onTurnStart(ev, ctx) {
 }
 
 /**
- * User prompt: literal text, in the bubble style.
+ * User prompt: literal text plus the image refs it carried, in the bubble style.
  *
  * Only what a reader typed: injected context and replacement copies are the
  * model's reading material, not the transcript's (see `isHumanPrompt`).
+ *
+ * An image-only prompt is a real turn and must reach the cell: requiring text
+ * here dropped a pasted screenshot from the transcript entirely, so the reader
+ * saw their message vanish while the model answered it.
  */
 function onUserMessage(ev, ctx) {
   if (!isHumanPrompt(ev)) return
   const text = contentText(ev.data?.content)
-  if (text === '') return
+  const images = contentImages(ev.data?.content)
+  if (text === '' && images.length === 0) return
   ctx.rows.push({
     key: `user-${ev.seq ?? ctx.rows.length}`,
     kind: 'user',
     text,
+    images,
     turn: ev.data?.turn,
   })
 }
@@ -472,7 +500,7 @@ const HANDLERS = new Map([
  * row where that attempt started, and later chunks update it in place.
  * @param entries - session event entries (`{ event }`), including transient rows.
  * @param t - translation function, injectable for tests.
- * @returns rows of `{ key, kind, text, turn, streaming, tool }`.
+ * @returns rows of `{ key, kind, text, images, turn, streaming, tool }`.
  */
 export function buildTranscript(entries, t = keyOnly) {
   const list = Array.isArray(entries) ? entries : []
