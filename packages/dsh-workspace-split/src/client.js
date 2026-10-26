@@ -2556,7 +2556,15 @@ function ProcessGroup(props) {
           group.items.map((item) =>
             item.kind === 'tool'
               ? h(ToolRow, { key: item.key, ...item.tool })
-              : h('div', { key: item.key, style: reasoningStyles.body }, item.text),
+              : h(
+                  'div',
+                  {
+                    key: item.key,
+                    style: reasoningStyles.body,
+                    'data-dsws-reasoning': 'true',
+                  },
+                  item.text,
+                ),
           ),
         )
       : null,
