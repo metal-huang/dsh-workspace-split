@@ -1,14 +1,18 @@
 # TECH DSH 现有能力盘点
 
-> 文档版本：v3（2026-10-23 更新）· 实质更新时递增版本号并改此日期
+> 文档版本：v4（2026-10-26 复核更新）· 实质更新时递增版本号并改此日期
 
 ## 本页性质
 
 本页记录 DSH 桌面端在「多会话并置」这件事上**已经提供了哪些能力**，
 用于判断哪些部分可以直接复用、哪些需要自己实现。
 
-盘点方法：读取 DSH 运行时的槽位树与服务契约。这些是运行时契约，
-会随 DSH 版本变化，因此本页是活文档，需要持续维护。
+盘点方法：读取 DSH 运行时的槽位树与服务契约，并对照 DSH 仓库源码与发布包。
+这些是运行时契约，会随 DSH 版本变化，因此本页是活文档，需要持续维护。
+
+v4 依据 2026-10-26 的复核改写第四、五、六、8.1、九、十节，新增第十二节；
+复核对象是 DSH 公开仓库 `master` 分支（提交 `22ddee3`）与 npm 上的
+`0.2.1-rc.2`、`0.2.1-rc.3`。
 
 本页只记结论与判断，需求与决策在 [PRD 多会话并置](../prd/20261022_PRD_多会话并置.md)。
 
@@ -48,29 +52,44 @@
 
 结论：多会话并发存活与进度可观测这两条路 DSH 已经修好。
 
-## 四、格子里的会话视图可以复用原生渲染器
+## 四、格子里的会话视图只能自渲染（v4 修正）
 
-`conversation.content` 是一个可实例化模板，而非普通槽位。它的作用域是
-「可能有会话」，其下挂着会话体、输入框等子槽位。
+`conversation.content` 是 Component Factory（可复用组件工厂），作用域是「可能有
+会话」，其下挂着会话体、输入框等子槽位。v3 据此判断它「可被多次实例化、
+每次绑定不同会话」，这个判断已被推翻：
 
-可实例化意味着它能被多次实例化，每次绑定不同的会话。所以每个格子里
-不是简陋的自绘对话框，而是 DSH 官方会话渲染器实例，消息流、工具调用卡、
-推理块、图片、审批卡全部原生，且自动跟随 DSH 升级。
+- 工厂实例的会话由渲染位置决定。DSH 原文：「Factory occurrences inherit their
+  render-position Session — `conversation.content` does not accept an
+  independently addressed Session; that requires a separate Session-provider
+  capability.」（`packages/client/ui-conversation/README.md`）
+- 渲染工厂用的 `renderFactorySlot()` 不接受会话标识。DSH 原文：「An occurrence
+  inherits its render-position scope; `renderFactorySlot()` does not accept a
+  Session identity.」（`packages/client/ui-slots/README.md`）
+- 工厂的输入属性只有 `variant` / `phase` / `hero`，没有会话标识；会话引用来源表
+  里只声明了主视图（`mainView`）一项（本机 0.2.1-rc.2 的类型声明）。
+- 平台模块表只有十一项，`ui-conversation`、`ui-session`、`ui-renderer` 都不在表里，
+  插件运行时 `require` 不到官方会话渲染器（`packages/client/web/src/seed.ts`）。
 
-结论：不重画任何一个会话界面。
+所以第三方插件拿不到「把第 N 个会话渲染进第 N 个格子」的入口。
+结论：**格子的会话视图由本插件自己渲染**——读会话事件流折叠成行，Markdown、
+工具卡、输入框都是自绘，样式沿用 DSH 主题变量。完整证据见第十二节。
 
-## 五、每个格子自带输入框
+## 五、每个格子的输入框也要自绘（v4 修正）
 
-`conversation.composer.bar` 的作用域是「会话」，即每个会话实例
-自带独立的输入框。配合会话服务提供的按会话取上下文的方法，
-多个格子各自可输入在架构上成立，不需要自绘输入框。
+`conversation.composer.bar` 的作用域是「会话」，但它挂在 `conversation.content`
+工厂之下，受第四节同一条限制：输入框实例跟着渲染位置的那个会话走，
+第三方插件没有「给第 N 个会话单独开一个输入框」的入口。
 
-这是 PRD 原则一「点哪打哪」的可行性依据。
+v3 写「不需要自绘输入框」，与实现不符。实际情况是：格子的输入框由本插件自绘，
+发送走公开的 `session.prompt`（见 `packages/dsh-workspace-split/src/client.js`）。
+PRD 原则一「点哪打哪」靠这条路径落实。
 
-## 六、左上角按钮位已经预留
+## 六、入口按钮位（v4 修正）
 
-`shell.leading` 的描述是窗口框架左上角、浮在所有主面板之上的座位。
-PRD 里「在左上方点一个按钮」对应的就是这个位置，注册即可。
+`shell.leading` 是窗口框架左上角、浮在所有主面板之上的座位，但它属于 single 类型
+且已被侧边栏插件占用，第三方插件注册同名字段会让界面在启动期失败（见第八节）。
+项目实际把入口放在 `sidebar.footer.action` 槽位，另外在 `conversation.hero.options`
+放了一个备用入口。
 
 ## 七、持久化与设置
 
@@ -120,22 +139,23 @@ PRD 里「在左上方点一个按钮」对应的就是这个位置，注册即�
 |---|---|
 | 创建或控制原生桌面窗口 | 不具备。客户端全部服务里没有窗口相关方法；服务端清单中 `window` 一词只出现在会话事件读取的返回类型里，含义是读取区间，与界面窗口无关；客户端事件里也没有窗口事件 |
 | 多显示器各自独立窗口 | 受上一条限制，无法直接实现 |
-| **第三方插件渲染会话工厂** | **不具备。** 客户端槽位服务只暴露三个方法：`register`、`registerFactory`、`inject`，**没有渲染或实例化工厂的方法**。工厂只能由注册它的会话包自己渲染 |
+| **第三方插件把官方会话体渲染进自己的格子** | **不具备。** 槽位服务没有对外暴露「按会话标识渲染」的方法；工厂渲染走注入给组件的 `renderFactorySlot()`，它不接受会话标识，实例继承渲染位置的会话；官方渲染器所在包也不在平台模块表里（见第十二节） |
 | **争用 single 类型槽位** | **不可行。** `shell.leading` 只有单个座位，侧边栏插件已占用；第三方插件注册同名字段会让侧边栏插件在启动期失败，整个界面停在 `Failed to load plugins`。选槽位前先确认 `kind` 是 `list` |
 
-### 8.1 关于「每格实例化会话工厂」的核查结论（修正，v2）
+### 8.1 关于「每个格子实例化会话工厂」的核查结论（v4 修正）
 
-之前假设「每个格子实例化一次 `conversation.content` 工厂并绑定各自会话」。
-核查后这个假设**不成立**，原因是工厂渲染的机制：
+原先假设「每个格子实例化一次 `conversation.content` 工厂并绑定各自会话」。
+这个假设**不成立**，但 v2 给出的理由需要更正：
 
-- 渲染工厂靠的是框架内部的 `renderFactorySlot`，它不是公开接口。
-- 它作为属性被注入给「自己已经注册进某个槽位的组件」，第三方插件拿不到它去
-  在任意位置渲染工厂。
-- `conversation.content` 由会话包注册，也由会话包自己渲染一次，
-  绑定的是全局当前会话。
+- `renderFactorySlot()` 其实是公开的注入属性（ui-slots README 列出的框架属性之一），
+  任何注册组件都能用它渲染工厂实例，v2 说它「不是公开接口」并不准确。
+- 走不通的真正原因是它**不接受会话标识**：实例继承渲染位置的会话，
+  而渲染位置上的会话由主视图决定，插件造不出第二个会话位。
+- v2 写「`conversation.content` 由会话包自己渲染一次，绑定的是全局当前会话」同样
+  不准确：主视图与嵌入式两种呈现都由会话包渲染，绑定的都是渲染位置上的会话。
 
 因此「每个格子各自渲染一份完整会话」这条路在当前公开接口下走不通，
-需要重新设计格子的内容来源，见 DESIGN 文件。
+格子的内容来源是本插件自渲染，见 DESIGN 文件。
 
 界面本体通过 HTTP 提供，服务端有取界面地址（`webApp` 服务）与注册路由
 （`webServer` 服务）的能力。
@@ -145,7 +165,7 @@ PRD 里「在左上方点一个按钮」对应的就是这个位置，注册即�
 「左屏四格、右屏六格」。窗口跨屏拉伸是操作系统的能力，
 界面只需铺满窗口，不依赖 DSH 额外开放接口。方案见 DESIGN 文件第七节。
 
-## 九、插件客户端依赖边界（v3 新增）
+## 九、插件客户端依赖边界（v3 新增，v4 更正代价）
 
 写客户端插件时，「能不能复用 DSH 自己的界面代码」有两个不同的答案，
 过去把这两件事混为一谈会得出错误结论，此处分开记录。
@@ -196,15 +216,16 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 一句 `require("react")`。
 
 选型结论：**要完整语法就引入构建步骤打包 mdast；要零构建就自写精简版。**
-本项目选前者，解析器包组合与原生渲染器一致：
+本项目选前者，解析器选型与 DSH 自己的对话渲染实现相同（渲染代码仍是本项目自己的）：
 `mdast-util-from-markdown` + `micromark-extension-gfm` + `mdast-util-gfm`
 + `micromark-extension-math` + `mdast-util-math`。
 
 代价与边界：
 
-- 产物体积约 240 KiB（未压缩），比零构建版的几十 KB 大一个量级
-- 公式只做解析、按等宽文本显示 TeX 源码；原生用 KaTeX 渲染，
-  接入 KaTeX 需要额外携带样式与字体文件，暂不引入
+- 产物体积随内联依赖增加，构建后直接看 `packages/dsh-workspace-split/client.js`
+  的大小，本页不抄数字
+- 公式走 KaTeX 渲染：`katex` 在构建时内联，页面已随 vendor 样式带上 KaTeX 样式表，
+  所以不需要额外分发字体文件。v3 正文里的「暂不引入 KaTeX」已被实现推翻
 - 原始 HTML 与原生策略一致，按字面文本显示，不进 DOM
 
 ## 十、盘点结论
@@ -212,7 +233,8 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | 能力 | 提供方 | 是否自研 |
 |---|---|---|
 | 二栏布局 | DSH 原生主栏加右栏 | 否，直接复用 |
-| 会话渲染，含消息、工具卡、审批、图片 | DSH 原生可实例化模板 | 否，实例化即可 |
+| 会话体渲染，含消息、工具卡、审批、图片 | 无公开入口（第四节） | 是，自渲染 |
+| 每格输入框 | 无公开入口（第五节） | 是，自渲染，发送走 `session.prompt` |
 | 多会话并发存活 | 会话服务的持有方法 | 否，直接复用 |
 | 会话进度可观测 | 会话服务的状态快照方法 | 否，订阅即可 |
 | 会话清单，拖拽源 | `sessions.list` 快照，零远程调用 | 否，订阅即可 |
@@ -220,9 +242,11 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | 布局持久化 | 浏览器 localStorage（`layout.selectPanel` 是纯内存态，刷新不保留） | 是 |
 | N 宫格布局编排 | 无 | 是 |
 | 当前格标记 | 无 | 是 |
-| Markdown 渲染 | 原生 `MarkdownText` 可 require 但规范禁止依赖；构建时打包 mdast 自渲染 | 是 |
+| 对话流折叠（把流式增量折成一行） | 无 | 是，`packages/dsh-workspace-split/src/transcript.js` |
+| Markdown 渲染 | 构建时打包 mdast 与 KaTeX，自渲染 | 是 |
 
-本项目造的是布局编排器，不是又一个会话界面。
+本项目造的是布局编排器；格子的会话视图与输入框由插件自己渲染，
+DSH 提供会话数据、并发存活与进度信号。
 
 ## 十一、待实测项
 
@@ -230,3 +254,58 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 - 多个输入框常驻时的内存与渲染开销，它决定 Q1c 软限制的推导公式
 - 单窗口跨屏铺满时（两个屏幕各自若干格），分屏视图的渲染与状态同步开销
+
+## 十二、2026-10-26 复核：DSH 是否开放了逐格原生渲染
+
+v4 的结论全部建立在下面这份可复核的证据上，取数日期 2026-10-26。
+
+### 12.1 核对了什么
+
+| 项目 | 值 |
+|---|---|
+| 仓库 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（公开，MIT） |
+| 分支与提交 | 默认分支 `master`，提交 `22ddee3792402c3e70ec5f86a63c3e3e895a2f60`；仓库 `pushed_at` 为 2026-10-23 |
+| npm 版本 | `dist-tags`：`latest=0.2.1-rc.2`、`next=0.2.1-rc.3`；本机运行 0.2.1-rc.2 |
+| 交叉验证 | `master` 的源码与 README、`0.2.1-rc.3` 发布包、本机 `0.2.1-rc.2` 安装包，三处结论一致 |
+
+### 12.2 原文引文
+
+1. [`packages/client/ui-conversation/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-conversation/README.md)（`master`）Known Limitations 两条：
+   - 「Only registered targets can render — the shell deliberately has no implicit
+     fallback target beyond the registered `chat` preference.」
+   - 「Factory occurrences inherit their render-position Session —
+     `conversation.content` does not accept an independently addressed Session;
+     that requires a separate Session-provider capability.」
+2. [`packages/client/ui-slots/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-slots/README.md)（`master`）：
+   - 「An occurrence inherits its render-position scope; `renderFactorySlot()` does
+     not accept a Session identity.」
+   - 「Declaring a slot is claiming it: the registering entry becomes the only entry
+     allowed to render that key」
+3. [`packages/client/ui-renderer/README.md`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-renderer/README.md)（`master` 与 `0.2.1-rc.3` 措辞一致）：
+   - 「The web shell and the boot kernel are its only direct consumers」
+   - 「A business plugin registers an ordinary Slot entry or a reusable Component
+     Factory; the renderer binds the runtime's session and workspace observable
+     sources into selector hooks at the render position.」
+4. [`packages/client/web/src/seed.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/web/src/seed.ts)（`master`）平台模块表，共十一项，不含
+   `ui-conversation`、`ui-session`、`ui-renderer`。
+
+### 12.3 类型层的旁证（本机 0.2.1-rc.2 安装包）
+
+- `dsh-client-ui-conversation` 里 `conversation.content` 的输入属性只有
+  `variant` / `phase` / `hero`，没有会话标识。
+- `dsh-client-ui-session` 的 `SessionReferenceSourceMap` 只声明了 `mainView` 一项，
+  即当前只有主视图提供会话引用。
+
+### 12.4 结论
+
+**DSH 尚未开放第三方插件逐格渲染原生会话体与输入框的能力。** 缺的是一条
+「按会话标识给某个渲染位置供会话」的能力（DSH 原文称 Session-provider capability），
+以及配套的每格输入路由。因此本插件自渲染对话记录（含 Markdown、工具卡、
+轮次导航）与输入框，会话数据与进度信号仍走公开接口。
+
+### 12.5 复核方法（下次照做）
+
+1. 取 `master` 的 `ui-conversation`、`ui-slots`、`ui-renderer` 三份 README 的
+   Known Limitations，以及 `packages/client/web/src/seed.ts` 的模块表；
+2. 用 `npm view @deepseek-ai/dsh dist-tags` 取到最新版本，对照发布包里的同名 README；
+3. 三处结论一致才递增本页版本号。

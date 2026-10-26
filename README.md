@@ -16,8 +16,9 @@ progress on one screen instead of clicking through tabs.
 
 - **A grid of live sessions.** Rows and columns are yours to choose, up to 5 × 6.
   Each tile holds a running session with its full transcript.
-- **Every tile is typable.** Each cell has its own composer; the split layout
-  never changes on its own.
+- **Every tile is typable, images included.** Each cell has its own composer;
+  paste, drop, or pick a PNG / JPEG / WebP / GIF and it goes out with the text.
+  The split layout never changes on its own.
 - **Session or project per tile.** Pin one session, or pin a project and switch
   between that project's sessions inside the tile.
 - **Real-time status.** A dot on each title shows whether the session is working.
@@ -30,11 +31,12 @@ progress on one screen instead of clicking through tabs.
   not loaded yet.
 - **Layout survives restarts.** Grid, assignments, and per-cell zoom are restored.
 
-## It does not reimplement the conversation UI
+## How sessions are wired
 
-Session rendering, concurrent live sessions, and progress signals are DSH
-capabilities. This plugin adds two layers: layout arrangement and marking the
-active tile. It reads sessions through the public `ctx.sessions` API.
+Sessions come from the public `ctx.sessions` API (`list`, `retain`, the event
+source), and input goes out through `session.prompt`. Each tile's transcript,
+Markdown, tool cards, and composer are rendered by this plugin itself, with
+styles built on DSH's theme variables and visual rules so they match the app.
 
 ## Requirements
 
