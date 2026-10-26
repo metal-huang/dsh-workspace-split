@@ -26,10 +26,13 @@ progress on one screen instead of clicking through tabs.
   automatically so a small cell still shows a useful amount; `Ctrl` + wheel over
   one tile changes that tile alone.
 - **Markdown and math.** Tables, code, task lists, and TeX rendered with KaTeX.
-- **The process, not just the answer.** Reasoning streams in its own disclosure
-  row, a tool call marks itself running until its result arrives, and a status
-  line names what the session is doing. A failed turn shows the provider error
-  instead of ending in silence; with an empty draft the send seat becomes Stop.
+- **The process, not just the answer.** Reasoning and tool calls fold into one
+  per-turn process group, a tool call marks itself running until its result
+  arrives, and a status line names what the session is doing. A failed turn
+  shows the provider error instead of ending in silence; with an empty draft the
+  send seat becomes Stop.
+- **Queue, steer, remove.** Prompts queued behind a running turn are listed above
+  the composer with Steer and Remove, matching Chat's QueueDock.
 - **Tool calls you can open.** Arguments and output inline, failures marked.
 - **Turn rail.** Ticks down the right edge jump between turns, including turns
   not loaded yet.
