@@ -37,6 +37,8 @@
   "composer.send": "Send",
   "composer.sending": "Sending…",
   "composer.sendFailed": "Send failed: {{error}}",
+  "composer.expand": "Expand input",
+  "composer.collapse": "Collapse input",
   "composer.cancel": "Cancel",
   "composer.image.attach": "Add images",
   "composer.image.remove": "Remove image",

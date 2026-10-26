@@ -53,6 +53,8 @@ export const CHINESE = {
   'composer.send': '发送',
   'composer.sending': '发送中…',
   'composer.sendFailed': '发送失败：{{error}}',
+  'composer.expand': '展开输入框',
+  'composer.collapse': '收起输入框',
   'composer.cancel': '取消',
   'composer.image.attach': '添加图片',
   'composer.image.remove': '移除图片',

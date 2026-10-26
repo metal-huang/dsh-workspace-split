@@ -1352,12 +1352,19 @@ function SplitButton() {
 }
 
 // ---------- composer ----------
-// Compact on purpose: a split cell spends its height on the transcript, so the
-// empty bar is one 24px control row plus 3px card padding and 4px wrap padding
-// (about 38px), not the 48px the previous card took. Colors and radii are --dsw-*
-// theme tokens; the two --dsh-content-* tokens are the harness content-scale
-// values the transcript already uses, so ctrl+wheel cell zoom scales the bar
-// together with its text instead of leaving it at a fixed pixel size.
+// Compact on purpose: a split cell spends its height on the transcript. The
+// collapsed bar is one 26px control row; the textarea grows with its content
+// (up to COLLAPSED_MAX_HEIGHT) and the chevron on the right expands it further
+// so a multi-line draft can be read without scrolling inside one line. Colors
+// and radii are --dsw-* theme tokens; the two --dsh-content-* tokens are the
+// harness content-scale values the transcript already uses, so ctrl+wheel cell
+// zoom scales the bar together with its text instead of leaving it at a fixed
+// pixel size.
+const COLLAPSED_MAX_HEIGHT = 72
+const EXPANDED_MAX_HEIGHT = 260
+const EXPANDED_MIN_HEIGHT = 96
+const COMPOSER_CONTROL = 30
+
 const composerWrapStyle = {
   display: 'flex',
   flexDirection: 'column',
@@ -1366,28 +1373,32 @@ const composerWrapStyle = {
   minWidth: 0,
   flexShrink: 0,
 }
-const composerCardStyle = (dragging) => ({
+const composerCardStyle = (dragging, focused) => ({
   boxSizing: 'border-box',
   display: 'flex',
-  alignItems: 'center',
-  gap: 6,
+  alignItems: 'flex-end',
+  gap: 4,
   minWidth: 0,
   borderRadius: 'var(--dsw-radius-panel, 12px)',
   background: 'var(--dsw-specific-input-major, var(--dsw-alias-bg-elevated, #2a2a2a))',
   // The drop ring reuses the active-cell accent and is inset, so a drag reads as
-  // "the composer takes files" without moving the card or its neighbours.
+  // "the composer takes files" without moving the card or its neighbours. The
+  // focus ring mirrors the native composer: the same inset accent at half weight.
   boxShadow: dragging
     ? 'inset 0 0 0 1.5px var(--dsw-alias-state-business-primary, #4a9eff)'
-    : 'var(--dsw-elevation-soft, 0 1px 2px rgba(0,0,0,.12))',
+    : focused
+      ? 'inset 0 0 0 1px var(--dsw-alias-border-l2, #555)'
+      : 'var(--dsw-elevation-soft, 0 1px 2px rgba(0,0,0,.12))',
   padding: '3px 4px 3px 8px',
 })
 const composerInputStyle = {
   flex: 1,
   minWidth: 0,
   resize: 'none',
+  boxSizing: 'border-box',
   border: 'none',
   outline: 'none',
-  padding: 0,
+  padding: '3px 0',
   fontSize: 'var(--dsh-content-font-size, 13px)',
   lineHeight: 'calc(18px + var(--dsh-content-font-delta, 0px))',
   fontFamily: 'var(--dsw-font-family, inherit)',
@@ -1397,26 +1408,33 @@ const composerInputStyle = {
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
   overflowWrap: 'anywhere',
-  minHeight: 18,
-  maxHeight: 72,
+  height: 18,
+  overflowY: 'hidden',
 }
-const composerBtnStyle = {
+/** Circular send seat, matching the native composer's primary action shape. */
+const composerSendStyle = {
   flex: 'none',
-  height: 24,
-  padding: '0 8px',
+  width: COMPOSER_CONTROL,
+  height: COMPOSER_CONTROL,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
   border: 'none',
-  borderRadius: 'var(--dsw-radius-sm, 6px)',
-  background:
-    'var(--dsw-alias-button-primary-fill, var(--dsw-alias-state-business-primary, #4a9eff))',
+  borderRadius: '50%',
+  // The theme's button-primary-fill is white in this theme; the send seat has to
+  // stay the business accent so the white arrow remains visible (it disappeared
+  // into a plain white circle when the fill token won).
+  background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
   color: 'var(--dsw-alias-label-primary-inverted, #fff)',
-  fontSize: 11,
-  lineHeight: '24px',
+  fontSize: 15,
+  lineHeight: 1,
   cursor: 'pointer',
 }
 const composerIconBtnStyle = {
   flex: 'none',
-  width: 24,
-  height: 24,
+  width: COMPOSER_CONTROL,
+  height: COMPOSER_CONTROL,
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -1427,12 +1445,44 @@ const composerIconBtnStyle = {
   color: 'var(--dsw-alias-label-secondary, #999)',
   cursor: 'pointer',
 }
+/** Text button for the cell's retry action; the composer itself uses icons. */
+const retryBtnStyle = {
+  flex: 'none',
+  height: 24,
+  padding: '0 10px',
+  border: 'none',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background: 'var(--dsw-alias-state-business-primary, #4a9eff)',
+  color: 'var(--dsw-alias-label-primary-inverted, #fff)',
+  fontSize: 12,
+  lineHeight: '24px',
+  cursor: 'pointer',
+}
+/** Expander between the text and Send; the glyph points at the action. */
+const composerExpandStyle = (hover) => ({
+  flex: 'none',
+  width: 26,
+  height: COMPOSER_CONTROL,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background: hover
+    ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
+    : 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))',
+  color: hover
+    ? 'var(--dsw-alias-label-primary, inherit)'
+    : 'var(--dsw-alias-label-secondary, #999)',
+  cursor: 'pointer',
+  fontSize: 13,
+  lineHeight: 1,
+})
 const composerStripStyle = {
   display: 'flex',
-  gap: 4,
-  // Room for the remove buttons, which overhang each 36px thumbnail; without it
-  // `overflowY: hidden` clips them and the reader cannot delete one image.
-  padding: '4px 4px 0',
+  gap: 8,
+  padding: '2px 2px 0',
   minWidth: 0,
   overflowX: 'auto',
   overflowY: 'hidden',
@@ -1441,13 +1491,13 @@ const composerStripStyle = {
 const composerThumbStyle = {
   position: 'relative',
   flex: 'none',
-  width: 36,
-  height: 36,
+  width: 46,
+  height: 46,
 }
 const composerThumbImageStyle = {
   display: 'block',
-  width: 36,
-  height: 36,
+  width: 46,
+  height: 46,
   objectFit: 'cover',
   borderRadius: 'var(--dsw-radius-sm, 6px)',
   background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.18))',
@@ -1456,8 +1506,8 @@ const composerThumbFallbackStyle = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  width: 36,
-  height: 36,
+  width: 46,
+  height: 46,
   padding: 2,
   boxSizing: 'border-box',
   borderRadius: 'var(--dsw-radius-sm, 6px)',
@@ -1467,22 +1517,27 @@ const composerThumbFallbackStyle = {
   lineHeight: '11px',
   textAlign: 'center',
 }
+// Inside the thumbnail, not overhanging it: an overhanging 14px circle was both
+// clipped by the strip's scroll box and scaled below a usable hit target by the
+// cell zoom, which is why a picture looked impossible to remove.
 const composerThumbRemoveStyle = {
   position: 'absolute',
-  top: -4,
-  right: -4,
-  width: 14,
-  height: 14,
+  top: 2,
+  right: 2,
+  zIndex: 2,
+  width: 22,
+  height: 22,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   padding: 0,
-  border: 'none',
-  borderRadius: 7,
-  background: 'var(--dsw-alias-bg-mask-3, rgba(0,0,0,.55))',
-  color: 'var(--dsw-alias-label-primary-inverted, #fff)',
-  fontSize: 10,
-  lineHeight: '14px',
+  border: '0.5px solid var(--dsw-alias-border-l1, #555)',
+  borderRadius: 11,
+  background: 'var(--dsw-alias-bg-layer-1, rgba(20,20,20,.88))',
+  color: 'var(--dsw-alias-label-primary, #fff)',
+  boxShadow: '0 1px 3px rgba(0,0,0,.45)',
+  fontSize: 15,
+  lineHeight: '20px',
   cursor: 'pointer',
 }
 const composerErrorStyle = {
@@ -1705,6 +1760,53 @@ function ImageIcon(props) {
   )
 }
 
+/** Up arrow for the send seat; a glyph was too thin at split-cell zoom. */
+function SendIcon(props) {
+  const size = props.size ?? 15
+  return h(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 16 16',
+      fill: 'none',
+      'aria-hidden': true,
+      style: { display: 'block' },
+    },
+    h('path', {
+      d: 'M8 13V3M8 3L4 7M8 3l4 4',
+      stroke: 'currentColor',
+      strokeWidth: 1.8,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    }),
+  )
+}
+
+/** Chevron for the composer expander; points down when closed, up when open. */
+function ChevronIcon(props) {
+  const size = props.size ?? 12
+  const d = props.up === true ? 'M4 10l4-4 4 4' : 'M4 6l4 4 4-4'
+  return h(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 16 16',
+      fill: 'none',
+      'aria-hidden': true,
+      style: { display: 'block' },
+    },
+    h('path', {
+      d,
+      stroke: 'currentColor',
+      strokeWidth: 1.7,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    }),
+  )
+}
+
 /**
  * Thumbnails of the images waiting in the draft, each removable on its own.
  * @param props - draft `images` and the `onRemove(id)` handler.
@@ -1752,9 +1854,29 @@ function Composer(props) {
   const { session, text, onText } = props
   const [sending, setSending] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [hoverExpand, setHoverExpand] = useState(false)
   const { images, error, setError, addFiles, removeImage, clearImages } = useDraftImages()
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
+
+  // A plain textarea with rows=1 scrolls inside a single line instead of growing,
+  // so a multi-line draft could not be read without scrolling. Size it from its
+  // scrollHeight; the chevron raises the ceiling and gives a taller empty box.
+  const resize = useCallback(() => {
+    const area = textareaRef.current
+    if (area === null) return
+    const ceiling = expanded ? EXPANDED_MAX_HEIGHT : COLLAPSED_MAX_HEIGHT
+    const floor = expanded ? EXPANDED_MIN_HEIGHT : 18
+    area.style.height = 'auto'
+    area.style.height = `${Math.max(floor, Math.min(area.scrollHeight, ceiling))}px`
+    area.style.overflowY = area.scrollHeight > ceiling ? 'auto' : 'hidden'
+  }, [expanded])
+
+  useLayoutEffect(() => {
+    resize()
+  }, [text, expanded, resize])
 
   const send = useCallback(async () => {
     if (session === undefined || session === null || sending) return
@@ -1780,6 +1902,7 @@ function Composer(props) {
       }
       clearImages()
       onText('')
+      setExpanded(false)
       textareaRef.current?.focus()
     } catch (failure) {
       setError(t('composer.sendFailed', { error: thrownText(failure) }))
@@ -1858,7 +1981,7 @@ function Composer(props) {
     images.length === 0 ? null : h(DraftImageStrip, { images, onRemove: removeImage }),
     h(
       'div',
-      { style: composerCardStyle(dragging), onDragOver, onDragLeave, onDrop },
+      { style: composerCardStyle(dragging, focused), onDragOver, onDragLeave, onDrop },
       h(
         'button',
         {
@@ -1868,7 +1991,7 @@ function Composer(props) {
           onClick: () => fileInputRef.current?.click(),
           style: composerIconBtnStyle,
         },
-        h(ImageIcon, { size: 14 }),
+        h(ImageIcon, { size: 17 }),
       ),
       h('input', {
         ref: fileInputRef,
@@ -1884,6 +2007,8 @@ function Composer(props) {
         onChange: (event) => onText(event.target.value),
         onKeyDown,
         onPaste,
+        onFocus: () => setFocused(true),
+        onBlur: () => setFocused(false),
         placeholder: t('composer.placeholder'),
         'aria-label': t('composer.placeholder'),
         rows: 1,
@@ -1893,11 +2018,34 @@ function Composer(props) {
         'button',
         {
           type: 'button',
+          title: expanded ? t('composer.collapse') : t('composer.expand'),
+          'aria-label': expanded ? t('composer.collapse') : t('composer.expand'),
+          'aria-expanded': expanded,
+          onMouseEnter: () => setHoverExpand(true),
+          onMouseLeave: () => setHoverExpand(false),
+          onClick: () => {
+            setExpanded((open) => !open)
+            requestAnimationFrame(() => textareaRef.current?.focus())
+          },
+          style: composerExpandStyle(hoverExpand),
+        },
+        h(ChevronIcon, { up: expanded, size: 13 }),
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          title: sending ? t('composer.sending') : t('composer.send'),
+          'aria-label': sending ? t('composer.sending') : t('composer.send'),
           onClick: send,
           disabled: !canSend,
-          style: { ...composerBtnStyle, opacity: canSend ? 1 : 0.4 },
+          style: {
+            ...composerSendStyle,
+            opacity: canSend ? 1 : 0.35,
+            cursor: canSend ? 'pointer' : 'default',
+          },
         },
-        sending ? t('composer.sending') : t('composer.send'),
+        sending ? '…' : h(SendIcon, { size: 15 }),
       ),
     ),
   )
@@ -2453,7 +2601,7 @@ function CellView(props) {
       h(
         'button',
         {
-          style: { ...composerBtnStyle, alignSelf: 'flex-start' },
+          style: { ...retryBtnStyle, alignSelf: 'flex-start' },
           onClick: () => {
             setError(null)
             setBinding(null)
@@ -3085,8 +3233,8 @@ function GridPickerPanel(props) {
 
 const titleStyles = {
   dot: (running) => ({
-    width: 8,
-    height: 8,
+    width: 10,
+    height: 10,
     borderRadius: '50%',
     flexShrink: 0,
     background: running
@@ -3124,18 +3272,20 @@ const titleStyles = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 22,
-    height: 22,
-    marginLeft: 2,
+    width: 30,
+    height: 30,
+    marginLeft: 4,
     padding: 0,
     border: 'none',
     borderRadius: 'var(--dsw-radius-sm, 6px)',
     background: hover
       ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
       : 'transparent',
-    color: 'var(--dsw-alias-label-tertiary, #999)',
+    color: hover
+      ? 'var(--dsw-alias-label-primary, inherit)'
+      : 'var(--dsw-alias-label-tertiary, #999)',
     cursor: 'pointer',
-    fontSize: 11,
+    fontSize: 17,
     lineHeight: 1,
   }),
 }
@@ -3242,9 +3392,11 @@ function CellTitle(props) {
 }
 
 // ---------- cell picker ----------
-// A native <select> kept for its keyboard handling and system popup, drawn as a
-// small chevron: the header already shows the session title, so repeating the
-// same text in a visible control only crowded the row.
+// A native <select> kept for its keyboard handling and system popup. The header
+// already shows the session title, so the visible affordance is a chevron in a
+// small bordered seat; it used to be a 9px glyph that readers could not see.
+// The transparent <select> covers the whole seat, so clicking anywhere opens the
+// system popup with a much larger hit target than the glyph suggests.
 
 const cellPickerStyles = {
   wrap: (hover) => ({
@@ -3253,19 +3405,24 @@ const cellPickerStyles = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 22,
-    height: 22,
-    marginLeft: 4,
+    width: 38,
+    height: 30,
+    marginLeft: 6,
+    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
     borderRadius: 'var(--dsw-radius-sm, 6px)',
     background: hover
       ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
-      : 'transparent',
-    color: 'var(--dsw-alias-label-tertiary, #999)',
+      : 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))',
+    color: hover
+      ? 'var(--dsw-alias-label-primary, inherit)'
+      : 'var(--dsw-alias-label-secondary, #999)',
+    cursor: 'pointer',
   }),
   glyph: {
-    fontSize: 9,
+    fontSize: 16,
     lineHeight: 1,
     pointerEvents: 'none',
+    transform: 'translateY(-1px)',
   },
   select: {
     position: 'absolute',
@@ -3477,12 +3634,12 @@ function SplitMain(props) {
     alignItems: 'center',
     gap: 8,
     flexShrink: 0,
-    minHeight: 30,
-    padding: '6px 12px',
+    minHeight: 36,
+    padding: '8px 12px',
     borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
-    fontSize: 13,
-    lineHeight: '16px',
-    fontWeight: 500,
+    fontSize: 15,
+    lineHeight: '20px',
+    fontWeight: 600,
     color: 'var(--dsw-alias-label-primary, inherit)',
   }
   // minmax(0, 1fr) on both axes: a bare 1fr resolves its min to auto, so a
@@ -3623,7 +3780,9 @@ function SplitCell(props) {
         {
           style: {
             ...headerStyle,
-            background: active ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)' : 'transparent',
+            background: active
+              ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
+              : 'var(--dsw-alias-bg-layer-1, transparent)',
           },
         },
         sess
