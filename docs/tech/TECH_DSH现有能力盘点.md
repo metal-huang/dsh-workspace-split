@@ -352,5 +352,5 @@ v4 的结论全部建立在下面这份可复核的证据上，取数日期 2026
 `localStorage['dsws-test'] === '1'`（或 URL 带 `dsws-test`）时暴露
 `window.__dswsTest.render(name, node, props)`，用假 pending/catalog 渲染
 ApprovalCard、QuestionCard、ProcessGroup、ComposerMeta、MentionPopup、
-ModelControl、PermissionControl、DraftFileStrip。真实页面不带这个开关，
+ModelControl、PermissionControl、DraftFileStrip、CellTitle。真实页面不带这个开关，
 因此不会出现测试用假卡片。

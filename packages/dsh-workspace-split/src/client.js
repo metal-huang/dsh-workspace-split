@@ -53,6 +53,9 @@ import {
 // ---------- sidebar control placement ----------
 import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 
+// ---------- project badge ----------
+import { projectColor, projectNameOf } from './project.js'
+
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
 // extra tile retains another live Session, so seven to ten ask for a
@@ -4474,6 +4477,33 @@ function GridPickerPanel(props) {
 // title projection the list already renders.
 
 const titleStyles = {
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+    flex: '1 1 auto',
+    height: 30,
+  },
+  // A project can be longer than the tile; the badge yields before the session
+  // title so the session name stays readable.
+  badge: (color) => ({
+    flexShrink: 1,
+    minWidth: 0,
+    maxWidth: '42%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    padding: '1px 7px',
+    border: `0.5px solid ${color}66`,
+    borderRadius: 999,
+    background: `${color}24`,
+    color,
+    fontSize: 11,
+    lineHeight: '16px',
+    fontWeight: 600,
+    letterSpacing: 0,
+  }),
   dot: (running) => ({
     width: 10,
     height: 10,
@@ -4533,11 +4563,13 @@ const titleStyles = {
 }
 
 /**
- * Cell header title: status dot, the title (or its edit field), and rename.
- * @param props - sessions service, session id, title text, and running state.
+ * Cell header title: project badge, status dot, title (or its edit field), and
+ * rename. Keeping them in one fixed-height row is what makes every tile's
+ * header line up.
+ * @param props - sessions service, session id, title, running state, project.
  */
 function CellTitle(props) {
-  const { sessions, sessionId, title, running } = props
+  const { sessions, sessionId, title, running, project } = props
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [hover, setHover] = useState(false)
@@ -4551,7 +4583,7 @@ function CellTitle(props) {
   )
 
   const openPicker = (e) => {
-    const select = e.currentTarget.parentElement?.querySelector('select')
+    const select = e.currentTarget.closest('[data-dsws-header]')?.querySelector('select')
     if (select === null || select === undefined) return
     try {
       select.showPicker()
@@ -4581,8 +4613,19 @@ function CellTitle(props) {
   }
 
   return h(
-    React.Fragment,
-    null,
+    'div',
+    { style: titleStyles.row },
+    typeof project === 'string' && project !== ''
+      ? h(
+          'span',
+          {
+            style: titleStyles.badge(projectColor(project)),
+            title: project,
+            'data-dsws-project': 'true',
+          },
+          project,
+        )
+      : null,
     h('span', { style: titleStyles.dot(running) }),
     editing
       ? h('input', {
@@ -4988,6 +5031,9 @@ function SplitCell(props) {
       ? (workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ??
         t('split.workspace.title'))
       : null
+  // A Session cell still belongs to a project: prefer its Workspace, then the
+  // cwd leaf, so a header never becomes an unanchored conversation title.
+  const projectTitle = wsTitle ?? projectNameOf(sess, workspaceItems)
 
   return h(
     'div',
@@ -5035,6 +5081,7 @@ function SplitCell(props) {
               ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
               : 'var(--dsw-alias-bg-layer-1, transparent)',
           },
+          'data-dsws-header': 'true',
         },
         sess
           ? h(CellTitle, {
@@ -5042,6 +5089,7 @@ function SplitCell(props) {
               sessionId: sess.id,
               title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
               running: sess.running,
+              project: projectTitle,
             })
           : h(
               'span',
@@ -5297,6 +5345,7 @@ if (
     model: ModelControl,
     permission: PermissionControl,
     files: DraftFileStrip,
+    title: CellTitle,
   }
   window.__dswsTest = {
     render(name, node, props = {}) {

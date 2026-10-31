@@ -35,7 +35,9 @@ progress on one screen instead of clicking through tabs.
   reading as Chat, and hides itself when the projection is absent.
 - **Session or project per tile.** Pin one session, or pin a project and switch
   between that project's sessions inside the tile.
-- **Real-time status.** A dot on each title shows whether the session is working.
+- **Real-time status.** A dot on each title shows whether the session is working,
+  and a colored project badge before the title keeps the Session's project
+  visible after the tile has been open for a while.
 - **Density that follows the tile.** Narrow tiles shrink their text
   automatically so a small cell still shows a useful amount; `Ctrl` + wheel over
   one tile changes that tile alone.

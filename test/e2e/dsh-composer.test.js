@@ -374,6 +374,40 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.deepEqual(result, { rows: 1, text: 'client.js\nsrc' })
   })
 
+  it('puts a project badge before the session title on one aligned row', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__dswsTest.render('title', root, {
+          sessions: {},
+          sessionId: 's1',
+          title: 'Long session title',
+          running: false,
+          project: 'dsh-workspace-split',
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        const badge = root.querySelector('[data-dsws-project]')
+        const dot = root.querySelector('span[style*="border-radius: 50%"]')
+        const row = badge.parentElement
+        const b = badge.getBoundingClientRect()
+        const d = dot.getBoundingClientRect()
+        return {
+          badge: badge.innerText,
+          rowHeight: row.getBoundingClientRect().height,
+          badgeCenter: b.y + b.height / 2,
+          dotCenter: d.y + d.height / 2,
+          title: row.querySelector('button[title="切换会话"]')?.innerText ?? '',
+        }
+      })()`,
+    )
+    assert.equal(result.badge, 'dsh-workspace-split')
+    assert.equal(result.rowHeight, 30)
+    assert.ok(Math.abs(result.badgeCenter - result.dotCenter) < 0.6)
+    assert.equal(result.title, 'Long session title')
+  })
+
   it('opens the model menu and reports a selection', async () => {
     const result = await evaluate(
       page,
