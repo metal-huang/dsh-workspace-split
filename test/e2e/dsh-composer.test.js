@@ -408,6 +408,28 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.equal(result.title, 'Long session title')
   })
 
+  it('does not scale the header with a cell zoom override', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const roots = [document.createElement('div'), document.createElement('div')]
+        document.body.append(...roots)
+        window.__dswsTest.render('zoom', roots[0], { zoom: 0.6 })
+        window.__dswsTest.render('zoom', roots[1], { zoom: 1 })
+        await new Promise((done) => setTimeout(done, 120))
+        const measure = (root) => {
+          const header = root.querySelector('[data-probe="header"]').getBoundingClientRect()
+          const body = root.querySelector('[data-probe="body"]').getBoundingClientRect()
+          return { header: header.height, body: body.height }
+        }
+        return { small: measure(roots[0]), normal: measure(roots[1]) }
+      })()`,
+    )
+    assert.equal(result.small.header, 30)
+    assert.equal(result.normal.header, 30)
+    assert.ok(result.small.body < result.normal.body - 2)
+  })
+
   it('opens the model menu and reports a selection', async () => {
     const result = await evaluate(
       page,

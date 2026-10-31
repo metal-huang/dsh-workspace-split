@@ -77,7 +77,7 @@ const LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS
  * @param props - `zoom` is the reader override, `onZoom` receives the next step.
  */
 function CellZoom(props) {
-  const { zoom, onZoom, children } = props
+  const { zoom, onZoom, header, children } = props
   const outerRef = useRef(null)
   const [auto, setAuto] = useState(1)
 
@@ -113,6 +113,10 @@ function CellZoom(props) {
       ref: outerRef,
       style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
     },
+    // The header is deliberately outside `zoom`: tiles can carry different
+    // automatic or manual scales, and scaling the header made neighbouring
+    // titles sit at different heights even though their cells were aligned.
+    header,
     h(
       'div',
       {
@@ -5071,47 +5075,50 @@ function SplitCell(props) {
     },
     h(
       CellZoom,
-      { zoom, onZoom },
-      h(
-        'div',
-        {
-          style: {
-            ...headerStyle,
-            background: active
-              ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
-              : 'var(--dsw-alias-bg-layer-1, transparent)',
+      {
+        zoom,
+        onZoom,
+        header: h(
+          'div',
+          {
+            style: {
+              ...headerStyle,
+              background: active
+                ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
+                : 'var(--dsw-alias-bg-layer-1, transparent)',
+            },
+            'data-dsws-header': 'true',
           },
-          'data-dsws-header': 'true',
-        },
-        sess
-          ? h(CellTitle, {
-              sessions,
-              sessionId: sess.id,
-              title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
-              running: sess.running,
-              project: projectTitle,
-            })
-          : h(
-              'span',
-              {
-                style: {
-                  flex: '1 1 auto',
-                  color: 'var(--dsw-alias-label-caption, #999)',
-                  whiteSpace: 'nowrap',
+          sess
+            ? h(CellTitle, {
+                sessions,
+                sessionId: sess.id,
+                title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
+                running: sess.running,
+                project: projectTitle,
+              })
+            : h(
+                'span',
+                {
+                  style: {
+                    flex: '1 1 auto',
+                    color: 'var(--dsw-alias-label-caption, #999)',
+                    whiteSpace: 'nowrap',
+                  },
                 },
-              },
-              t('split.cell.empty.placeholder', { n: index + 1 }),
-            ),
-        h(CellPicker, {
-          value: sid ?? '',
-          placeholder:
-            wsTitle === null
-              ? t('split.session.pick')
-              : t('split.session.pickScoped', { ws: wsTitle }),
-          options,
-          onChange: onPick,
-        }),
-      ),
+                t('split.cell.empty.placeholder', { n: index + 1 }),
+              ),
+          h(CellPicker, {
+            value: sid ?? '',
+            placeholder:
+              wsTitle === null
+                ? t('split.session.pick')
+                : t('split.session.pickScoped', { ws: wsTitle }),
+            options,
+            onChange: onPick,
+          }),
+        ),
+      },
       cell?.t === 'workspace' && sess === null
         ? h(
             'div',
@@ -5336,6 +5343,19 @@ if (
   (new URLSearchParams(window.location.search).has('dsws-test') ||
     window.localStorage?.getItem('dsws-test') === '1')
 ) {
+  /** Header-vs-body zoom probe used by the browser regression only. */
+  function ZoomProbe(props) {
+    return h(
+      CellZoom,
+      {
+        zoom: props.zoom,
+        onZoom: () => {},
+        header: h('div', { 'data-probe': 'header', style: { height: 30 } }, 'HEADER'),
+      },
+      h('div', { 'data-probe': 'body' }, 'BODY'),
+    )
+  }
+
   const fixtures = {
     approval: ApprovalCard,
     question: QuestionCard,
@@ -5346,6 +5366,7 @@ if (
     permission: PermissionControl,
     files: DraftFileStrip,
     title: CellTitle,
+    zoom: ZoomProbe,
   }
   window.__dswsTest = {
     render(name, node, props = {}) {
