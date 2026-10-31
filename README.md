@@ -40,8 +40,9 @@ progress on one screen instead of clicking through tabs.
   visible after the tile has been open for a while.
 - **Density that follows the tile.** Narrow tiles shrink their text
   automatically so a small cell still shows a useful amount; `Ctrl` + wheel over
-  one tile changes that tile alone. The header stays unscaled, so titles remain
-  aligned even when two tiles use different zoom levels.
+  one tile changes that tile alone. The header follows the tile-width density,
+  but not the manual override, so titles stay aligned and do not look oversized
+  beside the transcript.
 - **Markdown and math.** Tables, code, task lists, and TeX rendered with KaTeX.
 - **The process, not just the answer.** Reasoning and tool calls fold into one
   per-turn process group with its elapsed time, a tool call marks itself running

@@ -113,10 +113,18 @@ function CellZoom(props) {
       ref: outerRef,
       style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
     },
-    // The header is deliberately outside `zoom`: tiles can carry different
-    // automatic or manual scales, and scaling the header made neighbouring
-    // titles sit at different heights even though their cells were aligned.
-    header,
+    // The header is outside the reader's per-cell override, but still follows
+    // the width-driven density factor. Every tile has the same width, so all
+    // headers get the same scale and stay aligned; only the transcript and
+    // composer follow a manual Ctrl+wheel override.
+    h(
+      'div',
+      {
+        style: { zoom: auto, flexShrink: 0, minWidth: 0 },
+        'data-dsws-header-scale': 'true',
+      },
+      header,
+    ),
     h(
       'div',
       {

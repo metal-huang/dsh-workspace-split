@@ -408,15 +408,16 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.equal(result.title, 'Long session title')
   })
 
-  it('does not scale the header with a cell zoom override', async () => {
+  it('scales the header by tile width but not by a manual zoom override', async () => {
     const result = await evaluate(
       page,
       `(async () => {
         const roots = [document.createElement('div'), document.createElement('div')]
+        for (const root of roots) root.style.width = '400px'
         document.body.append(...roots)
         window.__dswsTest.render('zoom', roots[0], { zoom: 0.6 })
         window.__dswsTest.render('zoom', roots[1], { zoom: 1 })
-        await new Promise((done) => setTimeout(done, 120))
+        await new Promise((done) => setTimeout(done, 180))
         const measure = (root) => {
           const header = root.querySelector('[data-probe="header"]').getBoundingClientRect()
           const body = root.querySelector('[data-probe="body"]').getBoundingClientRect()
@@ -425,8 +426,11 @@ describe('split composer parity (headless DSH)', { skip }, () => {
         return { small: measure(roots[0]), normal: measure(roots[1]) }
       })()`,
     )
-    assert.equal(result.small.header, 30)
-    assert.equal(result.normal.header, 30)
+    // 400px is below ZOOM_FULL_WIDTH, so the width-driven factor is its 0.78
+    // floor; both headers must use it even though their manual zooms differ.
+    assert.ok(Math.abs(result.small.header - 23.4) < 0.6)
+    assert.ok(Math.abs(result.normal.header - 23.4) < 0.6)
+    assert.equal(result.small.header, result.normal.header)
     assert.ok(result.small.body < result.normal.body - 2)
   })
 

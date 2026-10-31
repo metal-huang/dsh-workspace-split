@@ -353,5 +353,5 @@ v4 的结论全部建立在下面这份可复核的证据上，取数日期 2026
 `window.__dswsTest.render(name, node, props)`，用假 pending/catalog 渲染
 ApprovalCard、QuestionCard、ProcessGroup、ComposerMeta、MentionPopup、
 ModelControl、PermissionControl、DraftFileStrip、CellTitle，以及验证
-「header 不随 zoom 缩放」的 CellZoom probe。真实页面不带这个开关，
-因此不会出现测试用假卡片。
+「header 按宽度自动缩放、但不跟随手动 zoom」的 CellZoom probe。真实页面不带这个
+开关，因此不会出现测试用假卡片。
