@@ -391,6 +391,7 @@ describe('split composer parity (headless DSH)', { skip }, () => {
         const badge = root.querySelector('[data-dsws-project]')
         const dot = root.querySelector('span[style*="border-radius: 50%"]')
         const row = badge.parentElement
+        const titleButton = row.querySelector('button[title="切换会话"]')
         const b = badge.getBoundingClientRect()
         const d = dot.getBoundingClientRect()
         return {
@@ -398,13 +399,16 @@ describe('split composer parity (headless DSH)', { skip }, () => {
           rowHeight: row.getBoundingClientRect().height,
           badgeCenter: b.y + b.height / 2,
           dotCenter: d.y + d.height / 2,
-          title: row.querySelector('button[title="切换会话"]')?.innerText ?? '',
+          badgeFont: getComputedStyle(badge).fontSize,
+          titleFont: titleButton === null ? '' : getComputedStyle(titleButton).fontSize,
+          title: titleButton?.innerText ?? '',
         }
       })()`,
     )
     assert.equal(result.badge, 'dsh-workspace-split')
     assert.equal(result.rowHeight, 30)
     assert.ok(Math.abs(result.badgeCenter - result.dotCenter) < 0.6)
+    assert.equal(result.badgeFont, result.titleFont)
     assert.equal(result.title, 'Long session title')
   })
 

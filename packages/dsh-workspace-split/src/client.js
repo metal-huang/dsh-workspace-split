@@ -4498,21 +4498,23 @@ const titleStyles = {
     height: 30,
   },
   // A project can be longer than the tile; the badge yields before the session
-  // title so the session name stays readable.
+  // title so the session name stays readable. It deliberately uses the title's
+  // font size: the project is context, not a caption, and a smaller badge made
+  // the first thing in the header look like secondary metadata.
   badge: (color) => ({
     flexShrink: 1,
     minWidth: 0,
-    maxWidth: '42%',
+    maxWidth: '46%',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    padding: '1px 7px',
+    padding: '1px 8px',
     border: `0.5px solid ${color}66`,
-    borderRadius: 999,
+    borderRadius: 7,
     background: `${color}24`,
     color,
-    fontSize: 11,
-    lineHeight: '16px',
+    fontSize: 'inherit',
+    lineHeight: '20px',
     fontWeight: 600,
     letterSpacing: 0,
   }),
