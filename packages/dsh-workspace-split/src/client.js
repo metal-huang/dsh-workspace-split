@@ -2444,7 +2444,7 @@ function Composer(props) {
       return
     }
     try {
-      const result = await session.prompt(parts, 'queue')
+      const result = await session.prompt(parts, 'steer')
       if (result?.ok !== true) {
         setError(t('composer.sendFailed', { error: remoteFailureText(result?.error) }))
         return
