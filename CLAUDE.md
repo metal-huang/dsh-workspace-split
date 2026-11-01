@@ -62,7 +62,7 @@ npm run build
 在 `packages/` 里怎么重构、怎么重建都不会影响桌面版，只有显式发布才更新：
 
 ```bash
-npm run release   # 构建 + 复制到 .release/，桌面版下次启动生效
+npm run release   # 构建 + 复制到 .release/，桌面版刷新窗口即生效
 ```
 
 - 日常验证走 web profile，它链接 `packages/dsh-workspace-split`；包的 `exports`
