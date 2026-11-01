@@ -677,6 +677,46 @@ describe('split composer parity (headless DSH)', { skip }, () => {
       closedByEscape: true,
     })
   })
+
+  it('keeps the picker open while a row is pressed, so a mouse click chooses', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__chosen = 'none'
+        window.__dswsTest.render('picker', root, {
+          value: '',
+          rows: [
+            { id: 'a', title: 'First row', project: 'Split view', running: false },
+            { id: 'b', title: 'Second row', project: 'Music', running: false },
+          ],
+          showProject: true,
+          searchPlaceholder: 'Search sessions…',
+          emptyTitle: 'Choose a session…',
+          onChange: (id) => { window.__chosen = String(id) },
+        })
+        await new Promise((done) => setTimeout(done, 150))
+        root.querySelector('button[aria-haspopup="listbox"]').click()
+        await new Promise((done) => setTimeout(done, 150))
+        const row = [...document.querySelectorAll('[data-dsws-picker-row]')][1]
+        // A human holds the button: React flushes between press and release, so a
+        // panel that closes on mousedown removes the row before its click lands.
+        row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        await new Promise((done) => setTimeout(done, 150))
+        const openAfterPress = document.querySelector('[data-dsws-picker]') !== null
+        row.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        await new Promise((done) => setTimeout(done, 150))
+        return {
+          openAfterPress,
+          chosen: window.__chosen,
+          closed: document.querySelector('[data-dsws-picker]') === null,
+        }
+      })()`,
+    )
+    assert.deepEqual(result, { openAfterPress: true, chosen: 'b', closed: true })
+  })
 })
 
 /** Stop one child process and wait for it to release files. */

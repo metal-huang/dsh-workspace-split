@@ -280,7 +280,6 @@ export function SessionPicker(props) {
   const [open, setOpen] = useState(false)
   const [hover, setHover] = useState(false)
   const [box, setBox] = useState(null)
-  const rootRef = useRef(null)
   const triggerRef = useRef(null)
 
   const close = useCallback((refocus = true) => {
@@ -303,7 +302,13 @@ export function SessionPicker(props) {
   useEffect(() => {
     if (!open) return undefined
     const onPointerDown = (event) => {
-      if (rootRef.current?.contains(event.target) === true) return
+      // The panel is portalled onto `document.body`, so it is NOT inside the
+      // trigger's subtree. Closing on any press outside the trigger alone removed
+      // a row on mousedown, before its click could choose: a real mouse press
+      // never selected anything (Enter did). Both live regions are checked.
+      if (triggerRef.current?.contains(event.target) === true) return
+      const target = event.target
+      if (target instanceof Element && target.closest('[data-dsws-picker]') !== null) return
       close(false)
     }
     const follow = () => place()
