@@ -11,14 +11,21 @@
  */
 
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 const SRC_DIR = join(import.meta.dirname, '..', 'packages', 'dsh-workspace-split', 'src')
 const ZH_FILE = join(SRC_DIR, 'messages.js')
 const EN_FILE = join(SRC_DIR, 'locale', 'en.json')
-const CLIENT_SRC = join(SRC_DIR, 'client.js')
+/**
+ * Every hand-written module that renders copy. `messages.js` is the Chinese
+ * table itself, so only the rest are scanned — a new UI module must not fall
+ * outside the gate the way `picker-ui.js` briefly did.
+ */
+const UI_SOURCES = readdirSync(SRC_DIR)
+  .filter((name) => name.endsWith('.js') && name !== 'messages.js')
+  .map((name) => join(SRC_DIR, name))
 
 /** Keys declared in the Chinese table, in file order. */
 function chineseKeys() {
@@ -91,13 +98,18 @@ describe('translation tables', () => {
 
 describe('client source', () => {
   it('carries no hardcoded Han text outside comments', () => {
-    const offending = hardcodedChineseLines(readFileSync(CLIENT_SRC, 'utf8'))
-    assert.deepEqual(offending, [], `hardcoded Chinese in client source:\n${offending.join('\n')}`)
+    const offending = UI_SOURCES.flatMap((file) =>
+      hardcodedChineseLines(readFileSync(file, 'utf8')).map((line) => `${file}: ${line}`),
+    )
+    assert.deepEqual(offending, [], `hardcoded Chinese in UI sources:\n${offending.join('\n')}`)
   })
 
   it('only calls t() with keys that exist', () => {
-    const source = readFileSync(CLIENT_SRC, 'utf8')
-    const used = new Set(Array.from(source.matchAll(/\bt\('([\w.]+)'/g)).map((m) => m[1]))
+    const used = new Set()
+    for (const file of UI_SOURCES) {
+      const source = readFileSync(file, 'utf8')
+      for (const match of source.matchAll(/\bt\('([\w.]+)'/g)) used.add(match[1])
+    }
     const known = new Set(chineseKeys())
     const unknown = [...used].filter((key) => !known.has(key))
     assert.deepEqual(unknown, [], `t() called with undeclared keys: ${unknown.join(', ')}`)

@@ -106,23 +106,51 @@ export function resolvePickerKey(key, index, length) {
   return { type: 'none' }
 }
 
+/** Breathing room kept between the panel and the window edge. */
+const PANEL_MARGIN = 8
+/** Gap between the trigger and the panel. */
+const PANEL_GAP = 6
+/** Below this much room, opening upward is worth it; above, never flip needlessly. */
+const PANEL_MIN_USEFUL = 160
+
 /**
  * Fixed box for the panel, anchored to its trigger.
  *
- * Opens below when the preferred height fits, otherwise above; always clamped
- * inside the viewport with an 8px margin, because the trigger sits at the tile's
- * right edge and the tile can be at the window's edge too.
+ * Opens below when there is useful room; otherwise above, anchored by its
+ * `bottom` edge. Anchoring by the real edge matters: an "above" box computed
+ * from the preferred height leaves a 150px hole between a short panel and its
+ * trigger, because the panel's height is content-driven. The chosen side's
+ * maxHeight is clamped to the room it actually has, so the panel never covers
+ * the trigger, and both sides keep the 8px window margin.
  * @param rect - trigger box (`top`/`right`/`bottom`).
  * @param viewport - `{ width, height }` of the window.
  * @param preferred - `{ width, maxHeight }` the panel would like.
- * @returns `{ top, left, width, maxHeight }` for a fixed-positioned panel.
+ * @returns `{ top, left, width, maxHeight }` when opening below, or
+ *   `{ bottom, left, width, maxHeight }` when opening above.
  */
 export function pickerPanelBox(rect, viewport, preferred) {
-  const width = Math.min(preferred.width, viewport.width - 16)
-  const maxHeight = Math.min(preferred.maxHeight, viewport.height - 16)
-  const left = Math.max(8, Math.min(rect.right - width, viewport.width - width - 8))
-  const below = rect.bottom + 6
-  const above = rect.top - 6 - maxHeight
-  const top = below + maxHeight <= viewport.height ? below : Math.max(8, above)
-  return { top, left, width, maxHeight }
+  const width = Math.min(preferred.width, viewport.width - PANEL_MARGIN * 2)
+  const maxHeight = Math.min(preferred.maxHeight, viewport.height - PANEL_MARGIN * 2)
+  const left = Math.max(
+    PANEL_MARGIN,
+    Math.min(rect.right - width, viewport.width - width - PANEL_MARGIN),
+  )
+  const spaceBelow = viewport.height - rect.bottom - PANEL_GAP - PANEL_MARGIN
+  const spaceAbove = rect.top - PANEL_GAP - PANEL_MARGIN
+  const wantsBelow = spaceBelow >= Math.min(maxHeight, PANEL_MIN_USEFUL)
+  const wantsAbove = spaceAbove >= Math.min(maxHeight, PANEL_MIN_USEFUL)
+  if (!wantsBelow && wantsAbove) {
+    return {
+      bottom: viewport.height - rect.top + PANEL_GAP,
+      left,
+      width,
+      maxHeight: Math.min(maxHeight, Math.max(0, spaceAbove)),
+    }
+  }
+  return {
+    top: rect.bottom + PANEL_GAP,
+    left,
+    width,
+    maxHeight: Math.min(maxHeight, Math.max(0, spaceBelow)),
+  }
 }

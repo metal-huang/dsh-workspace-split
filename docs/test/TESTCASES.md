@@ -233,7 +233,7 @@
 - TC-26 ✅ 归档释放格子（2026-11-01 桌面版手测通过，刷新后生效、未重启应用；单测覆盖 `reconcileCells` / `pickableSessions`）
 - TC-27 ✅ 点格子清未读亮点（2026-11-01 桌面版手测通过；单测覆盖 `acknowledgeUnread` 与降级路径；接线由 `test/split-wiring.test.js` 的源码形状守卫盯着）
 - TC-28 ✅ 图片点开看大图（DSH 浏览器回归：缩略图点开成全窗口 `position: fixed` 浮层、图片按 92vh 封顶、Esc 关闭；真实格子里的视觉待刷新确认）
-- TC-29 ✅ 下拉与标题栏同一套项目徽章（单测覆盖 `picker.js` 的过滤/键盘/定位与 `projectIndex` / `projectBadgeStyle`；DSH 浏览器回归覆盖打开→过滤→Enter 选中→Esc 关闭与徽章渲染；真实格子的观感待刷新确认）
+- TC-29 ✅ 下拉与标题栏同一套项目徽章（单测覆盖 `picker.js` 的过滤/键盘/定位与 `projectIndex` / `projectBadgeStyle`；DSH 浏览器回归覆盖打开→过滤→Enter 选中→Esc 关闭、鼠标按下再松开选中、光标滚入视野、`aria-activedescendant` 与行 `tabIndex=-1`；真实格子的观感待刷新确认）
 
 ## 自动化回归（E2E）
 

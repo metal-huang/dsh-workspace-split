@@ -18,7 +18,7 @@ import { filterPickerRows, initialPickerIndex, pickerPanelBox, resolvePickerKey 
 import { projectBadgeStyle, projectColor } from './project.js'
 
 const h = React.createElement
-const { useCallback, useEffect, useRef, useState } = React
+const { useCallback, useEffect, useId, useRef, useState } = React
 
 /** Preferred panel size; the viewport may shrink both. */
 const PANEL_WIDTH = 360
@@ -50,7 +50,10 @@ const styles = {
   glyph: { fontSize: 16, lineHeight: 1, pointerEvents: 'none', transform: 'translateY(-1px)' },
   panel: (box) => ({
     position: 'fixed',
-    top: box.top,
+    // Above the trigger the panel is anchored by its bottom edge, so a short
+    // panel sits against the trigger instead of floating at the preferred height.
+    top: box.bottom === undefined ? box.top : 'auto',
+    bottom: box.bottom,
     left: box.left,
     width: box.width,
     maxHeight: box.maxHeight,
@@ -144,12 +147,16 @@ const styles = {
 
 /** One Session row: project badge, title, running state, current mark. */
 function PickerRow(props) {
-  const { row, active, showProject, current, onHover, onChoose, t } = props
+  const { row, active, showProject, current, onHover, onChoose, t, id } = props
   return h(
     'button',
     {
       type: 'button',
       role: 'option',
+      id,
+      // The cursor lives in the search field; rows are reachable with the arrow
+      // keys only, so they must not be 80 tab stops of their own.
+      tabIndex: -1,
       'aria-selected': current,
       'data-dsws-picker-row': String(row.id ?? ''),
       style: styles.row(active),
@@ -196,26 +203,43 @@ function PickerPanel(props) {
   // Seeded from the bound row so opening lands on the current Session.
   const [active, setActive] = useState(() => initialPickerIndex(filterPickerRows(rows, ''), value))
   const inputRef = useRef(null)
+  const listRef = useRef(null)
+  const idPrefix = useId()
   const filtered = filterPickerRows(rows, query)
+  // Rows can shrink while the panel is open (a Session gets archived); the
+  // cursor must never point past the list, or Enter would silently do nothing.
+  const cursor = Math.min(active, Math.max(0, filtered.length - 1))
+  const activeRow = filtered[cursor]
+  const optionId = (index) => `${idPrefix}-option-${index}`
 
   useEffect(() => {
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [])
 
+  // Keep the cursor visible: a free tile lists the whole catalog, so the arrow
+  // keys can walk far past the scrolled viewport.
+  useEffect(() => {
+    const row = listRef.current?.querySelectorAll('[data-dsws-picker-row]')[cursor]
+    row?.scrollIntoView({ block: 'nearest' })
+  }, [cursor, filtered.length])
+
   const onKeyDown = (event) => {
-    const action = resolvePickerKey(event.key, active, filtered.length)
+    // IME candidates are confirmed with Enter; that keydown must not choose a row.
+    if (event.isComposing || event.keyCode === 229) return
+    const action = resolvePickerKey(event.key, cursor, filtered.length)
     if (action.type === 'none') return
-    event.preventDefault()
     if (action.type === 'close') {
+      // Tab keeps the browser's own focus move; the other keys are ours.
+      if (action.refocus !== false) event.preventDefault()
       onClose(action.refocus !== false)
       return
     }
+    event.preventDefault()
     if (action.type === 'move') {
       setActive(action.index)
       return
     }
-    const row = filtered[active]
-    if (row !== undefined) onChoose(row.id)
+    if (activeRow !== undefined) onChoose(activeRow.id)
   }
 
   return createPortal(
@@ -237,14 +261,23 @@ function PickerPanel(props) {
       }),
       h(
         'div',
-        { role: 'listbox', 'aria-label': t('split.session.picker.aria'), style: styles.list },
+        {
+          ref: listRef,
+          role: 'listbox',
+          'aria-label': t('split.session.picker.aria'),
+          // The cursor stays in the search field, so the listbox has to name the
+          // highlighted row for assistive technology.
+          'aria-activedescendant': activeRow === undefined ? undefined : optionId(cursor),
+          style: styles.list,
+        },
         filtered.length === 0
           ? h('div', { style: styles.empty }, t('split.session.picker.none'))
           : filtered.map((row, at) =>
               h(PickerRow, {
                 key: String(row.id ?? at),
+                id: optionId(at),
                 row,
-                active: at === active,
+                active: at === cursor,
                 showProject,
                 current: String(row.id) === String(value),
                 t,
@@ -270,6 +303,18 @@ function PickerPanel(props) {
   )
 }
 
+/** Whether two panel boxes describe the same placement. */
+function sameBox(left, right) {
+  if (left === null || right === null) return left === right
+  return (
+    left.top === right.top &&
+    left.bottom === right.bottom &&
+    left.left === right.left &&
+    left.width === right.width &&
+    left.maxHeight === right.maxHeight
+  )
+}
+
 /**
  * Chevron seat plus its listbox.
  * @param props - `rows`, `value`, `showProject`, `searchPlaceholder`, `emptyTitle`,
@@ -290,13 +335,14 @@ export function SessionPicker(props) {
   const place = useCallback(() => {
     const rect = triggerRef.current?.getBoundingClientRect()
     if (rect === undefined) return
-    setBox(
-      pickerPanelBox(
-        rect,
-        { width: window.innerWidth, height: window.innerHeight },
-        { width: PANEL_WIDTH, maxHeight: PANEL_HEIGHT },
-      ),
+    const next = pickerPanelBox(
+      rect,
+      { width: window.innerWidth, height: window.innerHeight },
+      { width: PANEL_WIDTH, maxHeight: PANEL_HEIGHT },
     )
+    // A new object per scroll tick would re-render every row while the reader
+    // scrolls the list; only a real move is worth a render.
+    setBox((previous) => (sameBox(previous, next) ? previous : next))
   }, [])
 
   useEffect(() => {
@@ -311,7 +357,12 @@ export function SessionPicker(props) {
       if (target instanceof Element && target.closest('[data-dsws-picker]') !== null) return
       close(false)
     }
-    const follow = () => place()
+    const follow = (event) => {
+      // The panel's own list scroll does not move the panel.
+      const target = event.target
+      if (target instanceof Element && target.closest('[data-dsws-picker]') !== null) return
+      place()
+    }
     document.addEventListener('mousedown', onPointerDown)
     window.addEventListener('resize', follow)
     window.addEventListener('scroll', follow, true)

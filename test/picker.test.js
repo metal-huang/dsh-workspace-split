@@ -87,8 +87,10 @@ describe('resolvePickerKey', () => {
     assert.deepEqual(resolvePickerKey('Tab', 1, 3), { type: 'close', refocus: false })
   })
 
-  it('ignores other keys and an empty list', () => {
+  it('ignores other keys, and never moves past an empty list', () => {
     assert.deepEqual(resolvePickerKey('a', 1, 3), { type: 'none' })
+    // Enter still maps to choose; the panel checks that a row exists, because a
+    // pure mapping cannot see the list.
     assert.deepEqual(resolvePickerKey('Enter', 0, 0), { type: 'choose' })
     assert.deepEqual(resolvePickerKey('End', 0, 0), { type: 'move', index: 0 })
   })
@@ -122,20 +124,25 @@ describe('pickerPanelBox', () => {
   const viewport = { width: 1200, height: 800 }
   const preferred = { width: 360, maxHeight: 320 }
 
-  it('opens below the trigger when the panel fits', () => {
+  it('opens below the trigger when there is room', () => {
     const box = pickerPanelBox({ top: 100, right: 900, bottom: 130 }, viewport, preferred)
     assert.equal(box.top, 136)
+    assert.equal(box.bottom, undefined)
     assert.equal(box.left, 540)
     assert.equal(box.width, 360)
     assert.equal(box.maxHeight, 320)
   })
 
-  it('flips above the trigger near the bottom edge', () => {
+  it('anchors above by its bottom edge near the window bottom', () => {
     const box = pickerPanelBox({ top: 760, right: 900, bottom: 790 }, viewport, preferred)
-    assert.equal(box.top, 760 - 6 - 320)
+    // 800 - 760 + 6: the panel's own bottom sits 6px above the trigger, so a
+    // short panel cannot float away from it.
+    assert.equal(box.bottom, 46)
+    assert.equal(box.top, undefined)
+    assert.equal(box.maxHeight, 320)
   })
 
-  it('clamps inside a narrow viewport', () => {
+  it('clamps a narrow viewport to its margins', () => {
     const box = pickerPanelBox(
       { top: 10, right: 40, bottom: 40 },
       { width: 300, height: 200 },
@@ -143,7 +150,26 @@ describe('pickerPanelBox', () => {
     )
     assert.equal(box.width, 284)
     assert.equal(box.left, 8)
-    assert.equal(box.maxHeight, 184)
-    assert.equal(box.top, 8)
+    assert.equal(box.top, 46)
+    // Below is the only side with room left, so the height is clipped to it.
+    assert.equal(box.maxHeight, 146)
+  })
+
+  it('never covers the trigger in a short viewport', () => {
+    const box = pickerPanelBox(
+      { top: 200, right: 900, bottom: 230 },
+      { width: 1200, height: 240 },
+      preferred,
+    )
+    assert.equal(box.bottom, 46)
+    assert.equal(box.maxHeight, 186)
+    // 240 - 46 - 186 = 8: the panel's top lands exactly on the margin.
+    assert.equal(240 - box.bottom - box.maxHeight, 8)
+  })
+
+  it('stays below when the remaining room is exactly the useful minimum', () => {
+    const box = pickerPanelBox({ top: 626, right: 900, bottom: 626 }, viewport, preferred)
+    assert.equal(box.top, 632)
+    assert.equal(box.maxHeight, 160)
   })
 })

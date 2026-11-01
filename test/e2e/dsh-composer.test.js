@@ -717,6 +717,63 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     )
     assert.deepEqual(result, { openAfterPress: true, chosen: 'b', closed: true })
   })
+
+  it('keeps the keyboard cursor scrolled into view', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        const rows = Array.from({ length: 60 }, (_, at) => ({
+          id: 's' + at,
+          title: 'Session ' + at,
+          project: 'P' + (at % 3),
+          running: false,
+        }))
+        window.__dswsTest.render('picker', root, {
+          value: 's50',
+          rows,
+          showProject: true,
+          searchPlaceholder: 'Search sessions…',
+          emptyTitle: 'Choose a session…',
+          onChange: () => {},
+        })
+        await new Promise((done) => setTimeout(done, 150))
+        root.querySelector('button[aria-haspopup="listbox"]').click()
+        await new Promise((done) => setTimeout(done, 200))
+        const panel = document.querySelector('[data-dsws-picker]')
+        const list = panel.querySelector('[role="listbox"]')
+        const visible = (row) => {
+          const box = list.getBoundingClientRect()
+          const cell = row.getBoundingClientRect()
+          return cell.top >= box.top - 1 && cell.bottom <= box.bottom + 1
+        }
+        const current = document.getElementById(list.getAttribute('aria-activedescendant'))
+        const openedScroll = list.scrollTop
+        const openedVisible = current !== null && visible(current)
+        document
+          .querySelector('[data-dsws-picker-search]')
+          .dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+        await new Promise((done) => setTimeout(done, 150))
+        const last = document.getElementById(list.getAttribute('aria-activedescendant'))
+        const attr = list.getAttribute('aria-activedescendant')
+        return {
+          openedScroll,
+          openedVisible,
+          endScroll: list.scrollTop,
+          endVisible: last !== null && visible(last),
+          activeDescendant: typeof attr === 'string' && attr !== '',
+          rowTabIndex: [...panel.querySelectorAll('[data-dsws-picker-row]')][0]?.tabIndex,
+        }
+      })()`,
+    )
+    assert.equal(result.openedScroll > 0, true, 'the bound row must be scrolled to on open')
+    assert.equal(result.openedVisible, true)
+    assert.equal(result.endScroll >= result.openedScroll, true)
+    assert.equal(result.endVisible, true)
+    assert.equal(result.activeDescendant, true)
+    assert.equal(result.rowTabIndex, -1)
+  })
 })
 
 /** Stop one child process and wait for it to release files. */
