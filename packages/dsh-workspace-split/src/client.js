@@ -1181,6 +1181,22 @@ const TRANSCRIPT_STYLES = `
 `
 
 /**
+ * Follow the desktop frame's rounded panel corner.
+ *
+ * On Windows the shell rounds the centre column's top-left corner and clips the
+ * panel to that arc (`[data-windows-titlebar] .centerCol`). The grid paints
+ * square hairlines and an inset ring of its own, so the clip sliced the ring at
+ * exactly that corner and the tile looked broken. Carrying the shell's own
+ * radius on the grid and its first tile makes the ring and the header bend with
+ * the frame instead of being cut by it; the radius lives in CSS because it is
+ * the shell's fact, not the plugin's, and the variable is its own value.
+ */
+const PANEL_CORNER_STYLES = `
+[data-windows-titlebar] .dsws-grid,
+[data-windows-titlebar] .dsws-cell-first{border-top-left-radius:var(--dsh-windows-content-radius,16px)}
+`
+
+/**
  * Place the picker panel against the control that opened it.
  * @param rect - the trigger's viewport box.
  * @returns fixed top/left for the panel.
@@ -1213,7 +1229,7 @@ function installSplitStyles() {
   if (existing !== null) return () => {}
   const style = document.createElement('style')
   style.id = SPLIT_STYLE_ID
-  style.textContent = `${SIDEBAR_STYLES}\n${TRANSCRIPT_STYLES}`
+  style.textContent = `${SIDEBAR_STYLES}\n${TRANSCRIPT_STYLES}\n${PANEL_CORNER_STYLES}`
   document.head.append(style)
   return () => style.remove()
 }
@@ -4983,7 +4999,7 @@ function SplitMain(props) {
 
   return h(
     'div',
-    { style: gridStyle },
+    { className: 'dsws-grid', style: gridStyle },
     Array.from({ length: total }, (_, i) =>
       h(SplitCell, {
         key: i,
@@ -5082,6 +5098,9 @@ function SplitCell(props) {
   return h(
     'div',
     {
+      // Only the top-left tile sits under the frame's rounded corner (see
+      // PANEL_CORNER_STYLES), so only it carries the matching radius.
+      className: index === 0 ? 'dsws-cell dsws-cell-first' : 'dsws-cell',
       style: {
         ...cellStyle,
         // Inset ring marks the active tile without touching the shared dividers
