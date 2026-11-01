@@ -137,6 +137,9 @@
   "turnRail.preview.turn": "Turn {{n}}",
   "turnRail.aria.turn": "Turn {{n}}",
   "aria.split.panel": "Split view",
+  "split.chat.new": "New chat",
+  "split.chat.creating": "Creating a new chat…",
+  "split.chat.retry": "Retry",
   "aria.chooseGrid": "Select rows and columns",
   "aria.gridCell": "{{rows}} rows × {{cols}} cols, {{count}} cells"
 }
