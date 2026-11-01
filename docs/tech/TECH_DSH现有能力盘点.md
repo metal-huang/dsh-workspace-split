@@ -325,6 +325,7 @@ v4 的结论全部建立在下面这份可复核的证据上，取数日期 2026
 | 上下文占用 | `faceOf('contextPressure')` | — | `dsh-token-meter/lib/types/projection.d.ts` |
 | 审批/提问 | `ctx.uiSession.sessionStatus` | `pending.answer(...)` | `ui-approval` / `ui-user-questions` 的 contract |
 | 归档状态 | `ctx.workspaces.list` 快照 `archivedSessionIds` | — | `dsh-api-workspace-controller/lib/types/client/model.d.ts` |
+| 完成未读的确认 | `ctx.uiSession.sessionStatus` 的 `completionUnread` | `uiSession.completionUnread` + `uiSession.publishStatus()`（**内部字段**，见 13.5） | `dsh-client-ui-session/lib/types/client/index.d.ts` |
 
 ### 13.1 两条硬限制
 
@@ -356,3 +357,35 @@ ApprovalCard、QuestionCard、ProcessGroup、ComposerMeta、MentionPopup、
 ModelControl、PermissionControl、DraftFileStrip、CellTitle，以及验证
 「header 按宽度自动缩放、但不跟随手动 zoom」的 CellZoom probe。真实页面不带这个
 开关，因此不会出现测试用假卡片。
+
+### 13.5 越界依赖：清「已完成」未读
+
+**为什么越界。** DSH 把「会话跑完、还没人看」记在 `SessionStatus.completionUnread`
+（`ctx.uiSession.sessionStatus`，公开可读）。它有两条正常清理路径：该会话被主视图持有
+（`isMain()`，即 `retainedBy.mainView > 0`），或者它重新开始运行；另外当会话从会话清单
+消失时也会顺手清掉那条标记（`dsh-client-ui-session/lib/client.js` 的
+`reconcileStatus()`，第 956 行；本机 0.2.1-rc.2）。分屏格子走自己的持有源
+（`source: 'controllerOperation'`），永远不是主视图，所以侧栏那个「已完成」亮点会一直
+亮着。公开面在这里只有读、没有写，DSH 也没有公开的「标记已读 / 确认完成」方法。
+
+**做法。** `src/unread.js` 读 `ctx.uiSession` 实例上 TS-private 的
+`completionUnread: Set<SessionId>`，删掉该会话的 id 后调 `publishStatus()`，让侧栏按
+新状态重算。发布包里这两个成员名没有被压缩（`.d.ts` 第 142、186 行，`lib/client.js`
+第 775、976 行；行号取自本机 0.2.1-rc.2，升级后以符号名为准），所以运行时确实拿得到，
+不是靠猜。
+
+**怎么降级。** 以下任一情况都只表现为「亮点留着」，既不抛错也不影响点击和别的交互：
+`completionUnread` 不是 `Set`、`publishStatus` 不是函数（官方改名或移除）、集合里
+本来就没有该 id（这一条也不调 `publishStatus()`，避免一次没有意义的全局通知）、
+`publishStatus()` 自己抛错。
+
+**契约测试怎么盯。** `test/dsh-contract.test.js` 用完整片段断言
+`private readonly completionUnread;` 与 `private publishStatus;` 仍在
+`dsh-client-ui-session/lib/types/client/index.d.ts` 里。片段必须取完整声明，因为
+`completionUnread` 这个短串会同时命中公开的 `readonly completionUnread: boolean`，
+那样官方把私有成员挪走也照样绿。
+
+**将来换成哪一条。** 一旦 DSH 公开「确认完成 / 标记已读」的方法（或允许非主视图的
+持有者声明已读），把 `acknowledgeUnread` 的实现换成调那个公开方法即可，`SplitCell`
+里的点击调用点不用动；同时删掉私有访问与本节的例外说明。申请记在
+[BACKLOG 分屏插件](../backlog/BACKLOG_分屏插件.md) 的「待评估」。

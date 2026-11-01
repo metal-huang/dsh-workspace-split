@@ -114,6 +114,18 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     ])
   })
 
+  it('keeps the private unread writers the tile has to reach into', () => {
+    // Boundary guard, not public contract: DSH clears `completionUnread` only
+    // for the main view and exposes no write path, so a tile clears the
+    // instance's own set and republishes it. The fragments are complete
+    // declarations on purpose — `completionUnread` alone also matches the public
+    // read-only status field, which would let a rename pass unnoticed.
+    includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
+      'private readonly completionUnread;',
+      'private publishStatus;',
+    ])
+  })
+
   it('keeps file upload and file-reference candidates', () => {
     includes('dsh-client-file-upload/lib/types/client/contract.d.ts', [
       'upload(',

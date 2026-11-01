@@ -65,6 +65,9 @@ import {
   reconcileCells,
 } from './session-state.js'
 
+// ---------- completion unread ----------
+import { acknowledgeUnread } from './unread.js'
+
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
 // extra tile retains another live Session, so seven to ten ask for a
@@ -5068,6 +5071,14 @@ function SplitCell(props) {
   // cwd leaf, so a header never becomes an unanchored conversation title.
   const projectTitle = wsTitle ?? projectNameOf(sess, workspaceItems)
 
+  // Clicking a tile is the reader's "I have seen this": DSH only clears the
+  // completion dot for the main view and a tile is never the main view, so the
+  // acknowledgement happens here. Failing to clear it only leaves the dot lit.
+  const activate = () => {
+    onActivate()
+    if (sid !== null) acknowledgeUnread(uiSession, sid)
+  }
+
   return h(
     'div',
     {
@@ -5082,7 +5093,7 @@ function SplitCell(props) {
           ? 'var(--dsw-alias-interactive-bg-hover, #2f3b4a)'
           : cellStyle.background,
       },
-      onMouseDown: onActivate,
+      onMouseDown: activate,
       // Accept a Sidebar drag: a Session row or a project row.
       onDragOver: (e) => {
         e.preventDefault()

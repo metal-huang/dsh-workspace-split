@@ -1,0 +1,81 @@
+/**
+ * Source-shape guard for the two wirings that live inside the React tree.
+ *
+ * Clearing the completed dot hangs off `SplitCell`'s `onMouseDown`, and the
+ * archive filter hangs off the stale-reference effect in `SplitMain`. Both are
+ * plain lines of JSX/effect code: they only run against a live DSH page, and a
+ * unit test cannot mount one here. Deleting either line is therefore silent —
+ * the module tests stay green while the feature stops working.
+ *
+ * So the guard asserts the wiring itself, against the real source of
+ * `src/client.js`, with whitespace collapsed (Prettier may re-wrap a line).
+ * Matching is case-sensitive on purpose: `onMouseDown: onActivate` is the
+ * reverted wiring, and a case-insensitive or bare-identifier match would keep
+ * this guard green through exactly that revert. The acknowledged cost: these
+ * fragments are tied to the current source shape, so re-writing this code means
+ * updating the fragment — which is the point of a shape guard.
+ */
+
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, it } from 'node:test'
+
+const CLIENT = join(
+  import.meta.dirname,
+  '..',
+  'packages',
+  'dsh-workspace-split',
+  'src',
+  'client.js',
+)
+
+const SOURCE = readFileSync(CLIENT, 'utf8')
+
+/** Collapse every whitespace run to one space so a Prettier re-wrap still matches. */
+function normalize(text) {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+/** How many times `fragment` occurs; `String.includes` alone cannot tell a second copy. */
+function occurrences(text, fragment) {
+  return text.split(fragment).length - 1
+}
+
+/**
+ * The wirings, each exactly once:
+ * - a click on a tile acknowledges the unread marker it shows;
+ * - a released cell is decided by the same step that drops stale Sessions,
+ *   which is what lets the archive set release a tile the catalog still lists;
+ * - one archive Set per Workspace snapshot, so that effect can depend on it.
+ */
+const WIRING = [
+  'onMouseDown: activate',
+  'acknowledgeUnread(uiSession, sid)',
+  'setCells((prev) => reconcileCells(prev, known, archived))',
+  'const archived = useMemo(() => archivedSessionIds(wsState), [wsState])',
+]
+
+describe('split-cell wiring', () => {
+  const source = normalize(SOURCE)
+
+  for (const fragment of WIRING) {
+    it(`keeps ${fragment} exactly once`, () => {
+      assert.equal(
+        occurrences(source, fragment),
+        1,
+        `src/client.js must carry ${JSON.stringify(fragment)} exactly once`,
+      )
+    })
+  }
+
+  it('goes red when the wiring is reverted', () => {
+    // Same normalization, one revert: this is the failure the guard exists for.
+    const reverted = source.replace('onMouseDown: activate', 'onMouseDown: onActivate')
+    assert.equal(occurrences(reverted, 'onMouseDown: activate'), 0)
+    // The import line carries the identifier but not the call, so the call-shaped
+    // fragment cannot be satisfied by an import alone.
+    const withoutCall = source.replace('acknowledgeUnread(uiSession, sid)', '')
+    assert.equal(occurrences(withoutCall, 'acknowledgeUnread(uiSession, sid)'), 0)
+  })
+})

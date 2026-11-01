@@ -27,6 +27,15 @@
 
 ## 待评估
 
+### 向 DSH 申请公开的「确认完成 / 标记已读」接口
+
+- 现状：分屏点格子清「已完成」亮点读的是 `ctx.uiSession` 上未公开的
+  `completionUnread` 集合与 `publishStatus()`（越界依赖，理由与降级见
+  [TECH 13.5](../tech/TECH_DSH现有能力盘点.md)；`test/dsh-contract.test.js` 盯着
+  这两个成员名兜底）。
+- 待办：向 DSH 申请公开「确认完成 / 标记已读」的方法，或允许非主视图的持有者声明
+  已读；拿到后改调公开接口，删掉 `src/unread.js` 里的私有访问与 TECH 13.5 的例外说明。
+
 ### 格子上限设置的跨 profile 同步
 
 - 现状：上限存 `localStorage['dsws-limits']`，与布局一样按浏览器 profile 隔离；

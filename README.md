@@ -43,6 +43,9 @@ progress on one screen instead of clicking through tabs.
 - **Real-time status.** A dot on each title shows whether the session is working,
   and a colored project badge before the title keeps the Session's project
   visible after the tile has been open for a while.
+- **A click counts as read.** The "completed" dot the sidebar lights when a
+  session finishes goes out when you click that tile in split view — no trip
+  back to Chat.
 - **Density that follows the tile.** Narrow tiles shrink their text
   automatically so a small cell still shows a useful amount; `Ctrl` + wheel over
   one tile changes that tile alone. The header follows the tile-width density,
@@ -71,11 +74,18 @@ styles built on DSH's theme variables and visual rules so they match the app.
 Everything DSH-specific is consumed through public services and Remote
 namespaces — `ctx.fileUpload`, `ctx.uiSession`, `ctx.remote.session`,
 `ctx.remote.permissionPresets`, `ctx.remote.fileReferences`, and
-`ctx.remote.sessionReferenceResolver`. `test/dsh-contract.test.js` asserts those
-methods and type names against the installed DSH build, so an upstream rename
-fails a gate with the exact missing symbol instead of silently breaking a tile.
-Set `DSH_CONTRACT_ROOT` to check another installation; the test skips when no DSH
-install is present.
+`ctx.remote.sessionReferenceResolver` — with one deliberate exception: clearing
+the completion dot. DSH clears `completionUnread` only for the main view and
+exposes no write path, so the tile reads the `uiSession` instance's own
+acknowledgement set (`completionUnread` plus `publishStatus()`). The reasoning and
+the fallback are in [TECH 13.5](docs/tech/TECH_DSH现有能力盘点.md), and the plugin
+moves to the public method as soon as DSH ships one.
+
+`test/dsh-contract.test.js` asserts those methods and type names — the two private
+members included — against the installed DSH build, so an upstream rename fails a
+gate with the exact missing symbol instead of silently breaking a tile; when the
+private members are gone the dot simply stays lit. Set `DSH_CONTRACT_ROOT` to
+check another installation; the test skips when no DSH install is present.
 
 ## Requirements
 

@@ -35,6 +35,8 @@
   格子选择器和拖入解析都不再列出归档会话，取消归档后又能选回来。
 - **实时状态**。标题上的圆点表示该会话是否正在跑；标题前还有一个彩色项目徽标，
   开了很久也能一眼看出这个会话属于哪个项目。
+- **点一下就算读过**。会话跑完时侧栏亮起的「已完成」亮点，进分屏点一下那个格子就
+  灭——不用切回主视图。
 - **密度跟着格子走**。格子变窄时文字自动缩小，小格子里也能看到有用的信息量；
   在某格上 `Ctrl` + 滚轮只调这一格。标题头跟随格子宽度的自动缩放，但不跟随手动
   缩放，所以标题既不会比正文显得过大，也能保持对齐。
@@ -54,11 +56,18 @@
 `session.prompt`。每个格子的对话记录、Markdown、工具卡和输入框都由本插件自己
 渲染，样式沿用 DSH 的主题变量与视觉规则，跟随应用主题。
 
-所有 DSH 相关能力都走公开服务与 Remote 命名空间：`ctx.fileUpload`、
+除一处例外，所有 DSH 相关能力都走公开服务与 Remote 命名空间：`ctx.fileUpload`、
 `ctx.uiSession`、`ctx.remote.session`、`ctx.remote.permissionPresets`、
 `ctx.remote.fileReferences`、`ctx.remote.sessionReferenceResolver`。
-`test/dsh-contract.test.js` 会对照本机安装的 DSH 断言这些方法与类型名；官方
-改名或删除时，门禁会带着缺失的符号失败，而不是让某个格子静默坏掉。用
+
+那处例外是「点格子清未读亮点」：DSH 只在会话进入主视图时清 `completionUnread`，
+公开面没有写入口，所以这里读的是 `ctx.uiSession` 实例上未公开的确认集合
+（`completionUnread` 与 `publishStatus()`）。这是有意的越界，代价与兜底写在
+[TECH 13.5](docs/tech/TECH_DSH现有能力盘点.md)；官方公开对应方法后就换过去。
+
+`test/dsh-contract.test.js` 会对照本机安装的 DSH 断言这些方法与类型名（包括上面
+那处例外用到的两个内部成员）；官方改名或删除时，门禁会带着缺失的符号失败，而不是
+让某个格子静默坏掉——内部成员缺失时，清未读降级为「亮点留着」，不会报错。用
 `DSH_CONTRACT_ROOT` 可指定别的安装目录；没装 DSH 时该测试自动跳过。
 
 ## 环境要求
