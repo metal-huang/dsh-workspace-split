@@ -143,6 +143,9 @@ export const CHINESE = {
 
   // --- divider / turn rail ---
   'turn.divider': '— 第 {{n}} 轮 —',
+  'retry.scheduled': '重试 {{attempt}}，等待 {{delay}} · {{code}}',
+  'retry.started': '重试 {{attempt}} 已开始 · {{code}}',
+  'retry.startedDelayed': '重试 {{attempt}} 已开始 · 退避 {{delay}} · {{code}}',
   'turn.error': '运行失败：{{message}}（{{code}}）',
   'turn.aborted': '本轮已中止',
   'turn.maxTokens': '已达到输出上限',

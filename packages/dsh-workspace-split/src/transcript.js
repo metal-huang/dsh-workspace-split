@@ -418,7 +418,25 @@ function chunkHint(chunk, t) {
  * @returns the status line.
  */
 export function runningHint(entries, t = keyOnly) {
-  const list = Array.isArray(entries) ? entries : []
+  const all = Array.isArray(entries) ? entries : []
+  const turnStart = all.findLastIndex((entry) => entry?.event?.type === 'turn/start')
+  const list = all.slice(Math.max(0, turnStart))
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const event = list[i]?.event
+    if (event?.type === 'llm/retry' || event?.type === 'llm/retry-started') {
+      const scheduled = list.findLast(
+        (entry) =>
+          entry?.event?.type === 'llm/retry' && entry.event.data?.retryId === event.data?.retryId,
+      )?.event?.data
+      return retryText({ ...scheduled, ...event.data }, event.type === 'llm/retry-started', t)
+    }
+    if (
+      ['assistant/live-chunk', 'assistant/message', 'tool/call', 'tool/result'].includes(
+        event?.type,
+      )
+    )
+      break
+  }
   const results = answeredToolIds(list)
   const pending = toolCalls(list)
     .reverse()
@@ -488,6 +506,49 @@ function onRetry(ev, ctx) {
   dropStreams(ctx, target)
   dropAttempts(ctx, target)
   if (target !== undefined) ctx.settled.delete(target)
+  if (!Number.isSafeInteger(ev.data?.retry) || ev.data.retry <= 0) return
+  const key = ev.data.retryId ?? `${turn}:${step}:${ev.data.retry}`
+  const row = {
+    key: `retry-${key}`,
+    kind: 'notice',
+    turn,
+    time: ev.time,
+    text: retryText(ev.data, false, ctx.t),
+  }
+  ctx.retries.set(key, { row, data: ev.data })
+  ctx.rows.push(row)
+}
+
+/** Scheduling and actual restart are distinct durable facts; display both. */
+function retryText(data, started, t) {
+  const attempt =
+    data?.maxRetries === undefined ? String(data?.retry ?? '') : `${data.retry}/${data.maxRetries}`
+  const key = !started
+    ? 'retry.scheduled'
+    : data?.delayMs === undefined
+      ? 'retry.started'
+      : 'retry.startedDelayed'
+  return t(key, {
+    attempt,
+    delay: formatDuration(data?.delayMs),
+    code: data?.failure?.code ?? '',
+  })
+}
+
+function onRetryStarted(ev, ctx) {
+  const key = ev.data?.retryId ?? `${ev.data?.turn}:${ev.data?.step}:${ev.data?.retry}`
+  const scheduled = ctx.retries.get(key)
+  if (scheduled) {
+    scheduled.row.text = retryText({ ...scheduled.data, ...ev.data }, true, ctx.t)
+  } else if (Number.isSafeInteger(ev.data?.retry) && ev.data.retry > 0) {
+    ctx.rows.push({
+      key: `retry-${key}`,
+      kind: 'notice',
+      turn: ev.data.turn,
+      time: ev.time,
+      text: retryText(ev.data, true, ctx.t),
+    })
+  }
 }
 
 /** Forget the open folds of the targeted step (every step when no target). */
@@ -643,6 +704,14 @@ function turnErrorText(error, t) {
  */
 function onTurnEnd(ev, ctx) {
   const turn = ev.data?.turn
+  // A closed Turn cannot retain a live spinner even when the loaded window
+  // lacks a final stream chunk or a cancelled tool's result.
+  for (const row of ctx.rows) {
+    if (row.turn !== turn || (row.streaming !== true && row.tool?.running !== true)) continue
+    row.streaming = false
+    row.endedAt = ev.time
+    if (row.tool?.running === true) row.tool.running = false
+  }
   const reason = ev.data?.reason
   if (reason === undefined || reason === null) return
   if (reason.kind === 'completed' || reason.kind === 'forked') return
@@ -720,6 +789,7 @@ function onToolResult(ev, ctx) {
 const HANDLERS = new Map([
   ['assistant/live-chunk', onLiveChunk],
   ['llm/retry', onRetry],
+  ['llm/retry-started', onRetryStarted],
   ['assistant/attempt', onAttempt],
   ['assistant/message', onMessage],
   ['turn/start', onTurnStart],
@@ -747,6 +817,7 @@ export function buildTranscript(entries, t = keyOnly) {
     // already on screen, both keyed by Turn/Step.
     attempts: new Map(),
     settled: new Set(),
+    retries: new Map(),
     tools: pairToolResults(list),
     t,
   }
@@ -792,10 +863,11 @@ function stampGroup(group, row) {
   const time = typeof row.time === 'number' ? row.time : undefined
   if (time === undefined) return
   if (group.startedAt === undefined || time < group.startedAt) group.startedAt = time
-  if (group.endedAt === undefined || time > group.endedAt) group.endedAt = time
+  const end = row.endedAt ?? time
+  if (group.endedAt === undefined || end > group.endedAt) group.endedAt = end
 }
 
-export function groupProcessRows(rows) {
+export function groupProcessRows(rows, sessionRunning) {
   const list = Array.isArray(rows) ? rows : []
   const out = []
   let group = null
@@ -823,8 +895,12 @@ export function groupProcessRows(rows) {
   for (const row of list) {
     if (row.kind === 'tool') {
       const current = groupFor(row)
-      current.items.push({ kind: 'tool', key: row.key, tool: row.tool })
-      current.running = current.running || row.tool.running === true
+      current.items.push({
+        kind: 'tool',
+        key: row.key,
+        tool: sessionRunning === false ? { ...row.tool, running: false } : row.tool,
+      })
+      current.running = sessionRunning !== false && (current.running || row.tool.running === true)
       stampGroup(current, row)
       continue
     }
@@ -836,7 +912,7 @@ export function groupProcessRows(rows) {
         text: row.reasoning,
         streaming: row.streaming === true,
       })
-      current.running = current.running || row.streaming === true
+      current.running = sessionRunning !== false && (current.running || row.streaming === true)
       stampGroup(current, row)
       if (row.text !== '') {
         flush()

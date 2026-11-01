@@ -125,6 +125,9 @@
   "cell.retry": "Retry",
 
   "turn.divider": "— Turn {{n}} —",
+  "retry.scheduled": "Retry {{attempt}} in {{delay}} · {{code}}",
+  "retry.started": "Retry {{attempt}} started · {{code}}",
+  "retry.startedDelayed": "Retry {{attempt}} started · backoff {{delay}} · {{code}}",
   "turn.error": "Turn failed: {{message}} ({{code}})",
   "turn.aborted": "Turn aborted",
   "turn.maxTokens": "Output limit reached",
