@@ -42,3 +42,20 @@
   web 与桌面 profile 各自独立，清缓存会回到 10/6。
 - 待办：若要求「设置一次到处生效」，改走 DSH settings 服务或 host 侧配置通道。
   当前实现不阻塞单机使用。
+
+### npm test 的 glob 把 E2E 一起跑了
+
+- 现状：`package.json` 的 `test` 是 `node --test "test/**/*.test.js"`，实测展开后 16 个
+  文件，含 `test/e2e/dsh-composer.test.js` 与 `test/e2e/sidebar-align.test.js`——也就是
+  `npm test`（以及 `npm run check`）会顺带启动浏览器 E2E，与 AGENTS.md 写的「check 只
+  跑 lint + 重复代码 + 格式 + 测试，E2E 走 `npm run test:e2e`」不一致。
+- 待办：定夺是把这个 glob 收紧成不含 `test/e2e/` 的集合，还是把 AGENTS.md 与 README
+  改成「check 含 E2E」；顺带确认 CI 是否具备浏览器。
+
+### 归档释放格子会丢掉该格未发出的草稿
+
+- 现状：格子的草稿存在 `CellView` 的组件 state（`inputText`），不随布局持久化。会话被
+  归档后格子释放、`CellView` 卸载，草稿随之丢弃；旧路径（会话离开清单）本来也这样，
+  但归档是高频动作，更容易撞上。
+- 待办（可二选一或都做）：释放前提示一次「该格有未发送草稿」；或把每格草稿按会话 id
+  暂存，重新选中该会话时回填。当前不阻塞使用。
