@@ -91,6 +91,8 @@ export const CHINESE = {
   'transcript.image.loading': '图片加载中…',
   'transcript.image.failed': '图片加载失败',
   'transcript.image.alt': '图片',
+  'transcript.image.preview': '点击查看大图',
+  'transcript.image.close': '关闭预览',
   'reasoning.label': '思考过程',
   'reasoning.streaming': '思考中',
   'reasoning.expand': '展开思考过程',

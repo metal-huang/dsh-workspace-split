@@ -25,6 +25,14 @@ function buildTo(target) {
   return readFileSync(target, 'utf8')
 }
 
+/** Read the platform module table the bundle is allowed to `require`. */
+function platformExternals() {
+  const build = readFileSync(join(PLUGIN_DIR, 'build.mjs'), 'utf8')
+  const match = /const PLATFORM_EXTERNALS = \[([\s\S]*?)\n\]/u.exec(build)
+  assert.notEqual(match, null, 'PLATFORM_EXTERNALS not found in build.mjs')
+  return [...match[1].matchAll(/'([^']+)'/gu)].map((entry) => entry[1])
+}
+
 describe('built client artifact', () => {
   let scratch
   let built
@@ -57,9 +65,18 @@ describe('built client artifact', () => {
   })
 
   it('requires nothing beyond the platform module table', () => {
-    const required = [...built.matchAll(/require\("([^"]+)"\)/g)].map((match) => match[1])
-    // react and react-dom/client are the only platform externals this plugin needs.
-    assert.deepEqual([...new Set(required)], ['react', 'react-dom/client'])
+    const required = [...new Set([...built.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1]))]
+    // The rule is the table, not a fixed pair of names: a module the loader
+    // exposes (react-dom, for the preview portal) must pass without editing this
+    // test, while anything outside the table still fails.
+    const platform = platformExternals()
+    for (const module of required) {
+      assert.ok(
+        platform.includes(module),
+        `bundle requires ${module}, which is not in the platform module table`,
+      )
+    }
+    assert.ok(required.includes('react'), 'the cell renders through react')
   })
 
   it('builds to the same bytes twice', () => {

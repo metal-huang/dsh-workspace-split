@@ -75,6 +75,8 @@
   "transcript.image.loading": "Loading image…",
   "transcript.image.failed": "Image failed to load",
   "transcript.image.alt": "Image",
+  "transcript.image.preview": "Click to open",
+  "transcript.image.close": "Close preview",
   "reasoning.label": "Reasoning",
   "reasoning.streaming": "Thinking",
   "reasoning.expand": "Expand reasoning",

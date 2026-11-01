@@ -52,6 +52,9 @@ progress on one screen instead of clicking through tabs.
   but not the manual override, so titles stay aligned and do not look oversized
   beside the transcript.
 - **Markdown and math.** Tables, code, task lists, and TeX rendered with KaTeX.
+- **Open an image full-window.** Click a picture in the transcript and it fills
+  the window; click anywhere or press Escape to close. The preview renders
+  outside the tile, so per-tile zoom and clipping cannot shrink or cut it.
 - **The process, not just the answer.** Reasoning and tool calls fold into one
   per-turn process group with its elapsed time, a tool call marks itself running
   until its result arrives, and a status line names what the session is doing. A

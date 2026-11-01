@@ -517,6 +517,97 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     )
     assert.deepEqual(result, { removed: 'f1', rows: 2 })
   })
+
+  it('opens a transcript image in a viewport preview and dismisses it', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        // 1x1 transparent PNG: readAttachment needs real bytes to hand back.
+        const png = Uint8Array.from(
+          atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII='),
+          (c) => c.charCodeAt(0),
+        )
+        const session = {
+          readAttachment: async () => ({
+            ok: true,
+            value: { data: png, attachment: { mediaType: 'image/png' } },
+          }),
+        }
+        window.__dswsTest.render('image', root, {
+          session,
+          attachment: { attachmentId: 'a1', mediaType: 'image/png', name: 'one.png' },
+        })
+        await new Promise((done) => setTimeout(done, 150))
+        const thumb = root.querySelector('[data-dsws-image-thumb]')
+        thumb.click()
+        await new Promise((done) => setTimeout(done, 100))
+        const overlay = document.querySelector('[data-dsws-image-preview]')
+        const opened = overlay !== null
+        // The portal escapes the tile: it must be a viewport-sized surface, and
+        // the picture must be capped by the viewport (92vh resolves to px).
+        const sized = overlay === null ? '' : getComputedStyle(overlay).position
+        const image = overlay === null ? null : overlay.querySelector('img')
+        const capRatio =
+          image === null
+            ? 0
+            : Number((parseFloat(getComputedStyle(image).maxHeight) / window.innerHeight).toFixed(2))
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+        await new Promise((done) => setTimeout(done, 100))
+        return {
+          thumb: thumb !== null,
+          opened,
+          sized,
+          capRatio,
+          closed: document.querySelector('[data-dsws-image-preview]') === null,
+        }
+      })()`,
+    )
+    assert.deepEqual(result, {
+      thumb: true,
+      opened: true,
+      sized: 'fixed',
+      capRatio: 0.92,
+      closed: true,
+    })
+  })
+
+  it('previews a staged draft image and closes it on a click', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__dswsTest.render('drafts', root, {
+          images: [
+            {
+              id: 'i1',
+              name: 'one.png',
+              url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+            },
+          ],
+          onRemove: (id) => { window.__removedDraft = id },
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        const thumb = root.querySelector('[data-dsws-draft-thumb]')
+        thumb.click()
+        await new Promise((done) => setTimeout(done, 100))
+        const overlay = document.querySelector('[data-dsws-image-preview]')
+        const opened = overlay !== null
+        // A click on the surface dismisses it; the remove seat must stay a remove.
+        if (overlay !== null) overlay.click()
+        await new Promise((done) => setTimeout(done, 100))
+        return {
+          thumb: thumb !== null,
+          opened,
+          closedByClick: document.querySelector('[data-dsws-image-preview]') === null,
+          removed: window.__removedDraft ?? '',
+        }
+      })()`,
+    )
+    assert.deepEqual(result, { thumb: true, opened: true, closedByClick: true, removed: '' })
+  })
 })
 
 /** Stop one child process and wait for it to release files. */

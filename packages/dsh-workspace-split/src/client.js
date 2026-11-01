@@ -6,6 +6,7 @@
  */
 
 import React from 'react'
+import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfm } from 'micromark-extension-gfm'
@@ -1564,6 +1565,7 @@ const composerThumbImageStyle = {
   objectFit: 'cover',
   borderRadius: 'var(--dsw-radius-sm, 6px)',
   background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.18))',
+  cursor: 'zoom-in',
 }
 const composerThumbFallbackStyle = {
   display: 'flex',
@@ -2146,11 +2148,15 @@ function StopIcon(props) {
 }
 
 /**
- * Thumbnails of the images waiting in the draft, each removable on its own.
+ * Thumbnails of the images waiting in the draft, each removable on its own and
+ * each openable full-window.
  * @param props - draft `images` and the `onRemove(id)` handler.
  */
 function DraftImageStrip(props) {
   const { images, onRemove } = props
+  // The id, not the object: removing the image drops the preview with it.
+  const [previewId, setPreviewId] = useState(null)
+  const preview = images.find((image) => image.id === previewId) ?? null
   return h(
     'div',
     { style: composerStripStyle },
@@ -2160,7 +2166,22 @@ function DraftImageStrip(props) {
         { key: image.id, style: composerThumbStyle, title: image.name },
         image.url === ''
           ? h('span', { style: composerThumbFallbackStyle }, t('composer.image.noPreview'))
-          : h('img', { src: image.url, alt: image.name, style: composerThumbImageStyle }),
+          : h('img', {
+              src: image.url,
+              alt: image.name,
+              'data-dsws-draft-thumb': 'true',
+              role: 'button',
+              tabIndex: 0,
+              'aria-label': t('transcript.image.preview'),
+              title: `${image.name} · ${t('transcript.image.preview')}`,
+              style: composerThumbImageStyle,
+              onClick: () => setPreviewId(image.id),
+              onKeyDown: (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                setPreviewId(image.id)
+              },
+            }),
         h(
           'button',
           {
@@ -2174,6 +2195,13 @@ function DraftImageStrip(props) {
         ),
       ),
     ),
+    preview === null
+      ? null
+      : h(ImagePreview, {
+          src: preview.url,
+          alt: preview.name,
+          onClose: () => setPreviewId(null),
+        }),
   )
 }
 
@@ -3347,6 +3375,7 @@ const userImageStyles = {
     objectFit: 'cover',
     borderRadius: 'var(--dsw-radius-md, 8px)',
     background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.18))',
+    cursor: 'zoom-in',
   },
   placeholder: {
     display: 'flex',
@@ -3390,6 +3419,100 @@ function releaseImageUrl(url) {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
 }
 
+const imagePreviewStyles = {
+  backdrop: {
+    position: 'fixed',
+    inset: 0,
+    // Above the shell's panels and menus: the preview is a full-window surface.
+    zIndex: 1000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    boxSizing: 'border-box',
+    background: 'rgba(0,0,0,.72)',
+    cursor: 'zoom-out',
+  },
+  image: {
+    maxWidth: '92vw',
+    maxHeight: '92vh',
+    objectFit: 'contain',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    boxShadow: '0 8px 40px rgba(0,0,0,.5)',
+    background: 'var(--dsw-alias-bg-layer-1, #222)',
+    cursor: 'zoom-out',
+  },
+  close: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 32,
+    height: 32,
+    padding: 0,
+    border: 'none',
+    borderRadius: '50%',
+    background: 'rgba(255,255,255,.16)',
+    color: '#fff',
+    fontSize: 20,
+    lineHeight: '32px',
+    textAlign: 'center',
+    cursor: 'pointer',
+  },
+}
+
+/**
+ * Full-window view of one transcript image.
+ *
+ * Rendered through a portal on `document.body`: a tile scales its body with a
+ * `transform` and clips at its own edge (see `CellZoom`), so an overlay drawn in
+ * place would be scaled with the text and cut off at the tile. The portal
+ * escapes both, which is also why the picture is sized by the viewport rather
+ * than by the tile that opened it.
+ * @param props - `src` (display URL), `alt` (attachment name), `onClose`.
+ */
+function ImagePreview(props) {
+  const { src, alt, onClose } = props
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return createPortal(
+    h(
+      'div',
+      {
+        'data-dsws-image-preview': 'true',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': alt,
+        style: imagePreviewStyles.backdrop,
+        // A click anywhere, including on the picture, dismisses the preview.
+        onClick: onClose,
+      },
+      h('img', { src, alt, style: imagePreviewStyles.image }),
+      h(
+        'button',
+        {
+          type: 'button',
+          'aria-label': t('transcript.image.close'),
+          title: t('transcript.image.close'),
+          style: imagePreviewStyles.close,
+          onClick: (event) => {
+            event.stopPropagation()
+            onClose()
+          },
+        },
+        '×',
+      ),
+    ),
+    document.body,
+  )
+}
+
 /**
  * One image from a user message, loaded from its attachment ref.
  *
@@ -3405,6 +3528,9 @@ function UserImageThumb(props) {
   const fallbackMediaType = attachment.mediaType
   const [url, setUrl] = useState('')
   const [failed, setFailed] = useState(false)
+  // The preview lives on the thumbnail's own component so the blob URL it opens
+  // is the same one the tile already holds; nothing has to be re-read.
+  const [open, setOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -3459,12 +3585,33 @@ function UserImageThumb(props) {
       '…',
     )
   }
-  return h('img', {
-    src: url,
-    alt: name === '' ? t('transcript.image.alt') : name,
-    title: name,
-    style: userImageStyles.image,
-  })
+  return h(
+    React.Fragment,
+    null,
+    h('img', {
+      src: url,
+      alt: name === '' ? t('transcript.image.alt') : name,
+      title: `${name === '' ? t('transcript.image.alt') : name} · ${t('transcript.image.preview')}`,
+      'data-dsws-image-thumb': 'true',
+      role: 'button',
+      tabIndex: 0,
+      'aria-label': t('transcript.image.preview'),
+      style: userImageStyles.image,
+      onClick: () => setOpen(true),
+      onKeyDown: (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        setOpen(true)
+      },
+    }),
+    open
+      ? h(ImagePreview, {
+          src: url,
+          alt: name === '' ? t('transcript.image.alt') : name,
+          onClose: () => setOpen(false),
+        })
+      : null,
+  )
 }
 
 /**
@@ -5426,6 +5573,8 @@ if (
     files: DraftFileStrip,
     title: CellTitle,
     zoom: ZoomProbe,
+    image: UserImageThumb,
+    drafts: DraftImageStrip,
   }
   window.__dswsTest = {
     render(name, node, props = {}) {
