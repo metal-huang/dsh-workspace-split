@@ -16,7 +16,7 @@ export async function promptWhileCurrent(session, isCurrentSession, encode) {
   if (!isCurrentSession()) return { action: 'stale' }
   let result
   try {
-    result = await session.prompt(parts, 'queue')
+    result = await session.prompt(parts, 'steer')
   } catch (error) {
     return isCurrentSession() ? { action: 'error', stage: 'prompt', error } : { action: 'stale' }
   }
