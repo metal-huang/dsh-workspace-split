@@ -217,8 +217,8 @@
 - TC-23 ✅ `node test/dsh-contract.test.js` 本机 7/7 通过
 - TC-24 ✅ `node --test test/e2e/dsh-composer.test.js` 本机 9/9 通过
 - TC-25 ✅ 项目徽标解析单测 + DSH 浏览器 fixture（徽标与标题同字号、宽度缩放、手动缩放下 header 高度/位置一致、徽标/状态点中心对齐）
-- TC-26 ⏳ 归档释放格子已实现（单测覆盖 `reconcileCells` / `pickableSessions`），待浏览器手动验证
-- TC-27 ⏳ 点格子清未读亮点已实现（单测覆盖 `acknowledgeUnread` 与降级路径；接线由 `test/split-wiring.test.js` 的源码形状守卫盯着），待浏览器手动验证
+- TC-26 ✅ 归档释放格子（2026-11-01 桌面版手测通过，刷新后生效、未重启应用；单测覆盖 `reconcileCells` / `pickableSessions`）
+- TC-27 ✅ 点格子清未读亮点（2026-11-01 桌面版手测通过；单测覆盖 `acknowledgeUnread` 与降级路径；接线由 `test/split-wiring.test.js` 的源码形状守卫盯着）
 
 ## 自动化回归（E2E）
 
