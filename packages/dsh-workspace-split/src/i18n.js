@@ -2,18 +2,17 @@ import CHINESE from './messages.js'
 import EN from './locale/en.json'
 
 /**
- * Language detection priority:
- * 1. Host-provided language (future extension)
- * 2. navigator.language / navigator.languages[0]
- * 3. Default: zh-CN
+ * Follow the Host document language before the browser preference. Chinese
+ * browsers keep Chinese; unsupported or absent languages fall back to English.
  */
 export function detectLanguage() {
-  if (typeof navigator !== 'undefined') {
-    const lang = navigator.language || navigator.userLanguage
-    // DSH default is Chinese, but we support English as override
-    return lang.startsWith('en') ? 'en' : 'zh-CN'
-  }
-  return 'zh-CN'
+  const hostLanguage = typeof document === 'undefined' ? '' : document.documentElement?.lang
+  const browserLanguage =
+    typeof navigator === 'undefined'
+      ? ''
+      : navigator.language || navigator.languages?.[0] || navigator.userLanguage
+  const language = hostLanguage || browserLanguage || 'en'
+  return /^zh(?:[-_]|$)/i.test(language) ? 'zh-CN' : 'en'
 }
 
 /**
