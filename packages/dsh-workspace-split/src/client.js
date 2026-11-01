@@ -56,7 +56,7 @@ import {
 import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 
 // ---------- project badge ----------
-import { projectColor, projectNameOf } from './project.js'
+import { pickerLabelOf, projectColor, projectIndex, projectNameFrom } from './project.js'
 
 // ---------- archived sessions ----------
 import {
@@ -4914,7 +4914,8 @@ const cellPickerStyles = {
 
 /**
  * Chevron-shaped session picker.
- * @param props - current value, option list, placeholder, and change handler.
+ * @param props - current value, option rows (`id`/`label`/`running`), placeholder,
+ *   and change handler.
  */
 function CellPicker(props) {
   const [hover, setHover] = useState(false)
@@ -4939,8 +4940,7 @@ function CellPicker(props) {
         h(
           'option',
           { key: s.id, value: s.id },
-          (s.displayTitle || s.title || s.id.slice(0, 8)) +
-            (s.running ? t('split.session.running') : ''),
+          s.label + (s.running ? t('split.session.running') : ''),
         ),
       ),
     ),
@@ -4994,6 +4994,10 @@ function SplitMain(props) {
   const nonBlank = items.filter((s) => !s.blank)
   const pickable = pickableSessions(nonBlank, archived)
   const workspaceItems = wsState?.items ?? []
+  // Session → project, resolved once per Workspace snapshot: a free tile's
+  // picker lists the whole catalog, and scanning it per row on every stream tick
+  // is quadratic.
+  const projectById = useMemo(() => projectIndex(workspaceItems), [workspaceItems])
 
   // Track running state per session for the status dots.
   const runningMap = useRef({})
@@ -5159,6 +5163,7 @@ function SplitMain(props) {
         nonBlank,
         pickable,
         workspaceItems,
+        projectById,
         sessionsOfWorkspace,
         active: i === activeCell,
         dragOver: dragOver === i,
@@ -5207,6 +5212,7 @@ function SplitCell(props) {
     nonBlank,
     pickable,
     workspaceItems,
+    projectById,
     sessionsOfWorkspace,
     active,
     dragOver,
@@ -5232,7 +5238,14 @@ function SplitCell(props) {
       : null
   // A Session cell still belongs to a project: prefer its Workspace, then the
   // cwd leaf, so a header never becomes an unanchored conversation title.
-  const projectTitle = wsTitle ?? projectNameOf(sess, workspaceItems)
+  const projectTitle = wsTitle ?? projectNameFrom(projectById, sess)
+  // The select is flat, so a free tile's rows need the project in the label to
+  // be distinguishable; a project tile drops it, since the header already says it.
+  const optionRows = options.map((s) => ({
+    id: s.id,
+    label: pickerLabelOf(s, projectNameFrom(projectById, s), wsTitle ?? ''),
+    running: s.running,
+  }))
 
   // Clicking a tile is the reader's "I have seen this": DSH only clears the
   // completion dot for the main view and a tile is never the main view, so the
@@ -5320,7 +5333,7 @@ function SplitCell(props) {
               wsTitle === null
                 ? t('split.session.pick')
                 : t('split.session.pickScoped', { ws: wsTitle }),
-            options,
+            options: optionRows,
             onChange: onPick,
           }),
         ),
@@ -5575,6 +5588,7 @@ if (
     zoom: ZoomProbe,
     image: UserImageThumb,
     drafts: DraftImageStrip,
+    picker: CellPicker,
   }
   window.__dswsTest = {
     render(name, node, props = {}) {

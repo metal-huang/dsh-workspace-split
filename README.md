@@ -34,7 +34,8 @@ progress on one screen instead of clicking through tabs.
 - **Context occupancy.** The footer shows the same `projected / window` token
   reading as Chat, and hides itself when the projection is absent.
 - **Session or project per tile.** Pin one session, or pin a project and switch
-  between that project's sessions inside the tile.
+  between that project's sessions inside the tile; a free tile's picker names the
+  project after each session, so two projects holding the same title stay apart.
 - **Archiving frees the tile.** Archive a session in the sidebar and any tile
   holding it lets go as soon as the Host confirms the archive (one update later;
   the grid keeps no optimistic copy): a session tile empties, a project tile only

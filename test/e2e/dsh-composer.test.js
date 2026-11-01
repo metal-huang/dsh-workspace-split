@@ -608,6 +608,39 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     )
     assert.deepEqual(result, { thumb: true, opened: true, closedByClick: true, removed: '' })
   })
+
+  it('renders picker rows with the project the label carries', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__dswsTest.render('picker', root, {
+          value: 'a',
+          placeholder: 'pick a session',
+          options: [
+            { id: 'a', label: 'Fix the grid · Split view', running: false },
+            { id: 'b', label: 'Write the score · Music', running: true },
+          ],
+          onChange: () => {},
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        const select = root.querySelector('select')
+        // The running suffix is localized, so it is stripped before comparing.
+        const strip = (text) => text.replace(/\\s*[（(](?:运行中|running)[）)]\\s*$/u, '')
+        return {
+          options: [...select.options].map((option) => strip(option.text)),
+          selected: select.value,
+          runningSuffixed: /(?:运行中|running)/u.test([...select.options][2]?.text ?? ''),
+        }
+      })()`,
+    )
+    assert.deepEqual(result, {
+      options: ['pick a session', 'Fix the grid · Split view', 'Write the score · Music'],
+      selected: 'a',
+      runningSuffixed: true,
+    })
+  })
 })
 
 /** Stop one child process and wait for it to release files. */

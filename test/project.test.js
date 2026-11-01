@@ -10,7 +10,10 @@ import { describe, it } from 'node:test'
 
 import {
   cwdName,
+  pickerLabelOf,
   projectColor,
+  projectIndex,
+  projectNameFrom,
   projectNameOf,
 } from '../packages/dsh-workspace-split/src/project.js'
 
@@ -63,5 +66,60 @@ describe('projectColor', () => {
     )
     assert.ok(colors.size >= 2)
     assert.match(projectColor(''), /^#[0-9a-f]{6}$/u)
+  })
+})
+
+describe('projectIndex / projectNameFrom', () => {
+  const workspaces = [
+    { workspaceId: 'w1', title: 'Split view', sessionIds: ['s1', 2] },
+    { workspaceId: 'w2', title: 'Music', sessionIds: ['s1', 's3'] },
+  ]
+
+  it('maps stringified ids and keeps the first Workspace, like projectNameOf', () => {
+    const index = projectIndex(workspaces)
+    assert.equal(index.get('s1'), 'Split view')
+    assert.equal(index.get('2'), 'Split view')
+    assert.equal(index.get('s3'), 'Music')
+    assert.equal(projectNameFrom(index, { id: 's3' }), 'Music')
+    assert.equal(
+      projectNameFrom(index, { sessionId: 's1' }),
+      projectNameOf({ id: 's1' }, workspaces),
+    )
+  })
+
+  it('falls back to the cwd leaf, then to nothing', () => {
+    const index = projectIndex(workspaces)
+    assert.equal(projectNameFrom(index, { id: 's9', cwd: 'D:\\proj\\other' }), 'other')
+    assert.equal(projectNameFrom(index, { id: 's9' }), '')
+    assert.equal(projectNameFrom(new Map(), undefined), '')
+    assert.equal(projectNameFrom(undefined, { id: 's9' }), '')
+  })
+
+  it('tolerates a catalog without entries', () => {
+    assert.equal(projectIndex(undefined).size, 0)
+    assert.equal(projectIndex([{ title: 'no sessions' }]).size, 0)
+  })
+})
+
+describe('pickerLabelOf', () => {
+  const session = { id: 's1', displayTitle: 'Fix the grid' }
+
+  it('appends the project when the tile is not scoped to it', () => {
+    assert.equal(pickerLabelOf(session, 'Split view', ''), 'Fix the grid · Split view')
+    assert.equal(pickerLabelOf(session, 'Split view', null), 'Fix the grid · Split view')
+  })
+
+  it('drops the project the tile is already scoped to', () => {
+    assert.equal(pickerLabelOf(session, 'Split view', 'Split view'), 'Fix the grid')
+  })
+
+  it('stays a title when the Session has no project', () => {
+    assert.equal(pickerLabelOf(session, '', ''), 'Fix the grid')
+    assert.equal(pickerLabelOf({ id: 'abcdef123456' }, '', ''), 'abcdef12')
+    assert.equal(pickerLabelOf({ title: 'Titled only' }, '', ''), 'Titled only')
+  })
+
+  it('survives junk rows', () => {
+    assert.equal(pickerLabelOf(undefined, undefined, undefined), '')
   })
 })
