@@ -3349,11 +3349,18 @@ const runningStyles = {
  * @param props - the status text chosen by `runningHint`.
  */
 function RunningStatus(props) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const elapsed = typeof props.since === 'number' ? now - props.since : 0
   return h(
     'div',
     { style: runningStyles.row, 'data-dsws-running': 'true' },
     h('span', { className: 'dsws-running-dot', style: runningStyles.dot }),
     h('span', null, props.text),
+    elapsed >= 1000 ? h('span', null, formatDuration(elapsed)) : null,
   )
 }
 
@@ -3993,8 +4000,11 @@ function CellView(props) {
   )
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
-  const running = sessionState?.running === true
-  const stoppable = sessionStoppable(sessionState)
+  // The catalog receives Host status independently of retained-history feeds.
+  // Prefer it once ready so a stale binding cannot keep a settled chat busy.
+  const hostRunning = catalog?.phase === 'ready' ? catalog.byId?.[sessionId]?.running : undefined
+  const running = typeof hostRunning === 'boolean' ? hostRunning : sessionState?.running === true
+  const stoppable = sessionStoppable({ ...sessionState, running })
 
   // Host inbox projection: queued prompts are not in the event window until the
   // Host admits them, so the dock needs this separate source.
@@ -4167,7 +4177,7 @@ function CellView(props) {
   // entry per token; drawing those one-to-one put every token in its own
   // paragraph (see transcript.js).
   const visible = events
-  const rows = groupProcessRows(buildTranscript(visible, t))
+  const rows = groupProcessRows(buildTranscript(visible, t), running)
   const railItems = turnRailItems(visible)
 
   return h(
@@ -4205,7 +4215,9 @@ function CellView(props) {
           },
         },
         rows.map((row) => h(TranscriptRow, { key: row.key, row, session: binding.session })),
-        running ? h(RunningStatus, { text: runningHint(visible, t) }) : null,
+        running
+          ? h(RunningStatus, { text: runningHint(visible, t), since: visible.at(-1)?.event?.time })
+          : null,
         h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
       ),
     ),
