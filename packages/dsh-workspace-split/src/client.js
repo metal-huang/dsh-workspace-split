@@ -56,7 +56,9 @@ import {
 import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 
 // ---------- project badge ----------
-import { pickerLabelOf, projectColor, projectIndex, projectNameFrom } from './project.js'
+import { projectBadgeStyle, projectColor, projectIndex, projectNameFrom } from './project.js'
+import { pickerRowOf } from './picker.js'
+import { SessionPicker } from './picker-ui.js'
 
 // ---------- archived sessions ----------
 import {
@@ -4672,27 +4674,11 @@ const titleStyles = {
     flex: '1 1 auto',
     height: 30,
   },
-  // A project can be longer than the tile; the badge yields before the session
-  // title so the session name stays readable. It deliberately uses the title's
-  // font size: the project is context, not a caption, and a smaller badge made
-  // the first thing in the header look like secondary metadata.
-  badge: (color) => ({
-    flexShrink: 1,
-    minWidth: 0,
-    maxWidth: '46%',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    padding: '1px 8px',
-    border: `0.5px solid ${color}66`,
-    borderRadius: 7,
-    background: `${color}24`,
-    color,
-    fontSize: 'inherit',
-    lineHeight: '20px',
-    fontWeight: 600,
-    letterSpacing: 0,
-  }),
+  // The project badge itself lives in project.js (`projectBadgeStyle`): the
+  // picker rows draw the same pill, and one definition keeps them identical.
+  // A project can be longer than the tile, so it yields before the session
+  // title; it deliberately uses the title's font size, because the project is
+  // context rather than a caption.
   dot: (running) => ({
     width: 10,
     height: 10,
@@ -4808,7 +4794,7 @@ function CellTitle(props) {
       ? h(
           'span',
           {
-            style: titleStyles.badge(projectColor(project)),
+            style: projectBadgeStyle(projectColor(project)),
             title: project,
             'data-dsws-project': 'true',
           },
@@ -4862,88 +4848,6 @@ function CellTitle(props) {
           },
           '✎',
         ),
-  )
-}
-
-// ---------- cell picker ----------
-// A native <select> kept for its keyboard handling and system popup. The header
-// already shows the session title, so the visible affordance is a chevron in a
-// small bordered seat; it used to be a 9px glyph that readers could not see.
-// The transparent <select> covers the whole seat, so clicking anywhere opens the
-// system popup with a much larger hit target than the glyph suggests.
-
-const cellPickerStyles = {
-  wrap: (hover) => ({
-    position: 'relative',
-    flex: 'none',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 38,
-    height: 30,
-    marginLeft: 6,
-    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
-    borderRadius: 'var(--dsw-radius-sm, 6px)',
-    background: hover
-      ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
-      : 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))',
-    color: hover
-      ? 'var(--dsw-alias-label-primary, inherit)'
-      : 'var(--dsw-alias-label-secondary, #999)',
-    cursor: 'pointer',
-  }),
-  glyph: {
-    fontSize: 16,
-    lineHeight: 1,
-    pointerEvents: 'none',
-    transform: 'translateY(-1px)',
-  },
-  select: {
-    position: 'absolute',
-    inset: 0,
-    width: '100%',
-    height: '100%',
-    opacity: 0,
-    border: 'none',
-    padding: 0,
-    margin: 0,
-    cursor: 'pointer',
-    appearance: 'none',
-  },
-}
-
-/**
- * Chevron-shaped session picker.
- * @param props - current value, option rows (`id`/`label`/`running`), placeholder,
- *   and change handler.
- */
-function CellPicker(props) {
-  const [hover, setHover] = useState(false)
-  return h(
-    'span',
-    {
-      style: cellPickerStyles.wrap(hover),
-      onMouseEnter: () => setHover(true),
-      onMouseLeave: () => setHover(false),
-    },
-    h('span', { style: cellPickerStyles.glyph, 'aria-hidden': true }, '▾'),
-    h(
-      'select',
-      {
-        style: cellPickerStyles.select,
-        value: props.value,
-        'aria-label': t('split.session.picker.aria'),
-        onChange: (e) => props.onChange(e.target.value || null),
-      },
-      h('option', { value: '' }, props.placeholder),
-      props.options.map((s) =>
-        h(
-          'option',
-          { key: s.id, value: s.id },
-          s.label + (s.running ? t('split.session.running') : ''),
-        ),
-      ),
-    ),
   )
 }
 
@@ -5239,13 +5143,12 @@ function SplitCell(props) {
   // A Session cell still belongs to a project: prefer its Workspace, then the
   // cwd leaf, so a header never becomes an unanchored conversation title.
   const projectTitle = wsTitle ?? projectNameFrom(projectById, sess)
-  // The select is flat, so a free tile's rows need the project in the label to
-  // be distinguishable; a project tile drops it, since the header already says it.
-  const optionRows = options.map((s) => ({
-    id: s.id,
-    label: pickerLabelOf(s, projectNameFrom(projectById, s), wsTitle ?? ''),
-    running: s.running,
-  }))
+  // A free tile's picker lists several projects, so each row resolves its own
+  // project for the badge; a project tile leaves the badge off, its header
+  // already names the only project every option belongs to.
+  const pickerRows = options.map((s) =>
+    pickerRowOf(s, wsTitle === null ? projectNameFrom(projectById, s) : ''),
+  )
 
   // Clicking a tile is the reader's "I have seen this": DSH only clears the
   // completion dot for the main view and a tile is never the main view, so the
@@ -5327,13 +5230,19 @@ function SplitCell(props) {
                 },
                 t('split.cell.empty.placeholder', { n: index + 1 }),
               ),
-          h(CellPicker, {
+          h(SessionPicker, {
             value: sid ?? '',
-            placeholder:
+            rows: pickerRows,
+            showProject: wsTitle === null,
+            searchPlaceholder:
+              wsTitle === null
+                ? t('split.session.picker.search')
+                : t('split.session.picker.searchScoped', { ws: wsTitle }),
+            emptyTitle:
               wsTitle === null
                 ? t('split.session.pick')
                 : t('split.session.pickScoped', { ws: wsTitle }),
-            options: optionRows,
+            t,
             onChange: onPick,
           }),
         ),
@@ -5588,7 +5497,7 @@ if (
     zoom: ZoomProbe,
     image: UserImageThumb,
     drafts: DraftImageStrip,
-    picker: CellPicker,
+    picker: SessionPicker,
   }
   window.__dswsTest = {
     render(name, node, props = {}) {

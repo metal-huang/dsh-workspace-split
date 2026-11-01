@@ -10,7 +10,7 @@ import { describe, it } from 'node:test'
 
 import {
   cwdName,
-  pickerLabelOf,
+  projectBadgeStyle,
   projectColor,
   projectIndex,
   projectNameFrom,
@@ -101,25 +101,15 @@ describe('projectIndex / projectNameFrom', () => {
   })
 })
 
-describe('pickerLabelOf', () => {
-  const session = { id: 's1', displayTitle: 'Fix the grid' }
-
-  it('appends the project when the tile is not scoped to it', () => {
-    assert.equal(pickerLabelOf(session, 'Split view', ''), 'Fix the grid · Split view')
-    assert.equal(pickerLabelOf(session, 'Split view', null), 'Fix the grid · Split view')
-  })
-
-  it('drops the project the tile is already scoped to', () => {
-    assert.equal(pickerLabelOf(session, 'Split view', 'Split view'), 'Fix the grid')
-  })
-
-  it('stays a title when the Session has no project', () => {
-    assert.equal(pickerLabelOf(session, '', ''), 'Fix the grid')
-    assert.equal(pickerLabelOf({ id: 'abcdef123456' }, '', ''), 'abcdef12')
-    assert.equal(pickerLabelOf({ title: 'Titled only' }, '', ''), 'Titled only')
-  })
-
-  it('survives junk rows', () => {
-    assert.equal(pickerLabelOf(undefined, undefined, undefined), '')
+describe('projectBadgeStyle', () => {
+  it('derives the pill from the project color', () => {
+    const style = projectBadgeStyle('#5aa9ff')
+    assert.equal(style.color, '#5aa9ff')
+    assert.equal(style.border, '0.5px solid #5aa9ff66')
+    assert.equal(style.background, '#5aa9ff24')
+    assert.equal(style.borderRadius, 7)
+    // The header and the picker rows share this, so it must stay a pill, not a
+    // full-width bar: the badge yields before the session title.
+    assert.equal(style.maxWidth, '46%')
   })
 })

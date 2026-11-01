@@ -609,36 +609,72 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.deepEqual(result, { thumb: true, opened: true, closedByClick: true, removed: '' })
   })
 
-  it('renders picker rows with the project the label carries', async () => {
+  it('opens the session picker, filters it, and chooses with the keyboard', async () => {
     const result = await evaluate(
       page,
       `(async () => {
         const root = document.createElement('div')
         document.body.append(root)
+        window.__chosen = 'none'
         window.__dswsTest.render('picker', root, {
-          value: 'a',
-          placeholder: 'pick a session',
-          options: [
-            { id: 'a', label: 'Fix the grid · Split view', running: false },
-            { id: 'b', label: 'Write the score · Music', running: true },
+          value: '',
+          rows: [
+            { id: 'a', title: 'Fix the grid', project: 'Split view', running: false },
+            { id: 'b', title: 'Write the score', project: 'Music', running: true },
+            { id: 'c', title: 'Music notes', project: 'Split view', running: false },
           ],
-          onChange: () => {},
+          showProject: true,
+          searchPlaceholder: 'Search sessions…',
+          emptyTitle: 'Choose a session…',
+          onChange: (id) => { window.__chosen = String(id) },
         })
         await new Promise((done) => setTimeout(done, 100))
-        const select = root.querySelector('select')
-        // The running suffix is localized, so it is stripped before comparing.
-        const strip = (text) => text.replace(/\\s*[（(](?:运行中|running)[）)]\\s*$/u, '')
+        root.querySelector('button[aria-haspopup="listbox"]').click()
+        await new Promise((done) => setTimeout(done, 150))
+        const panel = document.querySelector('[data-dsws-picker]')
+        const rows = [...panel.querySelectorAll('[data-dsws-picker-row]')]
+        const shape = {
+          badgeOnProjectRow: rows[0].textContent.includes('Split view'),
+          titleOnProjectRow: rows[0].textContent.includes('Fix the grid'),
+          runningMarked: /(run|运行)/u.test(rows[1].textContent),
+        }
+        // Filter by the project, then take the single row with Enter.
+        const search = panel.querySelector('[data-dsws-picker-search]')
+        const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+        setValue.call(search, 'Music')
+        search.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise((done) => setTimeout(done, 100))
+        const filtered = document.querySelectorAll('[data-dsws-picker-row]').length
+        search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        await new Promise((done) => setTimeout(done, 100))
+        const closedAfterChoose = document.querySelector('[data-dsws-picker]') === null
+        // Reopen: Escape closes without choosing again.
+        root.querySelector('button[aria-haspopup="listbox"]').click()
+        await new Promise((done) => setTimeout(done, 100))
+        const reopened = document.querySelector('[data-dsws-picker]') !== null
+        document
+          .querySelector('[data-dsws-picker-search]')
+          .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        await new Promise((done) => setTimeout(done, 100))
         return {
-          options: [...select.options].map((option) => strip(option.text)),
-          selected: select.value,
-          runningSuffixed: /(?:运行中|running)/u.test([...select.options][2]?.text ?? ''),
+          ...shape,
+          filtered,
+          chosen: window.__chosen,
+          closedAfterChoose,
+          reopened,
+          closedByEscape: document.querySelector('[data-dsws-picker]') === null,
         }
       })()`,
     )
     assert.deepEqual(result, {
-      options: ['pick a session', 'Fix the grid · Split view', 'Write the score · Music'],
-      selected: 'a',
-      runningSuffixed: true,
+      badgeOnProjectRow: true,
+      titleOnProjectRow: true,
+      runningMarked: true,
+      filtered: 2,
+      chosen: 'b',
+      closedAfterChoose: true,
+      reopened: true,
+      closedByEscape: true,
     })
   })
 })

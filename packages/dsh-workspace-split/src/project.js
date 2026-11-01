@@ -84,35 +84,31 @@ export function projectNameFrom(index, session) {
 }
 
 /**
- * One row's text inside a tile's Session picker.
+ * Pill that names a project, in a tile header and in the picker rows.
  *
- * The header already names the tile's project, but a free tile's picker mixes
- * Sessions from every project — and two projects can hold Sessions with the
- * same title — so the project goes into the option text. A project-scoped tile
- * only offers that project, so repeating it there would push the title out of
- * the visible part of the option.
- * @param session - Session list entry.
- * @param project - its display project from `projectNameFrom`.
- * @param scopedProject - the tile's project, or '' when the tile is free.
- * @returns the option label, without the running suffix.
+ * Shared instead of copied so the two surfaces cannot drift: the header's badge
+ * and the picker's badge are the same object with the same color derivation.
+ * @param color - from `projectColor`.
+ * @returns the badge style.
  */
-export function pickerLabelOf(session, project, scopedProject) {
-  const title = optionTitleOf(session)
-  const name = textOf(project)
-  if (name === '' || name === textOf(scopedProject)) return title
-  return `${title} · ${name}`
-}
-
-/** A Session's row title: display title, durable title, then the id prefix. */
-function optionTitleOf(session) {
-  const shown = textOf(session?.displayTitle) || textOf(session?.title)
-  if (shown !== '') return shown
-  return String(session?.id ?? '').slice(0, 8)
-}
-
-/** The value if it is a string, else ''. */
-function textOf(value) {
-  return typeof value === 'string' ? value : ''
+export function projectBadgeStyle(color) {
+  return {
+    flexShrink: 1,
+    minWidth: 0,
+    maxWidth: '46%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    padding: '1px 8px',
+    border: `0.5px solid ${color}66`,
+    borderRadius: 7,
+    background: `${color}24`,
+    color,
+    fontSize: 'inherit',
+    lineHeight: '20px',
+    fontWeight: 600,
+    letterSpacing: 0,
+  }
 }
 
 /**
