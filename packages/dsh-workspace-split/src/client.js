@@ -2305,6 +2305,40 @@ function DraftFileStrip(props) {
   )
 }
 
+/** Popups and editable header fields own Escape before task cancellation. */
+function escapeLayerOwnsKey(event) {
+  if (event.target instanceof Element && event.target.closest('input, select')) return true
+  const layers = document.querySelectorAll(
+    '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+  )
+  return [...layers].some((node) => node.getClientRects().length > 0)
+}
+
+/** Bind an unclaimed Escape to the visible active cell's existing Stop action. */
+function useCellEscapeStop(active, running, stop, textareaRef) {
+  const pending = useRef(false)
+  useEffect(() => {
+    if (!active || !running) return undefined
+    const onEscape = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.repeat || event.isComposing)
+        return
+      if (!textareaRef.current?.getClientRects().length || pending.current) return
+      // Menus and modal layers own their first Escape, including portalled
+      // session pickers. Capturing the unclaimed key keeps the hidden main
+      // conversation's shortcut from stopping a different Session.
+      if (escapeLayerOwnsKey(event)) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      pending.current = true
+      Promise.resolve(stop()).finally(() => {
+        pending.current = false
+      })
+    }
+    document.addEventListener('keydown', onEscape, true)
+    return () => document.removeEventListener('keydown', onEscape, true)
+  }, [active, running, stop, textareaRef])
+}
+
 /**
  * The cell's input bar: text, images, and one ordered prompt per send.
  *
@@ -2317,8 +2351,18 @@ function DraftFileStrip(props) {
  *   cell-owned draft text.
  */
 function Composer(props) {
-  const { session, text, onText, running, fileUpload, occupancy, controls, metaError, remote } =
-    props
+  const {
+    session,
+    text,
+    onText,
+    running,
+    active,
+    fileUpload,
+    occupancy,
+    controls,
+    metaError,
+    remote,
+  } = props
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -2499,6 +2543,8 @@ function Composer(props) {
       setStopping(false)
     }
   }, [session, stopping, setError])
+
+  useCellEscapeStop(active, running, stop, textareaRef)
 
   const onKeyDown = (event) => {
     if (mention.onKeyDown(event)) return
@@ -3903,7 +3949,7 @@ function PendingSeat(props) {
 
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
-  const { sessions, sessionId, fileUpload, uiSession, remote } = props
+  const { sessions, sessionId, fileUpload, uiSession, remote, active } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
@@ -4153,6 +4199,7 @@ function CellView(props) {
         text: inputText,
         onText: setInputText,
         running,
+        active,
         fileUpload,
         occupancy,
         controls,
@@ -5190,6 +5237,7 @@ function SplitCell(props) {
           : cellStyle.background,
       },
       onMouseDown: activate,
+      onFocusCapture: activate,
       // Accept a Sidebar drag: a Session row or a project row.
       onDragOver: (e) => {
         e.preventDefault()
@@ -5269,7 +5317,7 @@ function SplitCell(props) {
               ? t('split.workspace.empty', { ws: wsTitle })
               : t('split.cell.pickFromAbove'),
           )
-        : h(CellView, { sessions, sessionId: sid, fileUpload, uiSession, remote }),
+        : h(CellView, { sessions, sessionId: sid, fileUpload, uiSession, remote, active }),
     ),
   )
 }
