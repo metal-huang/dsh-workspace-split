@@ -324,6 +324,7 @@ v4 的结论全部建立在下面这份可复核的证据上，取数日期 2026
 | `@` 文件/会话 | `remote.fileReferences.list`、`remote.sessionReferenceResolver.candidates` | 纯文本插入 | `dsh-file-reference/lib/types/grammar.js` |
 | 上下文占用 | `faceOf('contextPressure')` | — | `dsh-token-meter/lib/types/projection.d.ts` |
 | 审批/提问 | `ctx.uiSession.sessionStatus` | `pending.answer(...)` | `ui-approval` / `ui-user-questions` 的 contract |
+| 归档状态 | `ctx.workspaces.list` 快照 `archivedSessionIds` | — | `dsh-api-workspace-controller/lib/types/client/model.d.ts` |
 
 ### 13.1 两条硬限制
 

@@ -15,7 +15,8 @@ import { mathFromMarkdown } from 'mdast-util-math'
 import katex from 'katex'
 
 const h = React.createElement
-const { useState, useEffect, useLayoutEffect, useCallback, useSyncExternalStore, useRef } = React
+const { useState, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, useRef } =
+  React
 
 // ---------- i18n ----------
 import { detectLanguage, t } from './i18n.js'
@@ -55,6 +56,14 @@ import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 
 // ---------- project badge ----------
 import { projectColor, projectNameOf } from './project.js'
+
+// ---------- archived sessions ----------
+import {
+  archivedSessionIds,
+  isArchivedSession,
+  pickableSessions,
+  reconcileCells,
+} from './session-state.js'
 
 // ---------- limits ----------
 // One screen holds ten cells at most by default. Six fit comfortably; each
@@ -4786,6 +4795,9 @@ function SplitMain(props) {
   const wsSubscribe = useCallback((cb) => workspaces.list.subscribe(cb), [workspaces])
   const wsSnapshot = useCallback(() => workspaces.list.getSnapshot(), [workspaces])
   const wsState = useSyncExternalStore(wsSubscribe, wsSnapshot)
+  // One Set per snapshot. Deriving it inline would build a new Set on every
+  // render and re-run the cell reconciliation below on every frame.
+  const archived = useMemo(() => archivedSessionIds(wsState), [wsState])
 
   const saved = useRef(loadLayout()).current
   // Shared with the sidebar control, which owns the picker for this panel.
@@ -4810,7 +4822,11 @@ function SplitMain(props) {
   }, [])
 
   const items = list?.ids?.map((id) => list.byId[id]).filter(Boolean) ?? []
+  // Archived Sessions stay in the catalog, so the pickers need their own filter;
+  // titles still resolve from `nonBlank`, which lets a released cell keep its
+  // name for the frame the reconciliation runs in.
   const nonBlank = items.filter((s) => !s.blank)
+  const pickable = pickableSessions(nonBlank, archived)
   const workspaceItems = wsState?.items ?? []
 
   // Track running state per session for the status dots.
@@ -4859,11 +4875,12 @@ function SplitMain(props) {
       const ranked = []
       for (const id of ws.sessionIds ?? []) {
         const row = list?.byId?.[id]
-        if (row && !row.blank) ranked.push(row)
+        // A project tile must not keep offering a Session the reader archived.
+        if (row && !row.blank && !isArchivedSession(archived, id)) ranked.push(row)
       }
       return ranked
     },
-    [workspaceItems, list],
+    [workspaceItems, list, archived],
   )
 
   /**
@@ -4877,14 +4894,19 @@ function SplitMain(props) {
     (raw) => {
       const payload = String(raw ?? '').trim()
       if (!payload) return null
-      if (list?.byId?.[payload]) return { t: 'session', id: payload }
+      if (list?.byId?.[payload]) {
+        // A dragged archived row still carries its id: the Sidebar hides it, but
+        // a stale drag or an external payload can reach this handler.
+        if (isArchivedSession(archived, payload)) return null
+        return { t: 'session', id: payload }
+      }
       const ws = workspaceItems.find((w) => String(w.workspaceId) === payload)
       if (!ws) return null
       const workspaceId = String(ws.workspaceId)
       const first = sessionsOfWorkspace(workspaceId)[0]
       return { t: 'workspace', ws: workspaceId, id: first?.id ?? null }
     },
-    [list, workspaceItems, sessionsOfWorkspace],
+    [list, workspaceItems, sessionsOfWorkspace, archived],
   )
 
   useEffect(() => {
@@ -4902,20 +4924,14 @@ function SplitMain(props) {
   }, [rows, cols, cells, zooms])
 
   // Drop stale references: a pinned cell whose Session left the catalog empties,
-  // and a Workspace cell keeps its scope but lets the dead Session go.
+  // and a Workspace cell keeps its scope but lets the dead Session go. Archiving
+  // takes this same path because it is a Workspace-registry fact: the catalog
+  // never drops the Session, so "still known" alone would hold the cell forever.
   useEffect(() => {
     if (list?.phase !== 'ready') return
     const known = new Set(list.ids ?? [])
-    setCells((prev) => {
-      let changed = false
-      const next = prev.map((cell) => {
-        if (cell === null || cell.id === null || known.has(cell.id)) return cell
-        changed = true
-        return cell.t === 'workspace' ? { ...cell, id: null } : null
-      })
-      return changed ? next : prev
-    })
-  }, [list])
+    setCells((prev) => reconcileCells(prev, known, archived))
+  }, [list, archived])
 
   // Tiles butt against each other: no gap, no radius. Each tile draws its own
   // leading and top hairline, and the grid carries the trailing and bottom
@@ -4975,6 +4991,7 @@ function SplitMain(props) {
         uiSession,
         remote,
         nonBlank,
+        pickable,
         workspaceItems,
         sessionsOfWorkspace,
         active: i === activeCell,
@@ -5022,6 +5039,7 @@ function SplitCell(props) {
     uiSession,
     remote,
     nonBlank,
+    pickable,
     workspaceItems,
     sessionsOfWorkspace,
     active,
@@ -5038,8 +5056,9 @@ function SplitCell(props) {
   } = props
   const sid = cell?.id ?? null
   const sess = sid === null ? null : (nonBlank.find((s) => s.id === sid) ?? null)
-  // A Workspace cell offers only that Workspace's Sessions in its picker.
-  const options = cell?.t === 'workspace' ? sessionsOfWorkspace(cell.ws) : nonBlank
+  // A Workspace cell offers only that Workspace's Sessions in its picker; the
+  // free pickers skip archived Sessions, which the catalog still lists.
+  const options = cell?.t === 'workspace' ? sessionsOfWorkspace(cell.ws) : pickable
   const wsTitle =
     cell?.t === 'workspace'
       ? (workspaceItems.find((w) => String(w.workspaceId) === cell.ws)?.title ??

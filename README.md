@@ -35,6 +35,11 @@ progress on one screen instead of clicking through tabs.
   reading as Chat, and hides itself when the projection is absent.
 - **Session or project per tile.** Pin one session, or pin a project and switch
   between that project's sessions inside the tile.
+- **Archiving frees the tile.** Archive a session in the sidebar and any tile
+  holding it lets go as soon as the Host confirms the archive (one update later;
+  the grid keeps no optimistic copy): a session tile empties, a project tile only
+  drops the session and keeps its scope. Archived sessions leave the tile pickers
+  and drop resolution, and come back when you unarchive them.
 - **Real-time status.** A dot on each title shows whether the session is working,
   and a colored project badge before the title keeps the Session's project
   visible after the tile has been open for a while.

@@ -99,6 +99,21 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     ])
   })
 
+  it('keeps the archived-Session set the grid filters against', () => {
+    // Archiving never removes a Session from `ctx.sessions.list`, so this set is
+    // the only way a tile learns that its Session was put away.
+    //
+    // The whole declaration, not the bare name: `archivedSessionIds` appears
+    // seven times in this file (the snapshot field, a private field, two
+    // `replaceArchived` parameters, a doc comment), so a bare-word assertion
+    // stays green while the snapshot field — the only occurrence this plugin
+    // reads — is renamed away. That is the exact silent failure the gate exists
+    // to catch, so the fragment keeps the type and the terminator.
+    includes('dsh-api-workspace-controller/lib/types/client/model.d.ts', [
+      "readonly archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds'];",
+    ])
+  })
+
   it('keeps file upload and file-reference candidates', () => {
     includes('dsh-client-file-upload/lib/types/client/contract.d.ts', [
       'upload(',
