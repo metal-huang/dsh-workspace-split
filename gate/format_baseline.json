@@ -1,6 +1,3 @@
 {
-  "files": [
-    "packages/dsh-workspace-split/index.js",
-    "packages/dsh-workspace-split/src/client.js"
-  ]
+  "files": ["packages/dsh-workspace-split/index.js"]
 }
