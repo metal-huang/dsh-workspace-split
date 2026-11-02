@@ -2,13 +2,15 @@
 
 [![npm](https://img.shields.io/npm/v/@metal-huang/dsh-workspace-split)](https://www.npmjs.com/package/@metal-huang/dsh-workspace-split)
 [![license](https://img.shields.io/npm/l/@metal-huang/dsh-workspace-split)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.2-blue)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.5-blue)](https://github.com/deepseek-ai/deepseek-harness)
 
 English · [中文说明](README.zh-CN.md)
 
 Keep several **live** sessions of DeepSeek Harness side by side and type in any
 of them. Built for supervising several projects at once: you see every session's
 progress on one screen instead of clicking through tabs.
+
+Host persistence uses the native defineDomain/domainTable API and requires Harness 0.2.1-rc.5. One plugin-owned domain handle serves all load/save requests and closes after outstanding requests settle. Browser layout persistence is unchanged.
 
 <!-- A screenshot lives at docs/assets/split-view.png once captured. -->
 

@@ -61,5 +61,12 @@
         "@deepseek-ai/dsh-client-file-upload"
       ]
     }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-storage-domain": "0.2.1-rc.5"
   }
 }

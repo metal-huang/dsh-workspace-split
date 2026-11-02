@@ -2,12 +2,14 @@
 
 [![npm](https://img.shields.io/npm/v/@metal-huang/dsh-workspace-split)](https://www.npmjs.com/package/@metal-huang/dsh-workspace-split)
 [![license](https://img.shields.io/npm/l/@metal-huang/dsh-workspace-split)](LICENSE)
-[![DeepSeek Harness](https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.2-blue)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.5-blue)](https://github.com/deepseek-ai/deepseek-harness)
 
 [English](README.md) · 中文说明
 
 把多个**正在运行**的 DeepSeek Harness 会话并排放在同一个窗口里，每个格子都能
 直接输入。为「同时盯多个项目」而做：一屏看完所有会话的进展，不用来回切标签。
+
+Host 持久化使用原生 defineDomain/domainTable API，要求 Harness 0.2.1-rc.5。插件拥有的单个 domain 句柄处理全部加载与保存请求，并在待完成请求结束后关闭。浏览器布局持久化不变。
 
 <!-- 截图放在 docs/assets/split-view.png，拍好后取消注释。 -->
 
