@@ -5281,7 +5281,7 @@ function SplitCell(props) {
         ),
       },
       sid === null
-        ? h(NewChatCell, { index, remote, target: newTarget, onCreated, ready })
+        ? h(NewChatCell, { index, sessions, target: newTarget, onCreated, ready })
         : h(CellView, { sessions, sessionId: sid, fileUpload, uiSession, remote }),
     ),
   )
@@ -5308,7 +5308,7 @@ function NewChatButton({ disabled, onClick }) {
 }
 
 /** One empty tile owns one stable creation request; rerenders do not create duplicates. */
-function NewChatCell({ index, remote, target, onCreated, ready }) {
+function NewChatCell({ index, sessions, target, onCreated, ready }) {
   const [error, setError] = useState(null)
   const [attempt, setAttempt] = useState(0)
   const created = useRef(onCreated)
@@ -5319,7 +5319,10 @@ function NewChatCell({ index, remote, target, onCreated, ready }) {
     let alive = true
     setError(null)
     cellDrafts
-      .ensure(index, JSON.parse(targetKey), (request) => remote.session.create(request))
+      .ensure(index, JSON.parse(targetKey), (request) =>
+        sessions.create({ ...request, creationKey: 'workspace-split:' + request.sessionId })
+          .then((sessionId) => ({ ok: true, value: { sessionId } })),
+      )
       .then(
         (id) => {
           if (alive) created.current(id)
@@ -5331,7 +5334,7 @@ function NewChatCell({ index, remote, target, onCreated, ready }) {
     return () => {
       alive = false
     }
-  }, [index, remote, targetKey, attempt, ready])
+  }, [index, sessions, targetKey, attempt, ready])
   return h(
     'div',
     { role: 'status', style: { padding: 12 } },
