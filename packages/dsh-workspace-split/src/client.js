@@ -4857,6 +4857,7 @@ function SplitMain(props) {
   const workspaces = props.__workspaces
   const fileUpload = props.__fileUpload
   const uiSession = props.__uiSession
+  const uiWorkspace = props.__uiWorkspace
   const remote = props.__remote
   const subscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions])
   const getSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions])
@@ -4884,6 +4885,12 @@ function SplitMain(props) {
     for (let i = 0; i < s.length; i++) arr[i] = normalizeCell(s[i])
     return arr
   })
+  const activeSessionId = cells[activeCell]?.id
+  useEffect(() => {
+    if (activeSessionId && list?.byId?.[activeSessionId] && uiSession.adapter.current.getSnapshot().key !== activeSessionId) {
+      uiWorkspace.openSession(activeSessionId, { preservePanel: true })
+    }
+  }, [activeSessionId, list?.phase, uiSession, uiWorkspace])
   // Reader overrides for the per-cell text scale, one multiplier per cell.
   const [zooms, setZooms] = useState(() => savedZooms(saved))
 
@@ -5074,7 +5081,11 @@ function SplitMain(props) {
         zoom: zooms[i] ?? 1,
         cellStyle,
         headerStyle: cellHeaderStyle,
-        onActivate: () => setActiveCell(i),
+        onActivate: () => {
+          setActiveCell(i)
+          const id = cells[i]?.id
+          if (id && uiSession.adapter.current.getSnapshot().key !== id) uiWorkspace.openSession(id, { preservePanel: true })
+        },
         onDragOverCell: () => setDragOver(i),
         onDragLeaveCell: () => setDragOver((current) => (current === i ? -1 : current)),
         onDropCell: (raw) => {
@@ -5351,6 +5362,7 @@ export const inject = [
   'workspaces',
   'fileUpload',
   'uiSession',
+  'uiWorkspace',
   'remote',
   'remote.session',
   'remote.permissionPresets',
@@ -5435,6 +5447,7 @@ export function apply(ctx) {
   const workspacesRef = ctx.workspaces
   const fileUploadRef = ctx.fileUpload
   const uiSessionRef = ctx.uiSession
+  const uiWorkspaceRef = ctx.uiWorkspace
   const remoteRef = ctx.remote
   ctx.slots.inject('main', () =>
     ctx.slots.register(
@@ -5448,6 +5461,7 @@ export function apply(ctx) {
           __workspaces: workspacesRef,
           __fileUpload: fileUploadRef,
           __uiSession: uiSessionRef,
+          __uiWorkspace: uiWorkspaceRef,
           __remote: remoteRef,
         })
       },
