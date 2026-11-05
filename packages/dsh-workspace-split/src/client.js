@@ -23,7 +23,17 @@ const { useState, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExter
 import { detectLanguage, t } from './i18n.js'
 
 // ---------- cell text scaling ----------
-import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
+import { ZOOM_STEP, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
+
+// ---------- track ratios ----------
+import {
+  equalRatios,
+  gutterPercents,
+  normalizeRatios,
+  ratioTemplate,
+  resizeTracks,
+} from './split-ratios.js'
+import { columnMins, rowMins } from './grid-limits.js'
 
 // ---------- composer metadata ----------
 import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
@@ -94,17 +104,6 @@ const LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS
 function CellZoom(props) {
   const { zoom, onZoom, header, children } = props
   const outerRef = useRef(null)
-  const [auto, setAuto] = useState(1)
-
-  useEffect(() => {
-    const el = outerRef.current
-    if (el === null || typeof ResizeObserver !== 'function') return undefined
-    const read = () => setAuto(autoZoomForWidth(el.getBoundingClientRect().width))
-    read()
-    const observer = new ResizeObserver(read)
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
 
   useEffect(() => {
     const el = outerRef.current
@@ -121,21 +120,20 @@ function CellZoom(props) {
     return () => el.removeEventListener('wheel', onWheel)
   }, [onZoom])
 
-  const scale = effectiveZoom(auto, zoom)
+  const scale = effectiveZoom(zoom)
   return h(
     'div',
     {
       ref: outerRef,
       style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
     },
-    // The header is outside the reader's per-cell override, but still follows
-    // the width-driven density factor. Every tile has the same width, so all
-    // headers get the same scale and stay aligned; only the transcript and
-    // composer follow a manual Ctrl+wheel override.
+    // The header stays at the app's own size: only the transcript and composer
+    // follow a manual Ctrl+wheel override, so two tiles never disagree on type
+    // size just because one of them is narrower.
     h(
       'div',
       {
-        style: { zoom: auto, flexShrink: 0, minWidth: 0 },
+        style: { flexShrink: 0, minWidth: 0 },
         'data-dsws-header-scale': 'true',
       },
       header,
@@ -1218,6 +1216,18 @@ function panelPosition(rect) {
   return { top, left }
 }
 
+/** Gutter chrome: a hairline that only shows on hover or keyboard focus. */
+const GUTTER_STYLES = `
+.dsws-gutter{position:absolute;top:0;bottom:0;width:9px;margin-left:-4px;background:transparent;border:0;padding:0;cursor:col-resize;touch-action:none;z-index:3}
+.dsws-gutter::after{content:'';position:absolute;top:0;bottom:0;left:4px;width:1px;background:transparent;transition:background 120ms ease}
+.dsws-gutter:hover::after,.dsws-gutter[data-active='true']::after{background:var(--dsw-alias-border-l1,#4a9fd8)}
+.dsws-gutter:focus-visible{outline:none}
+.dsws-gutter:focus-visible::after{left:3px;width:2px;background:var(--dsw-alias-border-l1,#4a9fd8)}
+.dsws-gutter-row{top:auto;bottom:auto;left:0;right:0;width:auto;height:9px;margin-left:0;margin-top:-4px;cursor:row-resize}
+.dsws-gutter-row::after{top:4px;bottom:auto;left:0;right:0;width:auto;height:1px}
+.dsws-gutter-row:focus-visible::after{top:3px;height:2px;width:auto;left:0}
+`
+
 /**
  * Install the stylesheet that places the sidebar control.
  *
@@ -1232,7 +1242,7 @@ function installSplitStyles() {
   if (existing !== null) return () => {}
   const style = document.createElement('style')
   style.id = SPLIT_STYLE_ID
-  style.textContent = `${SIDEBAR_STYLES}\n${TRANSCRIPT_STYLES}\n${PANEL_CORNER_STYLES}`
+  style.textContent = `${SIDEBAR_STYLES}\n${TRANSCRIPT_STYLES}\n${PANEL_CORNER_STYLES}\n${GUTTER_STYLES}`
   document.head.append(style)
   return () => style.remove()
 }
@@ -4886,6 +4896,16 @@ function SplitMain(props) {
   })
   // Reader overrides for the per-cell text scale, one multiplier per cell.
   const [zooms, setZooms] = useState(() => savedZooms(saved))
+  // Column weights, one per column. Saved with the rest of the layout so a drag
+  // survives a reload; a layout written before gutters existed carries none and
+  // renders equal columns, which is what those layouts already showed.
+  const [colRatios, setColRatios] = useState(() => normalizeRatios(saved?.colRatios, geometry.cols))
+  // Row weights, the vertical twin of `colRatios`; same persistence rules.
+  const [rowRatios, setRowRatios] = useState(() => normalizeRatios(saved?.rowRatios, geometry.rows))
+  // Text metrics the size floors are measured in. Read from the live grid so a
+  // reader who changed the app's text size gets floors that match it.
+  const [metrics, setMetrics] = useState({ fontPx: 15, linePx: 18, headerPx: 36 })
+  const gridRef = useRef(null)
 
   const zoomIn = useCallback((index, delta) => {
     setZooms((prev) => stepZoom(prev, index, delta))
@@ -4932,6 +4952,40 @@ function SplitMain(props) {
   }, [nonBlank.length])
 
   const total = rows * cols
+
+  useLayoutEffect(() => {
+    const el = gridRef.current
+    if (el === null) return undefined
+    const read = () => {
+      const style = getComputedStyle(el)
+      const fontPx = Number.parseFloat(style.fontSize)
+      const linePx = Number.parseFloat(style.lineHeight)
+      const base = fontPx > 0 ? fontPx : 15
+      // The tile header is a fixed strip above the transcript; a row floor that
+      // ignored it would leave room for a title and nothing else.
+      const header = el.querySelector('[data-dsws-header-scale]')
+      const headerPx = header === null ? 36 : header.getBoundingClientRect().height
+      setMetrics({
+        fontPx: base,
+        linePx: linePx > 0 ? linePx : base * 1.5,
+        headerPx: headerPx > 0 ? headerPx : 36,
+      })
+    }
+    read()
+    window.addEventListener('resize', read)
+    return () => window.removeEventListener('resize', read)
+  }, [gridRef])
+
+  // One floor per track: 18 characters wide, 4 lines tall, raised by the
+  // strictest reader override the track holds.
+  const colFloor = useMemo(
+    () => columnMins(zooms, cols, rows, metrics.fontPx),
+    [zooms, cols, rows, metrics.fontPx],
+  )
+  const rowFloor = useMemo(
+    () => rowMins(zooms, cols, rows, { linePx: metrics.linePx, headerPx: metrics.headerPx }),
+    [zooms, cols, rows, metrics.linePx, metrics.headerPx],
+  )
 
   const setCell = (idx, cell) => {
     setCells((prev) => {
@@ -4993,9 +5047,24 @@ function SplitMain(props) {
     setActiveCell((prev) => Math.min(prev, size - 1))
   }, [rows, cols])
 
+  // The grid outlives a shape change: pad a grown grid with equal columns and
+  // drop the weights of columns that no longer exist.
   useEffect(() => {
-    saveLayout({ rows, cols, cells, zooms, inSplit: window.__dswsInSplit ?? false })
-  }, [rows, cols, cells, zooms])
+    setColRatios((prev) => normalizeRatios(prev, cols))
+    setRowRatios((prev) => normalizeRatios(prev, rows))
+  }, [cols, rows])
+
+  useEffect(() => {
+    saveLayout({
+      rows,
+      cols,
+      cells,
+      zooms,
+      colRatios,
+      rowRatios,
+      inSplit: window.__dswsInSplit ?? false,
+    })
+  }, [rows, cols, cells, zooms, colRatios, rowRatios])
 
   // Drop stale references: a pinned cell whose Session left the catalog empties,
   // and a Workspace cell keeps its scope but lets the dead Session go. Archiving
@@ -5039,9 +5108,10 @@ function SplitMain(props) {
   // The grid IS the panel: no frame chrome, because the split toggle, the grid
   // picker and the way out all live on the sidebar control that opened it.
   const gridStyle = {
+    position: 'relative',
     display: 'grid',
-    gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-    gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+    gridTemplateColumns: ratioTemplate(colRatios),
+    gridTemplateRows: ratioTemplate(rowRatios),
     gap: 0,
     padding: 0,
     borderRight: '0.5px solid var(--dsw-alias-border-l3, #444)',
@@ -5054,7 +5124,7 @@ function SplitMain(props) {
 
   return h(
     'div',
-    { className: 'dsws-grid', style: gridStyle },
+    { className: 'dsws-grid', style: gridStyle, ref: gridRef },
     Array.from({ length: total }, (_, i) =>
       h(SplitCell, {
         key: i,
@@ -5096,6 +5166,119 @@ function SplitMain(props) {
           )
         },
         onZoom: (delta) => zoomIn(i, delta),
+      }),
+    ),
+    h(SplitGutters, {
+      axis: 'x',
+      ratios: colRatios,
+      mins: colFloor,
+      onChange: setColRatios,
+      gridRef,
+      label: t('split.gutter.label'),
+    }),
+    h(SplitGutters, {
+      axis: 'y',
+      ratios: rowRatios,
+      mins: rowFloor,
+      onChange: setRowRatios,
+      gridRef,
+      label: t('split.gutter.rowLabel'),
+    }),
+  )
+}
+
+/**
+ * Gutters: one draggable boundary between every two tracks.
+ *
+ * The strip is 9px wide but paints a hairline, so the grab target is generous
+ * while the grid still reads as split cells. Dragging writes the track template
+ * straight to the grid element and commits to React state only on pointer up: a
+ * state update per pointermove would re-render every cell — transcript,
+ * composer and all — on each frame.
+ * @param props - axis, weights, per-track floors, the setter, grid element, label.
+ * @returns one separator per boundary, or null below two tracks.
+ */
+function SplitGutters(props) {
+  const { axis, ratios, mins, onChange, gridRef, label } = props
+  const [active, setActive] = useState(-1)
+  const drag = useRef(null)
+  if (ratios.length < 2) return null
+  const across = axis === 'x'
+  const percents = gutterPercents(ratios)
+
+  const extentOf = () => {
+    const el = gridRef.current
+    if (el === null) return 0
+    const rect = el.getBoundingClientRect()
+    return across ? rect.width : rect.height
+  }
+  const pointerAt = (event) => (across ? event.clientX : event.clientY)
+
+  const begin = (index) => (event) => {
+    if (event.button !== 0) return
+    const sizePx = extentOf()
+    if (!(sizePx > 0)) return
+    event.preventDefault()
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch (_e) {
+      // A synthetic or already-released pointer has no capture to take; the drag
+      // still tracks because moves land on the strip itself.
+    }
+    drag.current = { index, start: pointerAt(event), sizePx, ratios, next: ratios }
+    setActive(index)
+    // A drag across cells would otherwise start selecting transcript text.
+    document.body.style.userSelect = 'none'
+  }
+
+  const move = (event) => {
+    const state = drag.current
+    if (state === null) return
+    const next = resizeTracks(state.ratios, state.index, pointerAt(event) - state.start, {
+      sizePx: state.sizePx,
+      mins,
+    })
+    state.next = next
+    const el = gridRef.current
+    if (el === null) return
+    const css = ratioTemplate(next)
+    if (across) el.style.gridTemplateColumns = css
+    else el.style.gridTemplateRows = css
+  }
+
+  const end = (event) => {
+    const state = drag.current
+    if (state === null) return
+    drag.current = null
+    setActive(-1)
+    document.body.style.userSelect = ''
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch (_e) {
+      // A cancelled pointer has no capture left to release.
+    }
+    if (state.next !== state.ratios) onChange(state.next)
+  }
+
+  const reset = () => onChange(equalRatios(ratios.length))
+
+  return h(
+    React.Fragment,
+    null,
+    percents.map((percent, index) =>
+      h('div', {
+        key: `${axis}-gutter-${index}`,
+        className: across ? 'dsws-gutter' : 'dsws-gutter dsws-gutter-row',
+        role: 'separator',
+        'aria-orientation': across ? 'vertical' : 'horizontal',
+        'aria-label': label,
+        'data-active': active === index ? 'true' : undefined,
+        style: across ? { left: `${percent}%` } : { top: `${percent}%` },
+        onPointerDown: begin(index),
+        onPointerMove: move,
+        onPointerUp: end,
+        onPointerCancel: end,
+        onDoubleClick: reset,
       }),
     ),
   )

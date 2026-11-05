@@ -2,6 +2,8 @@
   "split.button.toggle": "Toggle split view",
   "split.button.label": "Split",
   "split.grid.pick": "Choose grid size",
+  "split.gutter.label": "Resize columns",
+  "split.gutter.rowLabel": "Resize rows",
   "split.grid.trigger": "Grid {{rows}} × {{cols}}",
   "split.grid.preview.caption": "{{rows}} rows × {{cols}} cols",
   "split.grid.cellSuffix": "cells",
@@ -36,7 +38,6 @@
   "split.settings.row.hint": "Ten cells by default; raising past ten unlocks more. Applies immediately.",
   "split.sidebar.hint": "Left-click toggles, right-click picks the grid",
   "split.sidebar.tip.grid": "Grid {{rows}} × {{cols}}",
-
   "composer.placeholder": "Type a message…",
   "composer.send": "Send",
   "composer.sending": "Sending…",
@@ -117,13 +118,11 @@
   "toolrow.labels.errorOutput": "Error output",
   "toolrow.noOutput": "No output",
   "toolrow.result.name": "Tool result",
-
   "cell.loading": "Loading…",
   "cell.loading.waiting": "Waiting for the session list…",
   "cell.loadError.timeout": "Session open timeout ({{sec}} seconds)",
   "cell.loadError.generic": "Load failed: {{error}}",
   "cell.retry": "Retry",
-
   "turn.divider": "— Turn {{n}} —",
   "turn.error": "Turn failed: {{message}} ({{code}})",
   "turn.aborted": "Turn aborted",
@@ -132,7 +131,6 @@
   "turn.blocked": "Turn paused",
   "turnRail.preview.turn": "Turn {{n}}",
   "turnRail.aria.turn": "Turn {{n}}",
-
   "aria.split.panel": "Split view",
   "aria.chooseGrid": "Select rows and columns",
   "aria.gridCell": "{{rows}} rows × {{cols}} cols, {{count}} cells"
