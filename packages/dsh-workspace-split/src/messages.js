@@ -14,6 +14,8 @@ export const CHINESE = {
   'split.button.toggle': '切换分屏视图',
   'split.button.label': '分屏',
   'split.grid.pick': '选择网格大小',
+  'split.gutter.label': '调整列宽',
+  'split.gutter.rowLabel': '调整行高',
   'split.grid.trigger': '网格 {{rows}} × {{cols}}',
   'split.grid.preview.caption': '{{rows}} 行 × {{cols}} 列',
   'split.grid.cellSuffix': '格',
