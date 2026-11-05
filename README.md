@@ -20,6 +20,9 @@ does not hide a usable browser translation.
 
 - **A grid of live sessions.** Rows and columns are yours to choose, up to 5 × 6.
   Each tile holds a running session with its full transcript.
+- **Drag the gutters.** The divider between two tiles resizes the column or the
+  row, double-click restores the even split, and the ratio survives a reload. A
+  column stops at 18 characters wide; a row stops at its header plus four lines.
 - **Every tile is typable, attachments included.** Each cell has its own
   composer; paste, drop, or pick a PNG / JPEG / WebP / GIF, or attach any other
   file through the `+` menu. Uploads are staged through `ctx.fileUpload` and sent
