@@ -5305,6 +5305,24 @@ function SplitGutters(props) {
   const { axis, ratios, mins, onChange, gridRef, label } = props
   const [active, setActive] = useState(-1)
   const drag = useRef(null)
+
+  // Unmounting mid-drag (panel closed, grid reshaped) must not leave the body
+  // override or a captured pointer behind.
+  useEffect(
+    () => () => {
+      const state = drag.current
+      if (state === null) return
+      drag.current = null
+      document.body.style.userSelect = ''
+      try {
+        state.el?.releasePointerCapture(state.pointerId)
+      } catch (_e) {
+        // Nobody holds the capture any more.
+      }
+    },
+    [],
+  )
+
   if (ratios.length < 2) return null
   const across = axis === 'x'
   const percents = gutterPercents(ratios)
@@ -5317,8 +5335,32 @@ function SplitGutters(props) {
   }
   const pointerAt = (event) => (across ? event.clientX : event.clientY)
 
+  const stop = (commit) => {
+    const state = drag.current
+    if (state === null) return
+    drag.current = null
+    setActive(-1)
+    document.body.style.userSelect = ''
+    // Release the capture before anything else: a captured pointer that is never
+    // released keeps the resize cursor even over other windows.
+    try {
+      state.el?.releasePointerCapture(state.pointerId)
+    } catch (_e) {
+      // The browser may have dropped the capture already (window blur, cancel).
+    }
+    const el = gridRef.current
+    if (!commit && el !== null) {
+      // Put the committed template back. Clearing the inline style would leave
+      // the grid without one until the next React render, because React only
+      // writes a style it believes changed.
+      if (across) el.style.gridTemplateColumns = ratioTemplate(ratios)
+      else el.style.gridTemplateRows = ratioTemplate(ratios)
+    }
+    if (commit && state.next !== state.ratios) onChange(state.next)
+  }
+
   const begin = (index) => (event) => {
-    if (event.button !== 0) return
+    if (event.button !== 0 || drag.current !== null) return
     const sizePx = extentOf()
     if (!(sizePx > 0)) return
     event.preventDefault()
@@ -5328,10 +5370,38 @@ function SplitGutters(props) {
       // A synthetic or already-released pointer has no capture to take; the drag
       // still tracks because moves land on the strip itself.
     }
-    drag.current = { index, start: pointerAt(event), sizePx, ratios, next: ratios }
+    drag.current = {
+      index,
+      start: pointerAt(event),
+      sizePx,
+      ratios,
+      next: ratios,
+      el: event.currentTarget,
+      pointerId: event.pointerId,
+    }
     setActive(index)
     // A drag across cells would otherwise start selecting transcript text.
     document.body.style.userSelect = 'none'
+
+    // The drag has to end even when the element never sees an up event: the
+    // window can lose focus mid-drag (alt-tab, a system dialog) and a captured
+    // pointer left behind pins the resize cursor on the page.
+    const settle = () => {
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      window.removeEventListener('blur', onBlur)
+    }
+    const onUp = () => {
+      settle()
+      stop(true)
+    }
+    const onBlur = () => {
+      settle()
+      stop(false)
+    }
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    window.addEventListener('blur', onBlur)
   }
 
   const move = (event) => {
@@ -5347,20 +5417,6 @@ function SplitGutters(props) {
     const css = ratioTemplate(next)
     if (across) el.style.gridTemplateColumns = css
     else el.style.gridTemplateRows = css
-  }
-
-  const end = (event) => {
-    const state = drag.current
-    if (state === null) return
-    drag.current = null
-    setActive(-1)
-    document.body.style.userSelect = ''
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    } catch (_e) {
-      // A cancelled pointer has no capture left to release.
-    }
-    if (state.next !== state.ratios) onChange(state.next)
   }
 
   const reset = () => onChange(equalRatios(ratios.length))
@@ -5379,8 +5435,7 @@ function SplitGutters(props) {
         style: across ? { left: `${percent}%` } : { top: `${percent}%` },
         onPointerDown: begin(index),
         onPointerMove: move,
-        onPointerUp: end,
-        onPointerCancel: end,
+        onLostPointerCapture: () => stop(true),
         onDoubleClick: reset,
       }),
     ),
