@@ -1,0 +1,98 @@
+name: Open Code Review
+
+# Advisory semantic review. ci.yml remains the only merge gate. Automatic runs
+# are limited to same-repository, non-draft PRs; maintainers can explicitly
+# review a fork PR with /open-code-review or @open-code-review.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Non-matching comments and disabled runs get unique groups so they cannot
+# cancel a real review. A new commit cancels only the stale review for that PR.
+concurrency:
+  group: >-
+    ${{
+      vars.OCR_ENABLED == 'true'
+      && (
+        (
+          github.event_name == 'pull_request_target'
+          && github.event.pull_request.draft == false
+          && github.event.pull_request.head.repo.full_name == github.repository
+        )
+        || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.comment.user.type != 'Bot'
+          && (
+            github.event.comment.author_association == 'MEMBER'
+            || github.event.comment.author_association == 'OWNER'
+            || github.event.comment.author_association == 'COLLABORATOR'
+          )
+          && (
+            startsWith(github.event.comment.body, '/open-code-review')
+            || startsWith(github.event.comment.body, '@open-code-review')
+          )
+        )
+      )
+      && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
+      || format('noop-{0}', github.run_id)
+    }}
+  cancel-in-progress: true
+
+jobs:
+  code-review:
+    name: semantic-review
+    if: |
+      vars.OCR_ENABLED == 'true'
+      && (
+        (
+          github.event_name == 'pull_request_target'
+          && github.event.pull_request.draft == false
+          && github.event.pull_request.head.repo.full_name == github.repository
+        )
+        || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.comment.user.type != 'Bot'
+          && (
+            github.event.comment.author_association == 'MEMBER'
+            || github.event.comment.author_association == 'OWNER'
+            || github.event.comment.author_association == 'COLLABORATOR'
+          )
+          && (
+            startsWith(github.event.comment.body, '/open-code-review')
+            || startsWith(github.event.comment.body, '@open-code-review')
+          )
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # This action checks out the trusted base branch, fetches PR blobs without
+      # checking out the head, and reviews their Git diff. Never add a head
+      # checkout, project install, build, or test step to this secret-bearing job.
+      - name: Review pull request
+        uses: alibaba/open-code-review@891df1b63f380845d882a289a67a6e36c331120c # v1.13.6
+        with:
+          ocr_version: '1.13.6'
+          github_token: ${{ github.token }}
+          llm_url: ${{ secrets.OCR_LLM_URL }}
+          llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          llm_model: ${{ vars.OCR_LLM_MODEL }}
+          llm_use_anthropic: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          rule: .opencodereview/rule.json
+          background: ${{ github.event.pull_request.title || github.event.issue.title }}
+          effort: medium
+          review_concurrency: '4'
+          review_task_timeout: '15'
+          max_tokens_budget: '300000'
+          sticky_summary: 'true'
+          incremental: 'true'
+          resolve_outdated: 'false'
+          upload_artifacts: 'false'
