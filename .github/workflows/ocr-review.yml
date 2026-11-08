@@ -74,6 +74,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # issue_comment has no pull_request payload. Resolve the exact base/head
+      # through the API so manual fork reviews use the same range as auto runs.
+      - name: Resolve pull request context
+        if: github.event_name == 'issue_comment'
+        id: pr-context
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            })
+            core.setOutput('base_ref', pr.base.ref)
+            core.setOutput('head_sha', pr.head.sha)
+
       # This action checks out the trusted base branch, fetches PR blobs without
       # checking out the head, and reviews their Git diff. Never add a head
       # checkout, project install, build, or test step to this secret-bearing job.
@@ -81,6 +97,8 @@ jobs:
         uses: alibaba/open-code-review@891df1b63f380845d882a289a67a6e36c331120c # v1.13.6
         with:
           ocr_version: '1.13.6'
+          base_ref: ${{ steps.pr-context.outputs.base_ref }}
+          head_sha: ${{ steps.pr-context.outputs.head_sha }}
           github_token: ${{ github.token }}
           llm_url: ${{ secrets.OCR_LLM_URL }}
           llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
