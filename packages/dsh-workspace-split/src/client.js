@@ -2411,12 +2411,15 @@ function Composer(props) {
       }
       setSending(true)
       setError('')
+      let claimed = true
       try {
         const result = await session.command(text.trim())
         if (result?.ok !== true) {
           setError(t('composer.commandFailed', { error: remoteFailureText(result?.error) }))
         } else if (result.value?.matched !== true) {
-          setError(t('composer.unknownCommand', { name: line.name }))
+          // Skill invocations are literal prompt text; only the Host command
+          // registry can claim this line before the native skill loader sees it.
+          claimed = false
         } else {
           onText('')
           setExpanded(false)
@@ -2426,7 +2429,7 @@ function Composer(props) {
       } finally {
         setSending(false)
       }
-      return
+      if (claimed) return
     }
     if (uploading || failed !== undefined) return
     if (text.trim() === '' && images.length === 0 && files.length === 0) return
