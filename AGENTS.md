@@ -105,7 +105,7 @@ npm run release      # 构建 + 复制到 .release/，桌面 profile 用的快�
 没有运行时依赖（`dependencies` / `peerDependencies` / `optionalDependencies`
 都查）——运行时依赖必须打进 bundle。
 
-上面这条只更新本地桌面快照；对外发版（升版本 → 打 `v*` 标签 → 推标签 → CI 发 npm 与 GitHub Release）的完整顺序与坑见 `.agents/docs/SPEC_发布与交付流程.md`（本机文档，不随仓库分发）。
+上面这条只更新本地桌面快照；对外发版只需把插件版本提交推进 `main`，CI 会在版本号变化或当前版本缺标签时自动打 `v*` 标签并发 npm 与 GitHub Release。手动恢复只能在既有版本标签上触发；完整顺序与坑见 `.agents/docs/SPEC_发布与交付流程.md`（本机文档，不随仓库分发）。
 
 ## 文档
 
