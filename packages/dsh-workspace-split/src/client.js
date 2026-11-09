@@ -27,6 +27,7 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 
 // ---------- composer metadata ----------
 import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
+import { admitSlashLine } from './composer-slash.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
@@ -2405,31 +2406,37 @@ function Composer(props) {
     if (session === undefined || session === null || sending) return
     const line = parseSlashLine(text)
     if (line !== null) {
-      if (images.length > 0 || files.length > 0) {
-        setError(t('composer.commandAttachments'))
-        return
-      }
+      const hasAttachments = images.length > 0 || files.length > 0
       setSending(true)
       setError('')
-      let claimed = true
+      let admission
       try {
-        const result = await session.command(text.trim())
-        if (result?.ok !== true) {
-          setError(t('composer.commandFailed', { error: remoteFailureText(result?.error) }))
-        } else if (result.value?.matched !== true) {
-          // Skill invocations are literal prompt text; only the Host command
-          // registry can claim this line before the native skill loader sees it.
-          claimed = false
-        } else {
-          onText('')
-          setExpanded(false)
-        }
-      } catch (failure) {
-        setError(t('composer.commandFailed', { error: thrownText(failure) }))
+        admission = await admitSlashLine(session, remote.skills, text.trim(), hasAttachments)
       } finally {
         setSending(false)
       }
-      if (claimed) return
+      if (admission.action === 'error') {
+        const error =
+          admission.error instanceof Error
+            ? thrownText(admission.error)
+            : remoteFailureText(admission.error)
+        setError(t(admission.key, { error }))
+        return
+      }
+      if (admission.action === 'command') {
+        onText('')
+        setExpanded(false)
+        return
+      }
+      if (admission.action === 'unknown-command') {
+        setError(t('composer.unknownCommand', { name: line.name }))
+        return
+      }
+      if (admission.action === 'attachments') {
+        setError(t('composer.commandAttachments'))
+        return
+      }
+      // Only a listed user-invocable skill falls through to the prompt path.
     }
     if (uploading || failed !== undefined) return
     if (text.trim() === '' && images.length === 0 && files.length === 0) return
@@ -2673,6 +2680,10 @@ function Composer(props) {
       h('textarea', {
         ref: textareaRef,
         value: text,
+        // The draft is frozen while the Host admits it. Otherwise a slow command
+        // or skill lookup lets new keystrokes in, and success clears them along
+        // with the snapshot that was actually sent.
+        readOnly: sending,
         onChange: (event) => {
           onText(event.target.value)
           mention.refresh(event.target.value, event.target.selectionStart)
@@ -5359,6 +5370,7 @@ export const inject = [
   'remote.permissionPresets',
   'remote.fileReferences',
   'remote.sessionReferenceResolver',
+  'remote.skills',
 ]
 
 export function apply(ctx) {

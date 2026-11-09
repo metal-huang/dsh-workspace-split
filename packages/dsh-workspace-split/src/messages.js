@@ -85,6 +85,7 @@ export const CHINESE = {
   'composer.permission.unavailable': '当前 Host 没有组合权限预设插件',
   'composer.unknownCommand': '未知命令：{{name}}',
   'composer.commandFailed': '命令执行失败：{{error}}',
+  'composer.skillListFailed': '技能目录读取失败：{{error}}',
   'composer.commandAttachments': '带附件的命令暂不支持在分屏里执行',
   'composer.mention.empty': '没有匹配的文件或会话',
   'composer.image.remove': '移除图片',

@@ -82,6 +82,18 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     includes('dsh-permission-presets/lib/typert.remote-client.d.ts', ['catalog'])
   })
 
+  it('keeps the user-skill catalog used by slash admission', () => {
+    includes('dsh-api-session-controller/lib/types/types.d.ts', [
+      'SkillListRequest',
+      'SkillListValue',
+      'SkillEntry',
+    ])
+    includes('dsh-api-session-controller/lib/typert.remote-client.d.ts', [
+      'list: (request: SkillListRequest',
+      "'skills/list'",
+    ])
+  })
+
   it('keeps the pending-interaction registry and both answer paths', () => {
     includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
       'sessionStatus',
