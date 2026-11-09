@@ -1,0 +1,86 @@
+name: Update PR Branches
+
+# Advancing main refreshes every open, non-draft PR. Each update then triggers
+# that PR's normal CI; successful CI starts OCR through the existing workflow_run.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Serialize main updates. Cancelling an older run could leave a subset of PRs
+# permanently unrefreshed when two merges arrive close together.
+concurrency:
+  group: update-main-pr-branches
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: update-open-prs
+    if: vars.AUTO_UPDATE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # API-only workflow: never check out or execute code from any PR branch.
+      # GITHUB_TOKEN updates do not emit downstream pull_request events. A
+      # maintainer PAT also supports maintainer-can-modify fork branches, which
+      # an App installed only on the base repository cannot write.
+      - name: Request branch updates
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.AUTO_UPDATE_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'open',
+              base: 'main',
+              per_page: 100,
+            })
+
+            let requested = 0
+            let skipped = 0
+            let blocked = 0
+            let failed = 0
+            for (const pr of pulls) {
+              if (pr.draft) {
+                core.info(`#${pr.number}: draft; skipping`)
+                skipped++
+                continue
+              }
+
+              try {
+                // The list snapshot is the expected head. If its author pushes
+                // concurrently, GitHub rejects this update instead of moving a
+                // newer head the maintainer has not seen.
+                await github.rest.pulls.updateBranch({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                  expected_head_sha: pr.head.sha,
+                })
+                core.info(`#${pr.number}: update requested for ${pr.head.sha}`)
+                requested++
+              } catch (error) {
+                // Already current, merge conflicts, deleted forks, and forks
+                // without maintainer edits need no infrastructure retry. Keep
+                // processing other PRs even for unexpected API failures, then
+                // mark the whole run failed so those failures stay visible.
+                const expected = error.status === 403 || error.status === 422
+                const message = `#${pr.number}: cannot update automatically (${error.status}): ${error.message}`
+                if (expected) {
+                  core.warning(message)
+                  blocked++
+                } else {
+                  core.error(message)
+                  failed++
+                }
+              }
+            }
+            core.info(
+              `PR branch updates: ${requested} requested, ${skipped} draft skipped, ${blocked} blocked, ${failed} failed`,
+            )
+            if (failed > 0) core.setFailed(`${failed} PR branch update request(s) failed`)
