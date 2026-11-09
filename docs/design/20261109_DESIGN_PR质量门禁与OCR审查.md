@@ -10,7 +10,9 @@
 > **后续补充（2026-11-09）**：`main` 更新后通过 GitHub API 自动更新所有目标为
 > `main` 的非草稿 PR，使存量 PR 自动补跑 CI 并串联 OCR。更新携带列表读取时的
 > `expected_head_sha`，防止覆盖作者并发推送；冲突、fork 未授权与已是最新只记录结果，
-> 不检出或执行 PR 代码。该流程不使用 merge queue，PR 数量明显增加后再重新评估。
+> 不检出或执行 PR 代码。内置 `GITHUB_TOKEN` 的更新不会触发下游 CI，因此使用仅拥有
+> 主仓库内容读写与 PR 读写权限的维护者细粒度 PAT；它还需遵循 fork 的
+> maintainer-can-modify 授权。该流程不使用 merge queue，PR 数量明显增加后再重新评估。
 
 ## 一、目标与边界
 
