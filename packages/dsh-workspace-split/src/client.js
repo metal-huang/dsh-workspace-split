@@ -29,6 +29,7 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
 import { admitSlashLine } from './composer-slash.js'
 import { promptWhileCurrent } from './composer-send.js'
+import { createEscapeStopHandler, sessionStoppable } from './escape-stop.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
@@ -2306,38 +2307,46 @@ function DraftFileStrip(props) {
   )
 }
 
-/** Popups and editable header fields own Escape before task cancellation. */
+/** Popups, embedded tools and editable header fields own Escape before cancellation. */
 function escapeLayerOwnsKey(event) {
-  if (event.target instanceof Element && event.target.closest('input, select')) return true
+  if (!(event.target instanceof Element)) return true
+  const excluded = 'input, select, iframe, .xterm, [inert], [data-approval-key]'
+  if (event.target.closest(excluded) !== null) return true
   const layers = document.querySelectorAll(
     '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
   )
   return [...layers].some((node) => node.getClientRects().length > 0)
 }
 
-/** Bind an unclaimed Escape to the visible active cell's existing Stop action. */
-function useCellEscapeStop(active, running, stop, textareaRef) {
-  const pending = useRef(false)
+/** Escape stops a tile only when the keyboard is actually inside that tile. */
+function escapeBelongsToCell(event, textareaRef) {
+  const area = textareaRef.current
+  if (area === null || area.getClientRects().length === 0) return false
+  if (!(event.target instanceof Element)) return false
+  const cell = area.closest('.dsws-cell')
+  return cell !== null && event.target.closest('.dsws-cell') === cell
+}
+
+/** Bind the native two-Escape stop gesture to the visible active cell. */
+function useCellEscapeStop(enabled, stop, textareaRef, timeoutMs) {
+  // Keep the lock across effect re-installs: setStopping changes stop's identity
+  // as soon as the confirming press fires, while the RPC is still in flight.
+  const cancelling = useRef(false)
   useEffect(() => {
-    if (!active || !running) return undefined
-    const onEscape = (event) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || event.repeat || event.isComposing)
-        return
-      if (!textareaRef.current?.getClientRects().length || pending.current) return
-      // Menus and modal layers own their first Escape, including portalled
-      // session pickers. Capturing the unclaimed key keeps the hidden main
-      // conversation's shortcut from stopping a different Session.
-      if (escapeLayerOwnsKey(event)) return
-      event.preventDefault()
-      event.stopImmediatePropagation()
-      pending.current = true
-      Promise.resolve(stop()).finally(() => {
-        pending.current = false
-      })
+    if (!enabled) return undefined
+    const handler = createEscapeStopHandler({
+      stop,
+      timeoutMs,
+      ownsLayer: escapeLayerOwnsKey,
+      belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),
+      cancelling,
+    })
+    document.addEventListener('keydown', handler.onKeyDown, true)
+    return () => {
+      handler.reset()
+      document.removeEventListener('keydown', handler.onKeyDown, true)
     }
-    document.addEventListener('keydown', onEscape, true)
-    return () => document.removeEventListener('keydown', onEscape, true)
-  }, [active, running, stop, textareaRef])
+  }, [enabled, stop, textareaRef, timeoutMs])
 }
 
 /**
@@ -2358,6 +2367,8 @@ function Composer(props) {
     onText,
     running,
     active,
+    stoppable,
+    stopSequenceMs,
     fileUpload,
     occupancy,
     controls,
@@ -2554,7 +2565,7 @@ function Composer(props) {
     }
   }, [session, stopping, setError])
 
-  useCellEscapeStop(active, running, stop, textareaRef)
+  useCellEscapeStop(active && stoppable, stop, textareaRef, stopSequenceMs)
 
   const onKeyDown = (event) => {
     if (mention.onKeyDown(event)) return
@@ -3959,7 +3970,7 @@ function PendingSeat(props) {
 
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
-  const { sessions, sessionId, fileUpload, uiSession, remote, active } = props
+  const { sessions, sessionId, fileUpload, uiSession, remote, active, stopSequenceMs } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
@@ -3983,6 +3994,7 @@ function CellView(props) {
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
   const running = sessionState?.running === true
+  const stoppable = sessionStoppable(sessionState)
 
   // Host inbox projection: queued prompts are not in the event window until the
   // Host admits them, so the dock needs this separate source.
@@ -4210,6 +4222,8 @@ function CellView(props) {
         onText: setInputText,
         running,
         active,
+        stoppable,
+        stopSequenceMs,
         fileUpload,
         occupancy,
         controls,
@@ -4929,6 +4943,7 @@ function SplitMain(props) {
   const fileUpload = props.__fileUpload
   const uiSession = props.__uiSession
   const remote = props.__remote
+  const stopSequenceMs = props.__stopSequenceMs ?? 500
   const subscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions])
   const getSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions])
   const list = useSyncExternalStore(subscribe, getSnapshot)
@@ -5141,6 +5156,7 @@ function SplitMain(props) {
         projectById,
         sessionsOfWorkspace,
         active: i === activeCell,
+        stopSequenceMs,
         dragOver: dragOver === i,
         zoom: zooms[i] ?? 1,
         cellStyle,
@@ -5190,6 +5206,7 @@ function SplitCell(props) {
     projectById,
     sessionsOfWorkspace,
     active,
+    stopSequenceMs,
     dragOver,
     zoom,
     cellStyle,
@@ -5327,7 +5344,15 @@ function SplitCell(props) {
               ? t('split.workspace.empty', { ws: wsTitle })
               : t('split.cell.pickFromAbove'),
           )
-        : h(CellView, { sessions, sessionId: sid, fileUpload, uiSession, remote, active }),
+        : h(CellView, {
+            sessions,
+            sessionId: sid,
+            fileUpload,
+            uiSession,
+            remote,
+            active,
+            stopSequenceMs,
+          }),
     ),
   )
 }
@@ -5423,6 +5448,7 @@ export const inject = [
   'workspaces',
   'fileUpload',
   'uiSession',
+  'shortcuts',
   'remote',
   'remote.session',
   'remote.permissionPresets',
@@ -5508,6 +5534,7 @@ export function apply(ctx) {
   const workspacesRef = ctx.workspaces
   const fileUploadRef = ctx.fileUpload
   const uiSessionRef = ctx.uiSession
+  const stopSequenceMs = ctx.shortcuts.stopSequenceMs
   const remoteRef = ctx.remote
   ctx.slots.inject('main', () =>
     ctx.slots.register(
@@ -5521,6 +5548,7 @@ export function apply(ctx) {
           __workspaces: workspacesRef,
           __fileUpload: fileUploadRef,
           __uiSession: uiSessionRef,
+          __stopSequenceMs: stopSequenceMs,
           __remote: remoteRef,
         })
       },
