@@ -19,6 +19,7 @@ import {
   buildTranscript,
   formatDuration,
   groupProcessRows,
+  latestEventTime,
   runningHint,
   streamReasoning,
   streamText,
@@ -937,5 +938,91 @@ describe('groupProcessRows', () => {
   it('leaves non-process rows untouched', () => {
     const flat = buildTranscript([prompt('go')], t)
     assert.deepEqual(groupProcessRows(flat), flat)
+  })
+
+  it('settles every tool and the group when the Host is no longer running', () => {
+    const rows = groupProcessRows(
+      [{ kind: 'tool', key: 'a', turn: 1, time: 1000, tool: { name: 'bash', running: true } }],
+      false,
+    )
+    assert.equal(rows[0].running, false)
+    assert.equal(rows[0].items[0].tool.running, false)
+  })
+})
+
+describe('retry visibility and turn settlement', () => {
+  const verbose = (key, vars = {}) => `${key}|${JSON.stringify(vars)}`
+  const scheduled = (data) => surface('llm/retry', data)
+  const started = (data) => surface('llm/retry-started', data)
+  const retry = (extra = {}) => ({
+    retryId: 'retry-1',
+    turn: 1,
+    step: 1,
+    retry: 2,
+    maxRetries: 5,
+    delayMs: 1500,
+    failure: { code: 'RATE_LIMIT', message: 'slow down' },
+    ...extra,
+  })
+
+  it('shows the scheduled attempt, budget, backoff, and failure code', () => {
+    const rows = buildTranscript([scheduled(retry())], verbose)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'notice')
+    assert.equal(rows[0].text.startsWith('retry.scheduled|'), true)
+    assert.equal(rows[0].text.includes('"attempt":"2/5"'), true)
+    assert.equal(rows[0].text.includes('"delay":"1.5s"'), true)
+    assert.equal(rows[0].text.includes('"code":"RATE_LIMIT"'), true)
+  })
+
+  it('updates the scheduled row when the retry actually starts', () => {
+    const rows = buildTranscript(
+      [scheduled(retry()), started({ retryId: 'retry-1', turn: 1, step: 1, retry: 2 })],
+      verbose,
+    )
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].text.startsWith('retry.startedDelayed|'), true)
+    assert.equal(rows[0].text.includes('"attempt":"2/5"'), true)
+    assert.equal(rows[0].text.includes('"code":"RATE_LIMIT"'), true)
+  })
+
+  it('settles live streams and running tools when a turn closes', () => {
+    const call = toolCall('call-1', 'bash', '{}')
+    call.event.data.turn = 1
+    const rows = buildTranscript(
+      [
+        live(1, 1, delta(0, 'partial')),
+        call,
+        surface('turn/end', { turn: 1, reason: { kind: 'completed' } }),
+      ],
+      t,
+    )
+    assert.equal(rows[0].streaming, false)
+    assert.equal(rows[0].endedAt, 0)
+    assert.equal(rows[1].tool.running, false)
+    assert.equal(rows[1].endedAt, 0)
+  })
+
+  it('does not leak an unanswered tool from an earlier turn into the status line', () => {
+    const entries = [
+      toolCall('old-tool', 'bash', '{}'),
+      { type: 'event', event: { type: 'turn/start', seq: 2, time: 0, data: { turn: 2 } } },
+      live(2, 1, { type: 'block-start', index: 0, blockType: 'reasoning' }),
+    ]
+    assert.equal(runningHint(entries, t), 'running.thinking')
+  })
+})
+
+describe('latestEventTime', () => {
+  it('returns the newest event timestamp or undefined', () => {
+    assert.equal(
+      latestEventTime([
+        surface('turn/start', { turn: 1 }),
+        surface('turn/start', { turn: 2 }, { time: 42 }),
+      ]),
+      42,
+    )
+    assert.equal(latestEventTime([]), undefined)
+    assert.equal(latestEventTime(undefined), undefined)
   })
 })
