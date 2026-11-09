@@ -104,6 +104,10 @@ jobs:
           llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
           llm_model: ${{ vars.OCR_LLM_MODEL }}
           llm_use_anthropic: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          # The action default disables thinking. Kimi-for-coding supports
+          # native reasoning effort, which semantic review should retain.
+          llm_extra_body: '{}'
+          llm_reasoning_effort: high
           rule: .opencodereview/rule.json
           background: ${{ github.event.pull_request.title || github.event.issue.title }}
           effort: medium
