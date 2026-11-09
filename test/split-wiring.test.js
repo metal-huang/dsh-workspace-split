@@ -59,6 +59,10 @@ const WIRING = [
   'readOnly: sending',
   'latestSessionRef = useRef(session) useLayoutEffect(() => { latestSessionRef.current = session }, [session])',
   'outcome = await promptWhileCurrent(session, isCurrentSession, async () => {',
+  'const handler = createEscapeStopHandler({',
+  "document.addEventListener('keydown', handler.onKeyDown, true)",
+  'belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),',
+  'const stopSequenceMs = ctx.shortcuts.stopSequenceMs',
 ]
 
 describe('split-cell wiring', () => {

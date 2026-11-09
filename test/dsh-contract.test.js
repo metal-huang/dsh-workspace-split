@@ -94,6 +94,12 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     ])
   })
 
+  it('keeps the native Escape sequence interval', () => {
+    includes('dsh-client-shortcuts/lib/types/client/index.d.ts', [
+      'readonly stopSequenceMs: number;',
+    ])
+  })
+
   it('keeps the pending-interaction registry and both answer paths', () => {
     includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
       'sessionStatus',
