@@ -74,3 +74,14 @@ workflow。OCR 尚未调用模型，不能据此声称行级评论已经实测�
 
 跨平台锁文件修复与 `npm ci`、浏览器 E2E 必检、第二位维护者批准及 CODEOWNERS 均不在
 本次落地范围内。
+
+## 后续修正与实测（2026-11-09）
+
+- OCR 已配置 Kimi Coding：`kimi-for-coding`、OpenAI Chat Completions、`high` 推理。
+- fork PR #1 的手动验收运行 42599111065 成功，Kimi 调用、差异解析、汇总与两条
+  行级评论均已回写，证明模型与评论链路可用。
+- 随后按维护者要求改为 CI `workflow_run` 成功后才自动审查。所有非草稿 PR 都覆盖，
+  包括 fork；基础门禁失败、`main` 推送、Draft、已关闭或 head 已变化的 PR 不调用模型。
+- OCR 通过当前开放 PR 列表按 CI head 查找目标，避免依赖 fork 中可能为空的
+  `workflow_run.pull_requests`，也避免同一 head 关联多个 PR 时误选陈旧首项。
+- `checkpoint_range` 已开启，代码 head 未变化的重复 CI 不重复审查相同范围。
