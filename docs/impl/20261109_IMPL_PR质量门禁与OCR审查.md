@@ -85,3 +85,8 @@ workflow。OCR 尚未调用模型，不能据此声称行级评论已经实测�
 - OCR 通过当前开放 PR 列表按 CI head 查找目标，避免依赖 fork 中可能为空的
   `workflow_run.pull_requests`，也避免同一 head 关联多个 PR 时误选陈旧首项。
 - `checkpoint_range` 已开启，代码 head 未变化的重复 CI 不重复审查相同范围。
+- 为覆盖 Update branch 产生的新 head，OCR 在调用模型前复用历史检查点中的 head 与
+  merge-base，使用 `git patch-id --stable --verbatim` 比较实际补丁。只有配置指纹相同、
+  历史记录完整且补丁等价时才跳过；对象缺失、记录异常与比较失败都回退到正常审查。
+- Git 验证中，PR #1 模拟合并最新 `main` 前后的 patch-id 一致；PR #2 的不同补丁
+  得到不同 ID。比较保留空白差异，YAML 缩进变化不会被误判为等价。
