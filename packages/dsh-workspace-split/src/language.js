@@ -7,6 +7,11 @@ function hostLanguageOf(hostDocument) {
   return hostDocument?.documentElement?.lang ?? ''
 }
 
+/** Whether this tag selects a dictionary we actually ship, not just English. */
+export function isSupportedLanguage(language) {
+  return /^(?:zh|en)(?:[-_]|$)/i.test(language ?? '')
+}
+
 function browserLanguageOf(browserNavigator) {
   if (!browserNavigator) return ''
   return (
@@ -18,13 +23,15 @@ function browserLanguageOf(browserNavigator) {
 }
 
 /**
- * Follow the Host document language before the browser preference. Chinese
- * browsers keep Chinese; unsupported or absent languages fall back to English.
+ * Prefer a supported Host language, then a supported browser language, then
+ * English. An unsupported Host must not hide a usable browser translation.
  * Optional arguments let the regression tests supply both sides directly.
  */
 export function detectLanguage(
   hostDocument = globalThis.document,
   browserNavigator = globalThis.navigator,
 ) {
-  return languageTagToLocale(hostLanguageOf(hostDocument) || browserLanguageOf(browserNavigator))
+  const hostLanguage = hostLanguageOf(hostDocument)
+  if (isSupportedLanguage(hostLanguage)) return languageTagToLocale(hostLanguage)
+  return languageTagToLocale(browserLanguageOf(browserNavigator))
 }
