@@ -1,11 +1,12 @@
 /**
- * Source-shape guard for the two wirings that live inside the React tree.
+ * Source-shape guard for wiring that lives inside the React tree.
  *
  * Clearing the completed dot hangs off `SplitCell`'s `onMouseDown`, and the
- * archive filter hangs off the stale-reference effect in `SplitMain`. Both are
- * plain lines of JSX/effect code: they only run against a live DSH page, and a
- * unit test cannot mount one here. Deleting either line is therefore silent —
- * the module tests stay green while the feature stops working.
+ * archive filter hangs off the stale-reference effect in `SplitMain`. Slash
+ * admission and the frozen draft live in `Composer`. These are plain lines of
+ * JSX/effect code: they only run against a live DSH page, and a unit test cannot
+ * mount one here. Deleting one is therefore silent — the module tests stay green
+ * while the feature stops working.
  *
  * So the guard asserts the wiring itself, against the real source of
  * `src/client.js`, with whitespace collapsed (Prettier may re-wrap a line).
@@ -54,6 +55,8 @@ const WIRING = [
   'acknowledgeUnread(uiSession, sid)',
   'setCells((prev) => reconcileCells(prev, known, archived))',
   'const archived = useMemo(() => archivedSessionIds(wsState), [wsState])',
+  'admission = await admitSlashLine(session, remote.skills, text.trim(), hasAttachments)',
+  'readOnly: sending',
 ]
 
 describe('split-cell wiring', () => {
