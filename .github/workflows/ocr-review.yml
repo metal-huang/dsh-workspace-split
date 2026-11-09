@@ -1,48 +1,21 @@
 name: Open Code Review
 
-# Advisory semantic review. ci.yml remains the only merge gate. Automatic runs
-# are limited to same-repository, non-draft PRs; maintainers can explicitly
-# review a fork PR with /open-code-review or @open-code-review.
+# Advisory semantic review runs only after the deterministic CI workflow passes.
+# This covers same-repository and fork PRs without calling the LLM for failed
+# gates or main-branch pushes. ci.yml remains the only merge gate.
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
-  issue_comment:
-    types: [created]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 permissions:
   contents: read
   pull-requests: write
 
-# Non-matching comments and disabled runs get unique groups so they cannot
-# cancel a real review. A new commit cancels only the stale review for that PR.
+# The source repository and branch identify the PR even when workflow_run's
+# pull_requests array is empty for a fork. New verified heads cancel stale work.
 concurrency:
-  group: >-
-    ${{
-      vars.OCR_ENABLED == 'true'
-      && (
-        (
-          github.event_name == 'pull_request_target'
-          && github.event.pull_request.draft == false
-          && github.event.pull_request.head.repo.full_name == github.repository
-        )
-        || (
-          github.event_name == 'issue_comment'
-          && github.event.issue.pull_request
-          && github.event.comment.user.type != 'Bot'
-          && (
-            github.event.comment.author_association == 'MEMBER'
-            || github.event.comment.author_association == 'OWNER'
-            || github.event.comment.author_association == 'COLLABORATOR'
-          )
-          && (
-            startsWith(github.event.comment.body, '/open-code-review')
-            || startsWith(github.event.comment.body, '@open-code-review')
-          )
-        )
-      )
-      && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
-      || format('noop-{0}', github.run_id)
-    }}
+  group: ocr-${{ github.event.workflow_run.head_repository.owner.login }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
@@ -50,53 +23,58 @@ jobs:
     name: semantic-review
     if: |
       vars.OCR_ENABLED == 'true'
-      && (
-        (
-          github.event_name == 'pull_request_target'
-          && github.event.pull_request.draft == false
-          && github.event.pull_request.head.repo.full_name == github.repository
-        )
-        || (
-          github.event_name == 'issue_comment'
-          && github.event.issue.pull_request
-          && github.event.comment.user.type != 'Bot'
-          && (
-            github.event.comment.author_association == 'MEMBER'
-            || github.event.comment.author_association == 'OWNER'
-            || github.event.comment.author_association == 'COLLABORATOR'
-          )
-          && (
-            startsWith(github.event.comment.body, '/open-code-review')
-            || startsWith(github.event.comment.body, '@open-code-review')
-          )
-        )
-      )
+      && github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # issue_comment has no pull_request payload. Resolve the exact base/head
-      # through the API so manual fork reviews use the same range as auto runs.
-      - name: Resolve pull request context
-        if: github.event_name == 'issue_comment'
+      # workflow_run does not consistently carry fork PR metadata. Resolve the
+      # open PR and require its current head to equal the head CI just verified;
+      # otherwise a newer CI run owns the review and this run must not spend LLM.
+      - name: Resolve verified pull request
         id: pr-context
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
+            const run = context.payload.workflow_run
+            let number = run.pull_requests?.[0]?.number
+            if (!number) {
+              const pulls = await github.paginate(github.rest.pulls.list, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 100,
+              })
+              number = pulls.find((pr) => pr.head.sha === run.head_sha)?.number
+            }
+            if (!number) {
+              core.setOutput('eligible', 'false')
+              core.info('No open PR matches the verified head; skipping OCR')
+              return
+            }
+
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
+              pull_number: number,
             })
+            const eligible = pr.state === 'open' && !pr.draft && pr.head.sha === run.head_sha
+            core.setOutput('eligible', String(eligible))
+            core.setOutput('pr_number', String(number))
             core.setOutput('base_ref', pr.base.ref)
-            core.setOutput('head_sha', pr.head.sha)
+            core.setOutput('head_sha', run.head_sha)
+            core.setOutput('title', pr.title)
+            if (!eligible) core.info('PR is draft, closed, or has a newer head; skipping OCR')
 
       # This action checks out the trusted base branch, fetches PR blobs without
       # checking out the head, and reviews their Git diff. Never add a head
       # checkout, project install, build, or test step to this secret-bearing job.
       - name: Review pull request
+        if: steps.pr-context.outputs.eligible == 'true'
         uses: alibaba/open-code-review@891df1b63f380845d882a289a67a6e36c331120c # v1.13.6
         with:
           ocr_version: '1.13.6'
+          pr_number: ${{ steps.pr-context.outputs.pr_number }}
           base_ref: ${{ steps.pr-context.outputs.base_ref }}
           head_sha: ${{ steps.pr-context.outputs.head_sha }}
           github_token: ${{ github.token }}
@@ -109,12 +87,13 @@ jobs:
           llm_extra_body: '{}'
           llm_reasoning_effort: high
           rule: .opencodereview/rule.json
-          background: ${{ github.event.pull_request.title || github.event.issue.title }}
+          background: ${{ steps.pr-context.outputs.title }}
           effort: medium
           review_concurrency: '4'
           review_task_timeout: '15'
           max_tokens_budget: '300000'
           sticky_summary: 'true'
           incremental: 'true'
+          checkpoint_range: 'true'
           resolve_outdated: 'false'
           upload_artifacts: 'false'
