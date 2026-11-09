@@ -82,3 +82,12 @@ export function reconcileCells(cells, knownIds, archived) {
   // untouched grid must come back as the very same array.
   return changed ? next : cells
 }
+
+/**
+ * Prefer the ready Host catalog over a retained history binding: the binding can
+ * be stale after the turn settles, while the catalog receives Host status alone.
+ */
+export function runningState(catalog, sessionId, sessionState) {
+  const hostRunning = catalog?.phase === 'ready' ? catalog.byId?.[sessionId]?.running : undefined
+  return typeof hostRunning === 'boolean' ? hostRunning : sessionState?.running === true
+}

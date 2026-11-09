@@ -40,7 +40,13 @@ import { ModelControl, PermissionControl } from './composer-controls-ui.js'
 import { MentionPopup, useMentionPicker } from './mention-ui.js'
 
 // ---------- transcript folding ----------
-import { buildTranscript, formatDuration, groupProcessRows, runningHint } from './transcript.js'
+import {
+  buildTranscript,
+  formatDuration,
+  groupProcessRows,
+  latestEventTime,
+  runningHint,
+} from './transcript.js'
 
 // ---------- composer image intake ----------
 import {
@@ -69,6 +75,7 @@ import {
   isArchivedSession,
   pickableSessions,
   reconcileCells,
+  runningState,
 } from './session-state.js'
 
 // ---------- completion unread ----------
@@ -4000,11 +4007,8 @@ function CellView(props) {
   )
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
-  // The catalog receives Host status independently of retained-history feeds.
-  // Prefer it once ready so a stale binding cannot keep a settled chat busy.
-  const hostRunning = catalog?.phase === 'ready' ? catalog.byId?.[sessionId]?.running : undefined
-  const running = typeof hostRunning === 'boolean' ? hostRunning : sessionState?.running === true
-  const stoppable = sessionStoppable({ ...sessionState, running })
+  const running = runningState(catalog, sessionId, sessionState)
+  const stoppable = sessionStoppable(sessionState, running)
 
   // Host inbox projection: queued prompts are not in the event window until the
   // Host admits them, so the dock needs this separate source.
@@ -4216,7 +4220,7 @@ function CellView(props) {
         },
         rows.map((row) => h(TranscriptRow, { key: row.key, row, session: binding.session })),
         running
-          ? h(RunningStatus, { text: runningHint(visible, t), since: visible.at(-1)?.event?.time })
+          ? h(RunningStatus, { text: runningHint(visible, t), since: latestEventTime(visible) })
           : null,
         h(TurnRail, { items: railItems, bodyRef, session: binding.session }),
       ),

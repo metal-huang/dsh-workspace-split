@@ -417,17 +417,28 @@ function chunkHint(chunk, t) {
  * @param t - translation function, injectable for tests.
  * @returns the status line.
  */
-export function runningHint(entries, t = keyOnly) {
-  const all = Array.isArray(entries) ? entries : []
-  const turnStart = all.findLastIndex((entry) => entry?.event?.type === 'turn/start')
-  const list = all.slice(Math.max(0, turnStart))
+/** Timestamp of the newest event, used for the running elapsed label. */
+export function latestEventTime(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return undefined
+  return entries[entries.length - 1]?.event?.time
+}
+
+function isRetryEvent(event) {
+  return event?.type === 'llm/retry' || event?.type === 'llm/retry-started'
+}
+
+function scheduledRetryData(list, event) {
+  return list.findLast(
+    (entry) =>
+      entry?.event?.type === 'llm/retry' && entry.event.data?.retryId === event.data?.retryId,
+  )?.event?.data
+}
+
+function retryHint(list, t) {
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const event = list[i]?.event
-    if (event?.type === 'llm/retry' || event?.type === 'llm/retry-started') {
-      const scheduled = list.findLast(
-        (entry) =>
-          entry?.event?.type === 'llm/retry' && entry.event.data?.retryId === event.data?.retryId,
-      )?.event?.data
+    if (isRetryEvent(event)) {
+      const scheduled = scheduledRetryData(list, event)
       return retryText({ ...scheduled, ...event.data }, event.type === 'llm/retry-started', t)
     }
     if (
@@ -437,6 +448,15 @@ export function runningHint(entries, t = keyOnly) {
     )
       break
   }
+  return undefined
+}
+
+export function runningHint(entries, t = keyOnly) {
+  const all = Array.isArray(entries) ? entries : []
+  const turnStart = all.findLastIndex((entry) => entry?.event?.type === 'turn/start')
+  const list = all.slice(Math.max(0, turnStart))
+  const retry = retryHint(list, t)
+  if (retry !== undefined) return retry
   const results = answeredToolIds(list)
   const pending = toolCalls(list)
     .reverse()
@@ -519,17 +539,20 @@ function onRetry(ev, ctx) {
   ctx.rows.push(row)
 }
 
+function retryAttempt(data) {
+  if (data?.maxRetries === undefined) return String(data?.retry ?? '')
+  return `${data.retry}/${data.maxRetries}`
+}
+
+function retryKey(data, started) {
+  if (!started) return 'retry.scheduled'
+  return data?.delayMs === undefined ? 'retry.started' : 'retry.startedDelayed'
+}
+
 /** Scheduling and actual restart are distinct durable facts; display both. */
 function retryText(data, started, t) {
-  const attempt =
-    data?.maxRetries === undefined ? String(data?.retry ?? '') : `${data.retry}/${data.maxRetries}`
-  const key = !started
-    ? 'retry.scheduled'
-    : data?.delayMs === undefined
-      ? 'retry.started'
-      : 'retry.startedDelayed'
-  return t(key, {
-    attempt,
+  return t(retryKey(data, started), {
+    attempt: retryAttempt(data),
     delay: formatDuration(data?.delayMs),
     code: data?.failure?.code ?? '',
   })
@@ -697,6 +720,16 @@ function turnErrorText(error, t) {
   return t('turn.error', { message, code })
 }
 
+/** A closed Turn cannot retain live stream or tool spinners. */
+function settleTurnRows(rows, turn, time) {
+  for (const row of rows) {
+    if (row.turn !== turn || (row.streaming !== true && row.tool?.running !== true)) continue
+    row.streaming = false
+    row.endedAt = time
+    if (row.tool?.running === true) row.tool.running = false
+  }
+}
+
 /**
  * Turn close. A failed turn is the reader's only proof that the prompt did not
  * run, so it becomes a visible error row instead of ending as silence; the
@@ -704,14 +737,7 @@ function turnErrorText(error, t) {
  */
 function onTurnEnd(ev, ctx) {
   const turn = ev.data?.turn
-  // A closed Turn cannot retain a live spinner even when the loaded window
-  // lacks a final stream chunk or a cancelled tool's result.
-  for (const row of ctx.rows) {
-    if (row.turn !== turn || (row.streaming !== true && row.tool?.running !== true)) continue
-    row.streaming = false
-    row.endedAt = ev.time
-    if (row.tool?.running === true) row.tool.running = false
-  }
+  settleTurnRows(ctx.rows, turn, ev.time)
   const reason = ev.data?.reason
   if (reason === undefined || reason === null) return
   if (reason.kind === 'completed' || reason.kind === 'forked') return
@@ -867,6 +893,11 @@ function stampGroup(group, row) {
   if (group.endedAt === undefined || end > group.endedAt) group.endedAt = end
 }
 
+/** A ready Host status settles every row in the group, including live tools. */
+function groupRunning(current, live, sessionRunning) {
+  return sessionRunning !== false && (current || live)
+}
+
 export function groupProcessRows(rows, sessionRunning) {
   const list = Array.isArray(rows) ? rows : []
   const out = []
@@ -900,7 +931,7 @@ export function groupProcessRows(rows, sessionRunning) {
         key: row.key,
         tool: sessionRunning === false ? { ...row.tool, running: false } : row.tool,
       })
-      current.running = sessionRunning !== false && (current.running || row.tool.running === true)
+      current.running = groupRunning(current.running, row.tool.running === true, sessionRunning)
       stampGroup(current, row)
       continue
     }
@@ -912,7 +943,7 @@ export function groupProcessRows(rows, sessionRunning) {
         text: row.reasoning,
         streaming: row.streaming === true,
       })
-      current.running = sessionRunning !== false && (current.running || row.streaming === true)
+      current.running = groupRunning(current.running, row.streaming === true, sessionRunning)
       stampGroup(current, row)
       if (row.text !== '') {
         flush()
