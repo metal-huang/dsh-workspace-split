@@ -27,6 +27,14 @@ jobs:
       && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      OCR_REVIEW_EFFORT: medium
+      OCR_REVIEW_MAX_TOKENS: '300000'
+      OCR_REVIEW_REASONING: high
+      OCR_REVIEW_RULE: .opencodereview/rule.json
+      OCR_REVIEW_LANGUAGE: English
+      OCR_REVIEW_LLM_TIMEOUT: '300'
+      OCR_REVIEW_EXTRA_BODY: '{}'
     steps:
       # workflow_run does not consistently carry fork PR metadata. Resolve the
       # open PR and require its current head to equal the head CI just verified;
@@ -65,11 +73,181 @@ jobs:
             core.setOutput('title', pr.title)
             if (!eligible) core.info('PR is draft, closed, or has a newer head; skipping OCR')
 
+      - name: Checkout trusted base
+        if: steps.pr-context.outputs.eligible == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.pr-context.outputs.base_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch PR history
+        if: steps.pr-context.outputs.eligible == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr-context.outputs.pr_number }}
+        run: git fetch origin "pull/${PR_NUMBER}/head"
+
+      # OCR's checkpoint records the previously reviewed base/head. Git's stable
+      # patch-id compares the actual patches across base updates, including any
+      # conflict resolution in an Update-branch merge commit. Fail open to review.
+      - name: Skip equivalent patch
+        if: steps.pr-context.outputs.eligible == 'true'
+        id: patch
+        env:
+          BASE_REF: ${{ steps.pr-context.outputs.base_ref }}
+          HEAD_SHA: ${{ steps.pr-context.outputs.head_sha }}
+          PR_NUMBER: ${{ steps.pr-context.outputs.pr_number }}
+          OCR_FP_LLM_URL: ${{ secrets.OCR_LLM_URL }}
+          OCR_FP_LLM_MODEL: ${{ vars.OCR_LLM_MODEL }}
+          OCR_FP_LLM_USE_ANTHROPIC: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          OCR_FP_LANGUAGE: ${{ env.OCR_REVIEW_LANGUAGE }}
+          OCR_FP_LLM_EXTRA_BODY: ${{ env.OCR_REVIEW_EXTRA_BODY }}
+          OCR_FP_LLM_REASONING_EFFORT: ${{ env.OCR_REVIEW_REASONING }}
+          OCR_FP_LLM_TIMEOUT: ${{ env.OCR_REVIEW_LLM_TIMEOUT }}
+          OCR_FP_EFFORT: ${{ env.OCR_REVIEW_EFFORT }}
+          OCR_FP_MAX_TOKENS_BUDGET: ${{ env.OCR_REVIEW_MAX_TOKENS }}
+          OCR_FP_RULE: ${{ env.OCR_REVIEW_RULE }}
+          OCR_FP_BACKGROUND: ${{ steps.pr-context.outputs.title }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const { spawnSync } = require('child_process')
+            const { createHash } = require('crypto')
+            const { readFileSync } = require('fs')
+            const git = (args, input) => {
+              const result = spawnSync('git', args, {
+                cwd: process.env.GITHUB_WORKSPACE,
+                encoding: 'utf8',
+                input,
+                maxBuffer: 256 * 1024 * 1024,
+              })
+              if (result.status !== 0) throw new Error(result.stderr || `git ${args[0]} failed`)
+              return result.stdout
+            }
+            const patchId = (base, head) => {
+              const diff = git(['diff', '--no-ext-diff', '--no-textconv', '--binary', base, head])
+              if (diff === '') return ''
+              const id = git(['patch-id', '--stable', '--verbatim'], diff).trim().split(/\s+/)[0]
+              if (!id) throw new Error('git patch-id returned no id for a non-empty diff')
+              return id
+            }
+            const currentFingerprint = () => {
+              const version = spawnSync(
+                'npx',
+                ['--yes', '@alibaba-group/open-code-review@1.13.6', 'version'],
+                { encoding: 'utf8' },
+              )
+              if (version.status !== 0 || version.stdout.trim() === '') {
+                throw new Error('cannot determine the pinned OCR version')
+              }
+              const versionActual = version.stdout.trim().split(/\r?\n/)[0]
+              const sha256 = (value) => createHash('sha256').update(value).digest('hex')
+              const ruleDigest = sha256(
+                readFileSync(`${process.env.GITHUB_WORKSPACE}/.opencodereview/rule.json`),
+              )
+              // Match the pinned action's checkpoint fingerprint exactly. The
+              // shared job env above supplies the same values to the review step.
+              return createHash('sha256')
+                .update(
+                  JSON.stringify(
+                    [
+                      process.env.OCR_FP_LLM_URL,
+                      process.env.OCR_FP_LLM_MODEL,
+                      process.env.OCR_FP_LLM_USE_ANTHROPIC,
+                      process.env.OCR_FP_LANGUAGE,
+                      process.env.OCR_FP_LLM_EXTRA_BODY,
+                      process.env.OCR_FP_LLM_REASONING_EFFORT,
+                      '',
+                      process.env.OCR_FP_LLM_TIMEOUT,
+                      process.env.OCR_FP_EFFORT,
+                      process.env.OCR_FP_MAX_TOKENS_BUDGET,
+                      'none',
+                      process.env.OCR_FP_RULE,
+                      '',
+                      '',
+                      process.env.OCR_FP_BACKGROUND,
+                      versionActual,
+                      ruleDigest,
+                      ruleDigest,
+                    ].map((value) => value || ''),
+                  ),
+                )
+                .digest('hex')
+                .slice(0, 16)
+            }
+
+            core.setOutput('review_required', 'true')
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.PR_NUMBER),
+                per_page: 100,
+              })
+              const summary = comments.reverse().find(
+                (comment) =>
+                  comment.user.login === 'github-actions[bot]' &&
+                  comment.body.includes('<!-- ocr-summary -->') &&
+                  comment.body.includes('<!-- ocr-checkpoint:v1 '),
+              )
+              if (!summary) {
+                core.info('No previous OCR checkpoint; review required')
+                return
+              }
+
+              const markers = [
+                ...summary.body.matchAll(/<!-- ocr-checkpoint:v1 ([A-Za-z0-9+/]+={0,2}) -->/g),
+              ]
+              if (markers.length !== 1) throw new Error('checkpoint marker is missing or ambiguous')
+              const previous = JSON.parse(Buffer.from(markers[0][1], 'base64').toString('utf8'))
+              if (
+                previous.v !== 1 ||
+                previous.pr !== Number(process.env.PR_NUMBER) ||
+                previous.terminal_state !== 'complete' ||
+                previous.base_ref !== process.env.BASE_REF ||
+                typeof previous.fingerprint !== 'string' ||
+                previous.fingerprint === ''
+              ) {
+                throw new Error('checkpoint payload is invalid or stale')
+              }
+              for (const sha of [previous.head, previous.merge_base]) {
+                if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('checkpoint SHA is invalid')
+              }
+              if (previous.fingerprint !== currentFingerprint()) {
+                core.info('OCR model, rules, or review configuration changed; review required')
+                return
+              }
+              if (previous.head === process.env.HEAD_SHA) {
+                core.setOutput('review_required', 'false')
+                core.info('OCR already reviewed this exact head; skipping')
+                return
+              }
+
+              for (const sha of [previous.head, previous.merge_base]) {
+                try {
+                  git(['cat-file', '-e', `${sha}^{commit}`])
+                } catch {
+                  git(['fetch', 'origin', sha])
+                }
+              }
+              const currentBase = git(['merge-base', `origin/${process.env.BASE_REF}`, process.env.HEAD_SHA]).trim()
+              const before = patchId(previous.merge_base, previous.head)
+              const current = patchId(currentBase, process.env.HEAD_SHA)
+              if (before === current) {
+                core.setOutput('review_required', 'false')
+                core.info('PR patch is unchanged after the base update; skipping OCR')
+              } else {
+                core.info('PR patch changed; review required')
+              }
+            } catch (error) {
+              core.warning(`Cannot compare OCR history; review required: ${error.message}`)
+            }
+
       # This action checks out the trusted base branch, fetches PR blobs without
       # checking out the head, and reviews their Git diff. Never add a head
       # checkout, project install, build, or test step to this secret-bearing job.
       - name: Review pull request
-        if: steps.pr-context.outputs.eligible == 'true'
+        if: steps.pr-context.outputs.eligible == 'true' && steps.patch.outputs.review_required == 'true'
         uses: alibaba/open-code-review@891df1b63f380845d882a289a67a6e36c331120c # v1.13.6
         with:
           ocr_version: '1.13.6'
@@ -83,14 +261,16 @@ jobs:
           llm_use_anthropic: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
           # The action default disables thinking. Kimi-for-coding supports
           # native reasoning effort, which semantic review should retain.
-          llm_extra_body: '{}'
-          llm_reasoning_effort: high
-          rule: .opencodereview/rule.json
+          llm_extra_body: ${{ env.OCR_REVIEW_EXTRA_BODY }}
+          llm_reasoning_effort: ${{ env.OCR_REVIEW_REASONING }}
+          llm_timeout: ${{ env.OCR_REVIEW_LLM_TIMEOUT }}
+          language: ${{ env.OCR_REVIEW_LANGUAGE }}
+          rule: ${{ env.OCR_REVIEW_RULE }}
           background: ${{ steps.pr-context.outputs.title }}
-          effort: medium
+          effort: ${{ env.OCR_REVIEW_EFFORT }}
           review_concurrency: '4'
           review_task_timeout: '15'
-          max_tokens_budget: '300000'
+          max_tokens_budget: ${{ env.OCR_REVIEW_MAX_TOKENS }}
           sticky_summary: 'true'
           incremental: 'true'
           checkpoint_range: 'true'
