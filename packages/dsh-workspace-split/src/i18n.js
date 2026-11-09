@@ -1,19 +1,8 @@
 import CHINESE from './messages.js'
 import EN from './locale/en.json'
+import { detectLanguage } from './language.js'
 
-/**
- * Follow the Host document language before the browser preference. Chinese
- * browsers keep Chinese; unsupported or absent languages fall back to English.
- */
-export function detectLanguage() {
-  const hostLanguage = typeof document === 'undefined' ? '' : document.documentElement?.lang
-  const browserLanguage =
-    typeof navigator === 'undefined'
-      ? ''
-      : navigator.language || navigator.languages?.[0] || navigator.userLanguage
-  const language = hostLanguage || browserLanguage || 'en'
-  return /^zh(?:[-_]|$)/i.test(language) ? 'zh-CN' : 'en'
-}
+export { detectLanguage, languageTagToLocale } from './language.js'
 
 /**
  * Get translation key with interpolation.
