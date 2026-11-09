@@ -67,7 +67,13 @@ jobs:
               echo "Manual recovery must run on an existing version tag, not main." >&2
               exit 1
             fi
-            before_version=$(git show "$BEFORE:$package_path" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+            if [[ "$BEFORE" =~ ^0+$ ]]; then
+              # A new branch push has no before commit. Treat it as a version
+              # change instead of asking git to read the all-zero object ID.
+              before_version=""
+            else
+              before_version=$(git show "$BEFORE:$package_path" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+            fi
             if [ "$before_version" = "$version" ]; then
               release=false
               if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
@@ -84,14 +90,8 @@ jobs:
             exit 1
           fi
 
+          already=false
           if [ "$release" = true ]; then
-            main_version=$(git show "origin/main:$package_path" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
-            if [ "$main_version" != "$version" ]; then
-              # A stale rerun must never publish an old version after a newer
-              # one and move npm latest backwards. The newest main run owns it.
-              echo "main is at $main_version, refusing stale release $version" >&2
-              exit 1
-            fi
             if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
               tagged_commit=$(git rev-parse "$tag^{}")
               if [ "$tagged_commit" != "$(git rev-parse HEAD)" ]; then
@@ -104,10 +104,6 @@ jobs:
             else
               create_tag=true
             fi
-          fi
-
-          already=false
-          if [ "$release" = true ]; then
             set +e
             npm_lookup=$(npm view "@metal-huang/dsh-workspace-split@$version" version 2>&1)
             npm_status=$?
@@ -123,6 +119,19 @@ jobs:
             if [ "$create_tag" = true ] && [ "$already" = true ]; then
               echo "$version exists on npm but $tag is missing; restore the original tag instead of tagging a new commit." >&2
               exit 1
+            fi
+
+            # Check npm before the stale-release guard: an old tag whose version
+            # is already published can still recover its missing GitHub Release.
+            main_version=$(git show "origin/main:$package_path" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+            if [ "$main_version" != "$version" ]; then
+              if [ "$GITHUB_REF_NAME" = main ] || [ "$already" != true ]; then
+                # An old main run or unpublished tag must never move npm latest
+                # backwards. The newest main run owns the main-branch release.
+                echo "main is at $main_version, refusing stale release $version" >&2
+                exit 1
+              fi
+              echo "main is at $main_version; $version is already on npm, recovering only its GitHub Release."
             fi
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
@@ -190,12 +199,12 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          release_lookup=$(gh release view "$TAG" 2>&1)
+          release_lookup=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1)
           release_status=$?
           set -e
           if [ "$release_status" -eq 0 ]; then
             echo "Release $TAG already exists."
-          elif [[ "$release_lookup" == *"release not found"* ]]; then
+          elif [[ "$release_lookup" == *"HTTP 404"* ]]; then
             gh release create "$TAG" --generate-notes --verify-tag
           else
             echo "$release_lookup" >&2
