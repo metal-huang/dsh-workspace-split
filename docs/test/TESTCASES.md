@@ -237,7 +237,7 @@
 - TC-20 ✅ 未知命令错误与草稿保留、@ 候选 19 项与插入（web 实测）；slash admission 单测覆盖技能、拼错命令、附件与目录失败；真实 skills/list 链路和合法命令执行未单独实测
 - TC-21 ✅ 审批/提问卡的组件、回答闸门与 plan/question 分支已通过 DSH 浏览器 fixture；真实后台审批触发 ⏳（网关不可用）
 - TC-22 ✅ 上下文 footer 组件与数值格式已通过 DSH 浏览器 fixture；真实会话读数 ⏳
-- TC-23 ✅ `node test/dsh-contract.test.js` 本机 9/9 通过
+- TC-23 ✅ `node test/dsh-contract.test.js` 本机 11/11 通过
 - TC-24 ✅ `node --test test/e2e/dsh-composer.test.js` 本机 9/9 通过
 - TC-25 ✅ 项目徽标解析单测 + DSH 浏览器 fixture（徽标与标题同字号、宽度缩放、手动缩放下 header 高度/位置一致、徽标/状态点中心对齐）
 - TC-26 ✅ 归档释放格子（2026-11-01 桌面版手测通过，刷新后生效、未重启应用；单测覆盖 `reconcileCells` / `pickableSessions`）

@@ -2329,6 +2329,9 @@ function escapeBelongsToCell(event, textareaRef) {
 
 /** Bind the native two-Escape stop gesture to the visible active cell. */
 function useCellEscapeStop(enabled, stop, textareaRef, timeoutMs) {
+  // Keep the lock across effect re-installs: setStopping changes stop's identity
+  // as soon as the confirming press fires, while the RPC is still in flight.
+  const cancelling = useRef(false)
   useEffect(() => {
     if (!enabled) return undefined
     const handler = createEscapeStopHandler({
@@ -2336,6 +2339,7 @@ function useCellEscapeStop(enabled, stop, textareaRef, timeoutMs) {
       timeoutMs,
       ownsLayer: escapeLayerOwnsKey,
       belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),
+      cancelling,
     })
     document.addEventListener('keydown', handler.onKeyDown, true)
     return () => {

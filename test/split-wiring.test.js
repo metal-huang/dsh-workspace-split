@@ -59,6 +59,7 @@ const WIRING = [
   'readOnly: sending',
   'latestSessionRef = useRef(session) useLayoutEffect(() => { latestSessionRef.current = session }, [session])',
   'outcome = await promptWhileCurrent(session, isCurrentSession, async () => {',
+  'const cancelling = useRef(false)',
   'const handler = createEscapeStopHandler({',
   "document.addEventListener('keydown', handler.onKeyDown, true)",
   'belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),',

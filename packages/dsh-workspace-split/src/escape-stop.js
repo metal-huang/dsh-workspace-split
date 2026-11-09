@@ -30,16 +30,22 @@ export class DoubleEscape {
  * Build the DOM-free half of the active-cell Escape handler. The caller injects
  * its visibility and layer predicates, so the exact stop behavior is testable.
  */
-export function createEscapeStopHandler({ stop, timeoutMs, ownsLayer, belongsToCell, now }) {
+export function createEscapeStopHandler({
+  stop,
+  timeoutMs,
+  ownsLayer,
+  belongsToCell,
+  now,
+  cancelling = { current: false },
+}) {
   const sequence = new DoubleEscape(timeoutMs)
   const clock = now ?? (() => performance.now())
-  let cancelling = false
   const onKeyDown = (event) => {
     if (event.key !== 'Escape') {
       sequence.reset()
       return
     }
-    if (!isPlainEscape(event) || cancelling) {
+    if (!isPlainEscape(event) || cancelling.current) {
       sequence.reset()
       return
     }
@@ -47,12 +53,14 @@ export function createEscapeStopHandler({ stop, timeoutMs, ownsLayer, belongsToC
       sequence.reset()
       return
     }
+    // Let the first press reach other plugins; only the confirming second press
+    // is claimed for cancellation.
+    if (!sequence.press(clock())) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    if (!sequence.press(clock())) return
-    cancelling = true
+    cancelling.current = true
     Promise.resolve(stop()).finally(() => {
-      cancelling = false
+      cancelling.current = false
     })
   }
   return { onKeyDown, reset: () => sequence.reset() }

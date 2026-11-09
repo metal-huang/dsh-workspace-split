@@ -100,6 +100,24 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     ])
   })
 
+  it('keeps the native Escape exclusion selectors', () => {
+    includes('dsh-client-ui-conversation/lib/client.js', [
+      '[data-approval-key], iframe, .xterm, [inert]',
+    ])
+  })
+
+  it('keeps the snapshot fields used by Escape cancellation', () => {
+    includes('dsh-api-session-controller/lib/types/client/contract/snapshot.d.ts', [
+      'readonly subagent:',
+      'readonly address: SubagentAddress;',
+      'readonly removed: boolean;',
+    ])
+    includes('dsh-subagent/lib/types/control-types.d.ts', [
+      'export type SubagentAddress',
+      "readonly mode: 'continuable';",
+    ])
+  })
+
   it('keeps the pending-interaction registry and both answer paths', () => {
     includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
       'sessionStatus',

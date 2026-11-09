@@ -77,7 +77,7 @@ describe('sessionStoppable', () => {
 })
 
 describe('createEscapeStopHandler', () => {
-  function fixture({ belongs = true, ownsLayer = false, stop } = {}) {
+  function fixture({ belongs = true, ownsLayer = false, stop, cancelling } = {}) {
     let now = 0
     const handler = createEscapeStopHandler({
       stop: stop ?? (() => {}),
@@ -85,6 +85,7 @@ describe('createEscapeStopHandler', () => {
       ownsLayer: () => ownsLayer,
       belongsToCell: () => belongs,
       now: () => now,
+      cancelling,
     })
     return {
       handler,
@@ -108,7 +109,7 @@ describe('createEscapeStopHandler', () => {
     }
   }
 
-  it('stops only on the second in-cell Escape and consumes both presses', () => {
+  it('stops on the second in-cell Escape and consumes only the confirming press', () => {
     let calls = 0
     const { handler, advance } = fixture({
       stop: () => {
@@ -118,10 +119,14 @@ describe('createEscapeStopHandler', () => {
     const first = event()
     handler.onKeyDown(first)
     assert.equal(calls, 0)
-    assert.equal(first.prevented, 1)
+    assert.equal(first.prevented, 0)
+    assert.equal(first.stopped, 0)
     advance(400)
-    handler.onKeyDown(event())
+    const second = event()
+    handler.onKeyDown(second)
     assert.equal(calls, 1)
+    assert.equal(second.prevented, 1)
+    assert.equal(second.stopped, 1)
   })
 
   it('ignores Escape from another cell and from an owned layer', () => {
@@ -172,5 +177,34 @@ describe('createEscapeStopHandler', () => {
     advance(100)
     handler.onKeyDown(event())
     assert.equal(calls, 2, 'a fresh double press works after cancellation settles')
+  })
+
+  it('keeps the cancellation lock when the effect installs a new handler', async () => {
+    let calls = 0
+    let release
+    const cancelling = { current: false }
+    const stop = () => {
+      calls += 1
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+    const first = fixture({ stop, cancelling })
+    first.handler.onKeyDown(event())
+    first.advance(100)
+    first.handler.onKeyDown(event())
+    assert.equal(calls, 1)
+
+    const reinstalled = fixture({ stop, cancelling })
+    reinstalled.handler.onKeyDown(event())
+    reinstalled.advance(100)
+    reinstalled.handler.onKeyDown(event())
+    assert.equal(calls, 1, 'the new handler must see the old in-flight lock')
+    release()
+    await Promise.resolve()
+    reinstalled.handler.onKeyDown(event())
+    reinstalled.advance(100)
+    reinstalled.handler.onKeyDown(event())
+    assert.equal(calls, 2)
   })
 })
