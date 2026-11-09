@@ -24,6 +24,10 @@ describe('PR title gate', () => {
     assert.equal(check('feat(split): resize cells').status, 0)
   })
 
+  it('accepts a conventional revert title', () => {
+    assert.equal(check('revert: revert a split regression').status, 0)
+  })
+
   it('rejects Git-generated commit exemptions in squash-merge titles', () => {
     const result = check('Merge branch "feature"')
     assert.equal(result.status, 1)
