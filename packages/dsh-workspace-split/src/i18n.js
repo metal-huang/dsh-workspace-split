@@ -2,7 +2,7 @@ import CHINESE from './messages.js'
 import EN from './locale/en.json'
 import { detectLanguage } from './language.js'
 
-export { detectLanguage, languageTagToLocale } from './language.js'
+export { detectLanguage, isSupportedLanguage, languageTagToLocale } from './language.js'
 
 /**
  * Get translation key with interpolation.

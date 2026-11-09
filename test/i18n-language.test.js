@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import {
   detectLanguage,
+  isSupportedLanguage,
   languageTagToLocale,
 } from '../packages/dsh-workspace-split/src/language.js'
 
@@ -19,6 +20,17 @@ describe('languageTagToLocale', () => {
   })
 })
 
+describe('isSupportedLanguage', () => {
+  it('recognizes only the dictionaries currently shipped', () => {
+    for (const tag of ['zh', 'zh-CN', 'en', 'en-US']) {
+      assert.equal(isSupportedLanguage(tag), true)
+    }
+    for (const tag of ['ja', 'fr-FR', 'ru-RU', '', undefined]) {
+      assert.equal(isSupportedLanguage(tag), false)
+    }
+  })
+})
+
 describe('detectLanguage', () => {
   it('uses the Host document language before a Russian browser', () => {
     const doc = { documentElement: { lang: 'en' } }
@@ -31,9 +43,16 @@ describe('detectLanguage', () => {
     assert.equal(detectLanguage(doc, browser('ru-RU')), 'zh-CN')
   })
 
-  it('prefers an unsupported Host language over a Chinese browser', () => {
-    const doc = { documentElement: { lang: 'fr-FR' } }
-    assert.equal(detectLanguage(doc, browser('zh-CN')), 'en')
+  it('falls through an unsupported Host to a supported browser language', () => {
+    const doc = { documentElement: { lang: 'ja' } }
+    assert.equal(detectLanguage(doc, browser('zh-CN')), 'zh-CN')
+    assert.equal(detectLanguage(doc, browser('en-US')), 'en')
+  })
+
+  it('falls back to English when both sides are unsupported', () => {
+    const doc = { documentElement: { lang: 'ja' } }
+    assert.equal(detectLanguage(doc, browser('fr-FR')), 'en')
+    assert.equal(detectLanguage(doc, browser('ru-RU')), 'en')
   })
 
   it('uses the browser only when the Host has no language', () => {

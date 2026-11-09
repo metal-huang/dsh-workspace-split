@@ -10,8 +10,9 @@ Keep several **live** sessions of DeepSeek Harness side by side and type in any
 of them. Built for supervising several projects at once: you see every session's
 progress on one screen instead of clicking through tabs.
 
-The interface follows the Harness document language, then the browser language.
-Chinese locales use Chinese; other or missing locales use English.
+The interface prefers a supported Harness document language, then a supported
+browser language, and falls back to English. An unsupported Harness language
+does not hide a usable browser translation.
 
 <!-- A screenshot lives at docs/assets/split-view.png once captured. -->
 
