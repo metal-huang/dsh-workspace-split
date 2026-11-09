@@ -28,6 +28,7 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 // ---------- composer metadata ----------
 import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
 import { admitSlashLine } from './composer-slash.js'
+import { promptWhileCurrent } from './composer-send.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
@@ -2390,6 +2391,12 @@ function Composer(props) {
     ready: fileParts,
   } = useDraftFiles(fileUpload, session?.sessionId)
   const textareaRef = useRef(null)
+  // The callback below captures the Session it started with; this ref follows
+  // committed props so an in-flight send can stop when the tile is rebound.
+  const latestSessionRef = useRef(session)
+  useLayoutEffect(() => {
+    latestSessionRef.current = session
+  }, [session])
   const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const attachRef = useRef(null)
@@ -2448,6 +2455,7 @@ function Composer(props) {
 
   const send = useCallback(async () => {
     if (session === undefined || session === null || sending) return
+    const isCurrentSession = () => latestSessionRef.current === session
     const line = parseSlashLine(text)
     if (line !== null) {
       const hasAttachments = images.length > 0 || files.length > 0
@@ -2459,6 +2467,9 @@ function Composer(props) {
       } finally {
         setSending(false)
       }
+      // Do not clear a new Session's draft, show an old error, or send to the
+      // old Session after the tile was rebound during admission.
+      if (!isCurrentSession()) return
       if (admission.action === 'error') {
         const error =
           admission.error instanceof Error
@@ -2486,33 +2497,32 @@ function Composer(props) {
     if (text.trim() === '' && images.length === 0 && files.length === 0) return
     setSending(true)
     setError('')
-    let parts
+    let outcome
     try {
-      const encoded = await Promise.all(
-        images.map((image) => imagePart(image.file, readFileBase64)),
-      )
-      parts = buildPromptParts(text, encoded, fileParts)
-    } catch (failure) {
-      setSending(false)
-      setError(t('composer.image.readFailed', { error: thrownText(failure) }))
-      return
-    }
-    try {
-      const result = await session.prompt(parts, 'queue')
-      if (result?.ok !== true) {
-        setError(t('composer.sendFailed', { error: remoteFailureText(result?.error) }))
-        return
-      }
-      clearImages()
-      clearFiles()
-      onText('')
-      setExpanded(false)
-      textareaRef.current?.focus()
-    } catch (failure) {
-      setError(t('composer.sendFailed', { error: thrownText(failure) }))
+      outcome = await promptWhileCurrent(session, isCurrentSession, async () => {
+        const encoded = await Promise.all(
+          images.map((image) => imagePart(image.file, readFileBase64)),
+        )
+        return buildPromptParts(text, encoded, fileParts)
+      })
     } finally {
       setSending(false)
     }
+    if (outcome.action === 'stale') return
+    if (outcome.action === 'error') {
+      const key = outcome.stage === 'encode' ? 'composer.image.readFailed' : 'composer.sendFailed'
+      const error =
+        outcome.error instanceof Error
+          ? thrownText(outcome.error)
+          : remoteFailureText(outcome.error)
+      setError(t(key, { error }))
+      return
+    }
+    clearImages()
+    clearFiles()
+    onText('')
+    setExpanded(false)
+    textareaRef.current?.focus()
   }, [
     session,
     text,

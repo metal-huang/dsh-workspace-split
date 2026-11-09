@@ -1,0 +1,119 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+
+import { promptWhileCurrent } from '../packages/dsh-workspace-split/src/composer-send.js'
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+const PARTS = [{ type: 'text', text: '/todo 123' }]
+
+describe('promptWhileCurrent', () => {
+  it('does not prompt the old Session when the tile rebinds during encoding', async () => {
+    const encoding = deferred()
+    const oldSession = { prompt: async () => ({ ok: true }) }
+    let current = oldSession
+    let promptCalls = 0
+    oldSession.prompt = async () => {
+      promptCalls += 1
+      return { ok: true }
+    }
+    let draft = '/todo 123'
+    const pending = (async () => {
+      const outcome = await promptWhileCurrent(
+        oldSession,
+        () => current === oldSession,
+        async () => {
+          await encoding.promise
+          return PARTS
+        },
+      )
+      if (outcome.action === 'sent') draft = ''
+      return outcome
+    })()
+
+    current = { prompt: async () => ({ ok: true }) }
+    encoding.resolve()
+    const outcome = await pending
+    assert.deepEqual(outcome, { action: 'stale' })
+    assert.equal(promptCalls, 0)
+    assert.equal(draft, '/todo 123')
+  })
+
+  it('does not clear the rebound draft when the tile rebinds during prompt', async () => {
+    const prompted = deferred()
+    const oldSession = { prompt: async () => prompted.promise }
+    let current = oldSession
+    let draft = '/todo 123'
+    const pending = (async () => {
+      const outcome = await promptWhileCurrent(
+        oldSession,
+        () => current === oldSession,
+        async () => PARTS,
+      )
+      if (outcome.action === 'sent') draft = ''
+      return outcome
+    })()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    current = { prompt: async () => ({ ok: true }) }
+    prompted.resolve({ ok: true })
+    const outcome = await pending
+    assert.deepEqual(outcome, { action: 'stale' })
+    assert.equal(draft, '/todo 123')
+  })
+
+  it('clears the draft only for an accepted prompt on the same Session', async () => {
+    const session = { prompt: async (parts, mode) => ({ ok: true, parts, mode }) }
+    let draft = '/todo 123'
+    const outcome = await promptWhileCurrent(
+      session,
+      () => true,
+      async () => PARTS,
+    )
+    if (outcome.action === 'sent') draft = ''
+    assert.deepEqual(outcome, { action: 'sent' })
+    assert.equal(draft, '')
+  })
+
+  it('keeps encoding and prompt failures on their own stages', async () => {
+    const encodeError = new Error('read failed')
+    const encoding = await promptWhileCurrent(
+      {},
+      () => true,
+      async () => {
+        throw encodeError
+      },
+    )
+    assert.deepEqual(encoding, { action: 'error', stage: 'encode', error: encodeError })
+
+    const remote = { code: 'session/agent-busy', message: 'busy' }
+    const prompting = await promptWhileCurrent(
+      { prompt: async () => ({ ok: false, error: remote }) },
+      () => true,
+      async () => PARTS,
+    )
+    assert.deepEqual(prompting, { action: 'error', stage: 'prompt', error: remote })
+  })
+
+  it('suppresses an old encoding failure after a rebind', async () => {
+    const oldSession = {}
+    let current = oldSession
+    const outcome = await promptWhileCurrent(
+      oldSession,
+      () => current === oldSession,
+      async () => {
+        current = {}
+        throw new Error('old failure')
+      },
+    )
+    assert.deepEqual(outcome, { action: 'stale' })
+  })
+})

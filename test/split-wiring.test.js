@@ -57,6 +57,8 @@ const WIRING = [
   'const archived = useMemo(() => archivedSessionIds(wsState), [wsState])',
   'admission = await admitSlashLine(session, remote.skills, text.trim(), hasAttachments)',
   'readOnly: sending',
+  'latestSessionRef = useRef(session) useLayoutEffect(() => { latestSessionRef.current = session }, [session])',
+  'outcome = await promptWhileCurrent(session, isCurrentSession, async () => {',
 ]
 
 describe('split-cell wiring', () => {
