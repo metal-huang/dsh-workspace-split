@@ -67,12 +67,10 @@ export function createEscapeStopHandler({
 }
 
 /** Native Escape cancellation refuses removed and non-continuable Sessions. */
-export function sessionStoppable(state) {
+export function sessionStoppable(state, running = state?.running) {
   const mode = state?.subagent?.address?.mode
   return (
-    state?.running === true &&
-    state?.removed !== true &&
-    (mode === undefined || mode === 'continuable')
+    running === true && state?.removed !== true && (mode === undefined || mode === 'continuable')
   )
 }
 
