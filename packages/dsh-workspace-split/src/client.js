@@ -2391,9 +2391,11 @@ function Composer(props) {
   } = useDraftFiles(fileUpload, session?.sessionId)
   const textareaRef = useRef(null)
   // The callback below captures the Session it started with; this ref follows
-  // later props so an in-flight send can stop when the tile is rebound.
+  // committed props so an in-flight send can stop when the tile is rebound.
   const latestSessionRef = useRef(session)
-  latestSessionRef.current = session
+  useLayoutEffect(() => {
+    latestSessionRef.current = session
+  }, [session])
   const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const attachRef = useRef(null)
@@ -2499,10 +2501,6 @@ function Composer(props) {
       const encoded = await Promise.all(
         images.map((image) => imagePart(image.file, readFileBase64)),
       )
-      if (!isCurrentSession()) {
-        setSending(false)
-        return
-      }
       parts = buildPromptParts(text, encoded, fileParts)
     } catch (failure) {
       setSending(false)
@@ -2512,6 +2510,12 @@ function Composer(props) {
       return
     }
     try {
+      // A prompt the Host already accepted cannot be recalled client-side. Check
+      // immediately before queueing; after the await we only suppress mutations.
+      if (!isCurrentSession()) {
+        setSending(false)
+        return
+      }
       const result = await session.prompt(parts, 'queue')
       if (!isCurrentSession()) return
       if (result?.ok !== true) {
