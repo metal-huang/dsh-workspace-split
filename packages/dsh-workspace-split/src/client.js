@@ -27,6 +27,9 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 
 // ---------- composer metadata ----------
 import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
+import { admitSlashLine } from './composer-slash.js'
+import { promptWhileCurrent } from './composer-send.js'
+import { createEscapeStopHandler, sessionStoppable } from './escape-stop.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
@@ -2304,6 +2307,48 @@ function DraftFileStrip(props) {
   )
 }
 
+/** Popups, embedded tools and editable header fields own Escape before cancellation. */
+function escapeLayerOwnsKey(event) {
+  if (!(event.target instanceof Element)) return true
+  const excluded = 'input, select, iframe, .xterm, [inert], [data-approval-key]'
+  if (event.target.closest(excluded) !== null) return true
+  const layers = document.querySelectorAll(
+    '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+  )
+  return [...layers].some((node) => node.getClientRects().length > 0)
+}
+
+/** Escape stops a tile only when the keyboard is actually inside that tile. */
+function escapeBelongsToCell(event, textareaRef) {
+  const area = textareaRef.current
+  if (area === null || area.getClientRects().length === 0) return false
+  if (!(event.target instanceof Element)) return false
+  const cell = area.closest('.dsws-cell')
+  return cell !== null && event.target.closest('.dsws-cell') === cell
+}
+
+/** Bind the native two-Escape stop gesture to the visible active cell. */
+function useCellEscapeStop(enabled, stop, textareaRef, timeoutMs) {
+  // Keep the lock across effect re-installs: setStopping changes stop's identity
+  // as soon as the confirming press fires, while the RPC is still in flight.
+  const cancelling = useRef(false)
+  useEffect(() => {
+    if (!enabled) return undefined
+    const handler = createEscapeStopHandler({
+      stop,
+      timeoutMs,
+      ownsLayer: escapeLayerOwnsKey,
+      belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),
+      cancelling,
+    })
+    document.addEventListener('keydown', handler.onKeyDown, true)
+    return () => {
+      handler.reset()
+      document.removeEventListener('keydown', handler.onKeyDown, true)
+    }
+  }, [enabled, stop, textareaRef, timeoutMs])
+}
+
 /**
  * The cell's input bar: text, images, and one ordered prompt per send.
  *
@@ -2316,8 +2361,20 @@ function DraftFileStrip(props) {
  *   cell-owned draft text.
  */
 function Composer(props) {
-  const { session, text, onText, running, fileUpload, occupancy, controls, metaError, remote } =
-    props
+  const {
+    session,
+    text,
+    onText,
+    running,
+    active,
+    stoppable,
+    stopSequenceMs,
+    fileUpload,
+    occupancy,
+    controls,
+    metaError,
+    remote,
+  } = props
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -2345,6 +2402,12 @@ function Composer(props) {
     ready: fileParts,
   } = useDraftFiles(fileUpload, session?.sessionId)
   const textareaRef = useRef(null)
+  // The callback below captures the Session it started with; this ref follows
+  // committed props so an in-flight send can stop when the tile is rebound.
+  const latestSessionRef = useRef(session)
+  useLayoutEffect(() => {
+    latestSessionRef.current = session
+  }, [session])
   const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const attachRef = useRef(null)
@@ -2403,62 +2466,74 @@ function Composer(props) {
 
   const send = useCallback(async () => {
     if (session === undefined || session === null || sending) return
+    const isCurrentSession = () => latestSessionRef.current === session
     const line = parseSlashLine(text)
     if (line !== null) {
-      if (images.length > 0 || files.length > 0) {
-        setError(t('composer.commandAttachments'))
-        return
-      }
+      const hasAttachments = images.length > 0 || files.length > 0
       setSending(true)
       setError('')
+      let admission
       try {
-        const result = await session.command(text.trim())
-        if (result?.ok !== true) {
-          setError(t('composer.commandFailed', { error: remoteFailureText(result?.error) }))
-        } else if (result.value?.matched !== true) {
-          setError(t('composer.unknownCommand', { name: line.name }))
-        } else {
-          onText('')
-          setExpanded(false)
-        }
-      } catch (failure) {
-        setError(t('composer.commandFailed', { error: thrownText(failure) }))
+        admission = await admitSlashLine(session, remote.skills, text.trim(), hasAttachments)
       } finally {
         setSending(false)
       }
-      return
+      // Do not clear a new Session's draft, show an old error, or send to the
+      // old Session after the tile was rebound during admission.
+      if (!isCurrentSession()) return
+      if (admission.action === 'error') {
+        const error =
+          admission.error instanceof Error
+            ? thrownText(admission.error)
+            : remoteFailureText(admission.error)
+        setError(t(admission.key, { error }))
+        return
+      }
+      if (admission.action === 'command') {
+        onText('')
+        setExpanded(false)
+        return
+      }
+      if (admission.action === 'unknown-command') {
+        setError(t('composer.unknownCommand', { name: line.name }))
+        return
+      }
+      if (admission.action === 'attachments') {
+        setError(t('composer.commandAttachments'))
+        return
+      }
+      // Only a listed user-invocable skill falls through to the prompt path.
     }
     if (uploading || failed !== undefined) return
     if (text.trim() === '' && images.length === 0 && files.length === 0) return
     setSending(true)
     setError('')
-    let parts
+    let outcome
     try {
-      const encoded = await Promise.all(
-        images.map((image) => imagePart(image.file, readFileBase64)),
-      )
-      parts = buildPromptParts(text, encoded, fileParts)
-    } catch (failure) {
-      setSending(false)
-      setError(t('composer.image.readFailed', { error: thrownText(failure) }))
-      return
-    }
-    try {
-      const result = await session.prompt(parts, 'queue')
-      if (result?.ok !== true) {
-        setError(t('composer.sendFailed', { error: remoteFailureText(result?.error) }))
-        return
-      }
-      clearImages()
-      clearFiles()
-      onText('')
-      setExpanded(false)
-      textareaRef.current?.focus()
-    } catch (failure) {
-      setError(t('composer.sendFailed', { error: thrownText(failure) }))
+      outcome = await promptWhileCurrent(session, isCurrentSession, async () => {
+        const encoded = await Promise.all(
+          images.map((image) => imagePart(image.file, readFileBase64)),
+        )
+        return buildPromptParts(text, encoded, fileParts)
+      })
     } finally {
       setSending(false)
     }
+    if (outcome.action === 'stale') return
+    if (outcome.action === 'error') {
+      const key = outcome.stage === 'encode' ? 'composer.image.readFailed' : 'composer.sendFailed'
+      const error =
+        outcome.error instanceof Error
+          ? thrownText(outcome.error)
+          : remoteFailureText(outcome.error)
+      setError(t(key, { error }))
+      return
+    }
+    clearImages()
+    clearFiles()
+    onText('')
+    setExpanded(false)
+    textareaRef.current?.focus()
   }, [
     session,
     text,
@@ -2489,6 +2564,8 @@ function Composer(props) {
       setStopping(false)
     }
   }, [session, stopping, setError])
+
+  useCellEscapeStop(active && stoppable, stop, textareaRef, stopSequenceMs)
 
   const onKeyDown = (event) => {
     if (mention.onKeyDown(event)) return
@@ -2670,6 +2747,10 @@ function Composer(props) {
       h('textarea', {
         ref: textareaRef,
         value: text,
+        // The draft is frozen while the Host admits it. Otherwise a slow command
+        // or skill lookup lets new keystrokes in, and success clears them along
+        // with the snapshot that was actually sent.
+        readOnly: sending,
         onChange: (event) => {
           onText(event.target.value)
           mention.refresh(event.target.value, event.target.selectionStart)
@@ -3889,7 +3970,7 @@ function PendingSeat(props) {
 
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
-  const { sessions, sessionId, fileUpload, uiSession, remote } = props
+  const { sessions, sessionId, fileUpload, uiSession, remote, active, stopSequenceMs } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
@@ -3913,6 +3994,7 @@ function CellView(props) {
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
   const running = sessionState?.running === true
+  const stoppable = sessionStoppable(sessionState)
 
   // Host inbox projection: queued prompts are not in the event window until the
   // Host admits them, so the dock needs this separate source.
@@ -4139,6 +4221,9 @@ function CellView(props) {
         text: inputText,
         onText: setInputText,
         running,
+        active,
+        stoppable,
+        stopSequenceMs,
         fileUpload,
         occupancy,
         controls,
@@ -4858,6 +4943,7 @@ function SplitMain(props) {
   const fileUpload = props.__fileUpload
   const uiSession = props.__uiSession
   const remote = props.__remote
+  const stopSequenceMs = props.__stopSequenceMs ?? 500
   const subscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions])
   const getSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions])
   const list = useSyncExternalStore(subscribe, getSnapshot)
@@ -5070,6 +5156,7 @@ function SplitMain(props) {
         projectById,
         sessionsOfWorkspace,
         active: i === activeCell,
+        stopSequenceMs,
         dragOver: dragOver === i,
         zoom: zooms[i] ?? 1,
         cellStyle,
@@ -5119,6 +5206,7 @@ function SplitCell(props) {
     projectById,
     sessionsOfWorkspace,
     active,
+    stopSequenceMs,
     dragOver,
     zoom,
     cellStyle,
@@ -5176,6 +5264,7 @@ function SplitCell(props) {
           : cellStyle.background,
       },
       onMouseDown: activate,
+      onFocusCapture: activate,
       // Accept a Sidebar drag: a Session row or a project row.
       onDragOver: (e) => {
         e.preventDefault()
@@ -5255,7 +5344,15 @@ function SplitCell(props) {
               ? t('split.workspace.empty', { ws: wsTitle })
               : t('split.cell.pickFromAbove'),
           )
-        : h(CellView, { sessions, sessionId: sid, fileUpload, uiSession, remote }),
+        : h(CellView, {
+            sessions,
+            sessionId: sid,
+            fileUpload,
+            uiSession,
+            remote,
+            active,
+            stopSequenceMs,
+          }),
     ),
   )
 }
@@ -5351,11 +5448,13 @@ export const inject = [
   'workspaces',
   'fileUpload',
   'uiSession',
+  'shortcuts',
   'remote',
   'remote.session',
   'remote.permissionPresets',
   'remote.fileReferences',
   'remote.sessionReferenceResolver',
+  'remote.skills',
 ]
 
 export function apply(ctx) {
@@ -5435,6 +5534,7 @@ export function apply(ctx) {
   const workspacesRef = ctx.workspaces
   const fileUploadRef = ctx.fileUpload
   const uiSessionRef = ctx.uiSession
+  const stopSequenceMs = ctx.shortcuts.stopSequenceMs
   const remoteRef = ctx.remote
   ctx.slots.inject('main', () =>
     ctx.slots.register(
@@ -5448,6 +5548,7 @@ export function apply(ctx) {
           __workspaces: workspacesRef,
           __fileUpload: fileUploadRef,
           __uiSession: uiSessionRef,
+          __stopSequenceMs: stopSequenceMs,
           __remote: remoteRef,
         })
       },

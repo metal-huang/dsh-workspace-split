@@ -69,6 +69,7 @@
   "composer.permission.unavailable": "This Host has no permission preset plugin",
   "composer.unknownCommand": "Unknown command: {{name}}",
   "composer.commandFailed": "Command failed: {{error}}",
+  "composer.skillListFailed": "Could not load the skill catalog: {{error}}",
   "composer.commandAttachments": "Commands with attachments are not supported in split cells yet",
   "composer.mention.empty": "No matching file or session",
   "composer.image.remove": "Remove image",

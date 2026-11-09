@@ -5,25 +5,7 @@
  */
 
 import { readFileSync } from 'node:fs'
-
-const TYPES = [
-  'feat',
-  'fix',
-  'refactor',
-  'docs',
-  'test',
-  'chore',
-  'perf',
-  'ci',
-  'build',
-  'style',
-  'revert',
-]
-
-/** Merge, revert-by-git and fixup commits keep their own shapes. */
-const EXEMPT = /^(Merge |Revert "|fixup! |squash! |amend! )/
-
-const MAX_SUBJECT = 72
+import { validateCommitSubject } from './commit_subject.mjs'
 
 const file = process.argv[2]
 if (file === undefined) {
@@ -38,26 +20,7 @@ const lines = readFileSync(file, 'utf8')
 
 const subject = (lines[0] ?? '').trim()
 
-if (subject === '') {
-  console.error('commit-msg: empty subject')
-  process.exit(1)
-}
-if (EXEMPT.test(subject)) process.exit(0)
-
-const problems = []
-const match = /^([a-z]+)(\([^)]*\))?!?: (.+)$/.exec(subject)
-
-if (match === null) {
-  problems.push('subject must look like `type(scope): description`')
-} else {
-  const [, type, , description] = match
-  if (!TYPES.includes(type)) problems.push(`type "${type}" is not one of: ${TYPES.join(', ')}`)
-  if (description.trim().length === 0) problems.push('description is empty')
-  if (description.endsWith('.')) problems.push('description must not end with a period')
-}
-if (subject.length > MAX_SUBJECT) {
-  problems.push(`subject is ${subject.length} chars, limit is ${MAX_SUBJECT}`)
-}
+const problems = validateCommitSubject(subject)
 
 if (problems.length > 0) {
   console.error('commit-msg failed:')
