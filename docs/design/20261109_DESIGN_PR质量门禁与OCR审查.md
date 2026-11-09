@@ -13,6 +13,11 @@
 > 不检出或执行 PR 代码。内置 `GITHUB_TOKEN` 的更新不会触发下游 CI，因此使用仅拥有
 > 主仓库内容读写与 PR 读写权限的维护者细粒度 PAT；它还需遵循 fork 的
 > maintainer-can-modify 授权。该流程不使用 merge queue，PR 数量明显增加后再重新评估。
+>
+> **后续补充（2026-11-09）**：OCR 复用现有汇总评论中的上次 head 与 merge-base，
+> 使用 Git 自带的 `git diff ... | git patch-id --stable` 比较前后实际补丁。Update branch
+> 只改变提交 SHA 而补丁等价时跳过模型调用；真实修改与冲突解决产生不同补丁时照常审查。
+> 历史缺失、对象不可读或比较失败一律继续审查，不因去重失败而漏审。
 
 ## 一、目标与边界
 
