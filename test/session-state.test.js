@@ -14,6 +14,7 @@ import {
   isArchivedSession,
   pickableSessions,
   reconcileCells,
+  runningState,
 } from '../packages/dsh-workspace-split/src/session-state.js'
 
 const ids = (...values) => new Set(values)
@@ -112,5 +113,22 @@ describe('reconcileCells', () => {
       { t: 'session', id: 'archived' },
     ]
     assert.equal(reconcileCells(cells, known, ids()), cells)
+  })
+})
+
+describe('runningState', () => {
+  it('prefers a ready Host catalog over a stale retained binding', () => {
+    const catalog = { phase: 'ready', byId: { s1: { running: false } } }
+    assert.equal(runningState(catalog, 's1', { running: true }), false)
+    catalog.byId.s1.running = true
+    assert.equal(runningState(catalog, 's1', { running: false }), true)
+  })
+
+  it('falls back to the binding while the catalog is not ready', () => {
+    const catalog = { phase: 'pending', byId: { s1: { running: false } } }
+    assert.equal(runningState(catalog, 's1', { running: true }), true)
+    assert.equal(runningState(catalog, 's1', { running: false }), false)
+    assert.equal(runningState(undefined, 's1', { running: true }), true)
+    assert.equal(runningState(undefined, 's1', undefined), false)
   })
 })
