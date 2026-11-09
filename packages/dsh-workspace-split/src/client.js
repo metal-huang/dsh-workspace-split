@@ -28,6 +28,7 @@ import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from
 // ---------- composer metadata ----------
 import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
 import { admitSlashLine } from './composer-slash.js'
+import { promptWhileCurrent } from './composer-send.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
@@ -2496,44 +2497,32 @@ function Composer(props) {
     if (text.trim() === '' && images.length === 0 && files.length === 0) return
     setSending(true)
     setError('')
-    let parts
+    let outcome
     try {
-      const encoded = await Promise.all(
-        images.map((image) => imagePart(image.file, readFileBase64)),
-      )
-      parts = buildPromptParts(text, encoded, fileParts)
-    } catch (failure) {
-      setSending(false)
-      if (isCurrentSession()) {
-        setError(t('composer.image.readFailed', { error: thrownText(failure) }))
-      }
-      return
-    }
-    try {
-      // A prompt the Host already accepted cannot be recalled client-side. Check
-      // immediately before queueing; after the await we only suppress mutations.
-      if (!isCurrentSession()) {
-        setSending(false)
-        return
-      }
-      const result = await session.prompt(parts, 'queue')
-      if (!isCurrentSession()) return
-      if (result?.ok !== true) {
-        setError(t('composer.sendFailed', { error: remoteFailureText(result?.error) }))
-        return
-      }
-      clearImages()
-      clearFiles()
-      onText('')
-      setExpanded(false)
-      textareaRef.current?.focus()
-    } catch (failure) {
-      if (isCurrentSession()) {
-        setError(t('composer.sendFailed', { error: thrownText(failure) }))
-      }
+      outcome = await promptWhileCurrent(session, isCurrentSession, async () => {
+        const encoded = await Promise.all(
+          images.map((image) => imagePart(image.file, readFileBase64)),
+        )
+        return buildPromptParts(text, encoded, fileParts)
+      })
     } finally {
       setSending(false)
     }
+    if (outcome.action === 'stale') return
+    if (outcome.action === 'error') {
+      const key = outcome.stage === 'encode' ? 'composer.image.readFailed' : 'composer.sendFailed'
+      const error =
+        outcome.error instanceof Error
+          ? thrownText(outcome.error)
+          : remoteFailureText(outcome.error)
+      setError(t(key, { error }))
+      return
+    }
+    clearImages()
+    clearFiles()
+    onText('')
+    setExpanded(false)
+    textareaRef.current?.focus()
   }, [
     session,
     text,
