@@ -2390,6 +2390,10 @@ function Composer(props) {
     ready: fileParts,
   } = useDraftFiles(fileUpload, session?.sessionId)
   const textareaRef = useRef(null)
+  // The callback below captures the Session it started with; this ref follows
+  // later props so an in-flight send can stop when the tile is rebound.
+  const latestSessionRef = useRef(session)
+  latestSessionRef.current = session
   const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const attachRef = useRef(null)
@@ -2448,6 +2452,7 @@ function Composer(props) {
 
   const send = useCallback(async () => {
     if (session === undefined || session === null || sending) return
+    const isCurrentSession = () => latestSessionRef.current === session
     const line = parseSlashLine(text)
     if (line !== null) {
       const hasAttachments = images.length > 0 || files.length > 0
@@ -2459,6 +2464,9 @@ function Composer(props) {
       } finally {
         setSending(false)
       }
+      // Do not clear a new Session's draft, show an old error, or send to the
+      // old Session after the tile was rebound during admission.
+      if (!isCurrentSession()) return
       if (admission.action === 'error') {
         const error =
           admission.error instanceof Error
@@ -2491,14 +2499,21 @@ function Composer(props) {
       const encoded = await Promise.all(
         images.map((image) => imagePart(image.file, readFileBase64)),
       )
+      if (!isCurrentSession()) {
+        setSending(false)
+        return
+      }
       parts = buildPromptParts(text, encoded, fileParts)
     } catch (failure) {
       setSending(false)
-      setError(t('composer.image.readFailed', { error: thrownText(failure) }))
+      if (isCurrentSession()) {
+        setError(t('composer.image.readFailed', { error: thrownText(failure) }))
+      }
       return
     }
     try {
       const result = await session.prompt(parts, 'queue')
+      if (!isCurrentSession()) return
       if (result?.ok !== true) {
         setError(t('composer.sendFailed', { error: remoteFailureText(result?.error) }))
         return
@@ -2509,7 +2524,9 @@ function Composer(props) {
       setExpanded(false)
       textareaRef.current?.focus()
     } catch (failure) {
-      setError(t('composer.sendFailed', { error: thrownText(failure) }))
+      if (isCurrentSession()) {
+        setError(t('composer.sendFailed', { error: thrownText(failure) }))
+      }
     } finally {
       setSending(false)
     }

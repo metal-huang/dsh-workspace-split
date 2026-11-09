@@ -57,6 +57,7 @@ const WIRING = [
   'const archived = useMemo(() => archivedSessionIds(wsState), [wsState])',
   'admission = await admitSlashLine(session, remote.skills, text.trim(), hasAttachments)',
   'readOnly: sending',
+  'latestSessionRef.current = session',
 ]
 
 describe('split-cell wiring', () => {
@@ -71,6 +72,11 @@ describe('split-cell wiring', () => {
       )
     })
   }
+
+  it('rechecks the Session after every await and on both error paths', () => {
+    assert.equal(occurrences(source, 'if (!isCurrentSession())'), 3)
+    assert.equal(occurrences(source, 'if (isCurrentSession())'), 2)
+  })
 
   it('goes red when the wiring is reverted', () => {
     // Same normalization, one revert: this is the failure the guard exists for.
