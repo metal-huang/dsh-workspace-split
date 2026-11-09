@@ -1,0 +1,35 @@
+{
+  "$schema": "https://alibaba.github.io/open-code-review/schema.json",
+  "rules": [
+    {
+      "path": "packages/dsh-workspace-split/src/**/*.js",
+      "rule": "NEVER REPORT these (already covered by deterministic gates or outside the review goal):\n\n- Formatting, naming, magic numbers, nested ternaries, or duplicate code\n- Refactor suggestions such as extracting helpers without a correctness impact\n- Wording, visual preferences, or comments that only say the code looks good\n- Hardcoded text unless it bypasses the i18n path and causes incorrect locale behavior\n- Empty catch or fire-and-forget async code unless it loses a required result or failure at a system boundary\n\nIf your finding matches ANY of the above, DO NOT post it.\n\nREPORT these (semantic defects that benefit from repository context):\n- Sessions, drafts, queues, attachments, approvals, or answers leaking between cells\n- Race conditions, stale closures, obsolete async results overwriting current state\n- Event listener, timer, subscription, or object-retention lifecycle leaks\n- Host/client state divergence and loss of user input\n- Markdown, HTML, URL, file-path, or attachment injection and data-corruption risks\n- Persisted layout or zoom changes that break existing stored state\n- Behavior changes without a focused regression test\n\nContext: This is a DSH split-view browser client. Each cell owns an independent live Session. React hooks and Host events must not cross cell or Session identity.",
+      "merge_system_rule": false
+    },
+    {
+      "path": "packages/dsh-workspace-split/index.js",
+      "rule": "NEVER REPORT style, naming, formatting, or subjective refactoring. DO NOT post such findings.\n\nREPORT only semantic issues: storage-domain persistence errors, schema/backward-compatibility breaks, Session/Workspace identity confusion, lifecycle leaks, missing cleanup, unsafe error handling at the Host boundary, and behavior changes without regression coverage.\n\nContext: This is the handwritten Host half. Browser dependencies must never move into this file.",
+      "merge_system_rule": false
+    },
+    {
+      "path": "packages/dsh-workspace-split/{package.json,build.mjs,cordis.patch.yml}",
+      "rule": "NEVER REPORT formatting, dependency-version preferences, or subjective build-script style.\n\nREPORT build and package correctness defects: generated artifacts becoming tracked, browser dependencies left external, require calls outside the platform module table, non-reproducible builds, package exports/files omissions, runtime dependencies that are not bundled, and DSH plugin contract breaks.",
+      "merge_system_rule": false
+    },
+    {
+      "path": "{gate/**/*.mjs,scripts/**/*.mjs,.github/workflows/*.yml}",
+      "rule": "NEVER REPORT formatting, naming, or refactor-only suggestions. DO NOT post such findings.\n\nREPORT correctness and security issues: a gate that can silently pass invalid code, baseline weakening, incomplete file coverage, shell/script injection, unsafe pull_request_target use, checkout or execution of untrusted PR code in a secret-bearing job, excessive token permissions, mutable action references, accidental secret exposure, and release/build contract breaks.\n\nContext: CI must remain deterministic and advisory AI review must never become an approval or merge authority.",
+      "merge_system_rule": false
+    },
+    {
+      "path": "test/**/*.js",
+      "rule": "NEVER REPORT test style, naming, duplication, or subjective organization.\n\nREPORT semantic test defects: assertions that cannot fail for the intended regression, tests coupled to implementation shape without protecting behavior, missing cross-Session isolation, asynchronous tests that can silently pass, skipped coverage presented as verification, and changes that weaken an existing guard.",
+      "merge_system_rule": false
+    },
+    {
+      "path": "{docs/**,**/*.md,**/package-lock.json}",
+      "rule": "Skip. Prose and generated lockfiles are outside semantic code review.",
+      "merge_system_rule": false
+    }
+  ]
+}
