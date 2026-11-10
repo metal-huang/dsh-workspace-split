@@ -81,6 +81,9 @@ import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 import { projectBadgeStyle, projectColor, projectIndex, projectNameFrom } from './project.js'
 import { pickerRowOf } from './picker.js'
 import { SessionPicker } from './picker-ui.js'
+import { CellDrafts, newChatTarget } from './new-chat.js'
+
+const cellDrafts = new CellDrafts(localStorage)
 
 // ---------- archived sessions ----------
 import {
@@ -5078,6 +5081,7 @@ function SplitMain(props) {
   const { rows, cols } = geometry
   const [activeCell, setActiveCell] = useState(0)
   const [dragOver, setDragOver] = useState(-1)
+  const freshSessions = useRef(new Set())
   const [cells, setCells] = useState(() => {
     const s = saved?.cells ?? []
     // Keep assignments that the current (smaller) grid hides, so shrinking and
@@ -5109,7 +5113,7 @@ function SplitMain(props) {
 
   const items = list?.ids?.map((id) => list.byId[id]).filter(Boolean) ?? []
   // Archived Sessions stay in the catalog, so the pickers need their own filter;
-  // titles still resolve from `nonBlank`, which lets a released cell keep its
+  // titles still resolve from `items`, which lets a released cell keep its
   // name for the frame the reconciliation runs in.
   const nonBlank = items.filter((s) => !s.blank)
   const pickable = pickableSessions(nonBlank, archived)
@@ -5286,8 +5290,15 @@ function SplitMain(props) {
   useEffect(() => {
     if (list?.phase !== 'ready') return
     const known = new Set(list.ids ?? [])
+    for (const id of freshSessions.current) {
+      if (known.has(id) || archived.has(id)) freshSessions.current.delete(id)
+      else known.add(id)
+    }
+    cells.forEach((cell, index) => {
+      if (cell?.id && (!known.has(cell.id) || archived.has(cell.id))) cellDrafts.forget(index)
+    })
     setCells((prev) => reconcileCells(prev, known, archived))
-  }, [list, archived])
+  }, [list, archived, cells])
 
   // Tiles butt against each other: no gap, no radius. Each tile draws its own
   // leading and top hairline, and the grid carries the trailing and bottom
@@ -5348,11 +5359,22 @@ function SplitMain(props) {
         uiSession,
         remote,
         readBusyEnter,
-        nonBlank,
+        sessionItems: items,
         pickable,
         workspaceItems,
         projectById,
         sessionsOfWorkspace,
+        newTarget: newChatTarget(cells[i], cells[activeCell], items, workspaceItems),
+        ready: list?.phase === 'ready',
+        onCreated: (id) => {
+          freshSessions.current.add(id)
+          setCells((prev) => {
+            if (prev[i]?.id || (prev[i]?.ws ?? null) !== (cells[i]?.ws ?? null)) return prev
+            const next = [...prev]
+            next[i] = prev[i]?.t === 'workspace' ? { ...prev[i], id } : { t: 'session', id }
+            return next
+          })
+        },
         active: i === activeCell,
         stopSequenceMs,
         dragOver: dragOver === i,
@@ -5372,13 +5394,18 @@ function SplitMain(props) {
         },
         onPick: (id) => {
           const cell = cells[i]
+          if (id === null) {
+            cellDrafts.forget(i)
+            const target = newChatTarget(cell, cells[activeCell], items, workspaceItems)
+            setCell(
+              i,
+              target.workspaceId ? { t: 'workspace', ws: target.workspaceId, id: null } : null,
+            )
+            return
+          }
           setCell(
             i,
-            id === null
-              ? null
-              : cell?.t === 'workspace'
-                ? { t: 'workspace', ws: cell.ws, id }
-                : { t: 'session', id },
+            cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id } : { t: 'session', id },
           )
         },
         onZoom: (delta) => zoomIn(i, delta),
@@ -5626,11 +5653,14 @@ function SplitCell(props) {
     fileUpload,
     uiSession,
     remote,
-    nonBlank,
+    sessionItems,
     pickable,
     workspaceItems,
     projectById,
     sessionsOfWorkspace,
+    newTarget,
+    onCreated,
+    ready,
     active,
     stopSequenceMs,
     dragOver,
@@ -5646,7 +5676,7 @@ function SplitCell(props) {
     onZoom,
   } = props
   const sid = cell?.id ?? null
-  const sess = sid === null ? null : (nonBlank.find((s) => s.id === sid) ?? null)
+  const sess = sid === null ? null : (sessionItems.find((s) => s.id === sid) ?? null)
   // A Workspace cell offers only that Workspace's Sessions in its picker; the
   // free pickers skip archived Sessions, which the catalog still lists.
   const options = cell?.t === 'workspace' ? sessionsOfWorkspace(cell.ws) : pickable
@@ -5731,7 +5761,9 @@ function SplitCell(props) {
             ? h(CellTitle, {
                 sessions,
                 sessionId: sess.id,
-                title: sess.displayTitle || sess.title || sess.id.slice(0, 8),
+                title:
+                  sess.title ||
+                  (sess.blank ? t('split.chat.new') : sess.displayTitle || sess.id.slice(0, 8)),
                 running: sess.running,
                 project: projectTitle,
               })
@@ -5761,16 +5793,11 @@ function SplitCell(props) {
             t,
             onChange: onPick,
           }),
+          h(NewChatButton, { disabled: sid === null, onClick: () => onPick(null) }),
         ),
       },
-      cell?.t === 'workspace' && sess === null
-        ? h(
-            'div',
-            { style: { flex: 1, padding: 12, color: 'var(--dsw-alias-label-secondary, #888)' } },
-            options.length === 0
-              ? t('split.workspace.empty', { ws: wsTitle })
-              : t('split.cell.pickFromAbove'),
-          )
+      sid === null
+        ? h(NewChatCell, { index, sessions, target: newTarget, onCreated, ready })
         : h(CellView, {
             sessions,
             sessionId: sid,
@@ -5782,6 +5809,65 @@ function SplitCell(props) {
             stopSequenceMs,
           }),
     ),
+  )
+}
+
+function NewChatButton({ disabled, onClick }) {
+  return h(
+    'button',
+    {
+      title: t('split.chat.new'),
+      'aria-label': t('split.chat.new'),
+      disabled,
+      onClick,
+      style: {
+        border: 0,
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: 20,
+      },
+    },
+    '+',
+  )
+}
+
+/** One empty tile owns one stable creation request; rerenders do not create duplicates. */
+function NewChatCell({ index, sessions, target, onCreated, ready }) {
+  const [error, setError] = useState(null)
+  const [attempt, setAttempt] = useState(0)
+  const created = useRef(onCreated)
+  created.current = onCreated
+  const targetKey = JSON.stringify(target)
+  useEffect(() => {
+    if (!ready) return undefined
+    let alive = true
+    setError(null)
+    cellDrafts
+      .ensure(index, JSON.parse(targetKey), (request) =>
+        sessions
+          .create({ ...request, creationKey: 'workspace-split:' + request.sessionId })
+          .then((sessionId) => ({ ok: true, value: { sessionId } })),
+      )
+      .then(
+        (id) => {
+          if (alive) created.current(id)
+        },
+        (failure) => {
+          if (alive) setError(failure.message)
+        },
+      )
+    return () => {
+      alive = false
+    }
+  }, [index, sessions, targetKey, attempt, ready])
+  return h(
+    'div',
+    { role: 'status', style: { padding: 12 } },
+    error ?? t('split.chat.creating'),
+    error
+      ? h('button', { onClick: () => setAttempt((value) => value + 1) }, t('split.chat.retry'))
+      : null,
   )
 }
 
