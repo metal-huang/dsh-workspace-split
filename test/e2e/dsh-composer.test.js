@@ -413,6 +413,8 @@ describe('split composer parity (headless DSH)', { skip }, () => {
           },
           pickerLabel: '选择已有会话',
           ready: true,
+          creating: false,
+          createError: '',
           onNewChat: () => {
             window.__dswsCalls += 1
             return Promise.resolve('s1')

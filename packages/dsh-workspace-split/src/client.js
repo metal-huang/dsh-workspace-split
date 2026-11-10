@@ -5082,6 +5082,10 @@ function SplitMain(props) {
   const [activeCell, setActiveCell] = useState(0)
   const [dragOver, setDragOver] = useState(-1)
   const freshSessions = useRef(new Set())
+  // One in-flight creation per tile. A pick, drop, or clear bumps the generation
+  // so an older request settles without taking the tile back.
+  const draftGeneration = useRef({})
+  const [creation, setCreation] = useState({})
   const [cells, setCells] = useState(() => {
     const s = saved?.cells ?? []
     // Keep assignments that the current (smaller) grid hides, so shrinking and
@@ -5302,30 +5306,71 @@ function SplitMain(props) {
 
   // Create a Session only when the reader asks for one. Draft identity is
   // preallocated per tile, so a failed request or a renderer reload retries the
-  // same Session instead of minting another.
+  // same Session instead of minting another. The promise never rejects: the
+  // tile renders the failure from `creation` and offers the same Retry action
+  // as the empty-tile button.
   const createChat = useCallback(
     (index) => {
       const cell = cells[index]
       const target = newChatTarget(cell, cells[activeCell], items, workspaceItems)
+      const generation = (draftGeneration.current[index] ?? 0) + 1
+      draftGeneration.current[index] = generation
+      // An occupied tile becomes an empty slot first: the new Session has
+      // somewhere to land, and the reader sees the in-flight state instead of a
+      // silent no-op against a slot that already has an id.
+      if (cell?.id) {
+        setCells((prev) => {
+          const current = prev[index]
+          if (current?.id !== cell.id) return prev
+          const next = [...prev]
+          next[index] = current.t === 'workspace' ? { ...current, id: null } : null
+          return next
+        })
+      }
+      setCreation((prev) => ({ ...prev, [index]: { busy: true, error: '' } }))
       return cellDrafts
         .ensure(index, target, (request) =>
           sessions.create(request).then((sessionId) => ({ ok: true, value: { sessionId } })),
         )
         .then((id) => {
+          // A pick, drop, or clear during the request owns the tile now; the
+          // created Session stays in the catalog but must not take it back.
+          if (draftGeneration.current[index] !== generation) return id
           freshSessions.current.add(id)
           cellDrafts.forget(index)
           setCells((prev) => {
+            if (draftGeneration.current[index] !== generation) return prev
             const current = prev[index]
             if (current?.id) return prev
             const next = [...prev]
             next[index] = current?.t === 'workspace' ? { ...current, id } : { t: 'session', id }
             return next
           })
+          setCreation((prev) => ({ ...prev, [index]: { busy: false, error: '' } }))
           return id
+        })
+        .catch((failure) => {
+          if (draftGeneration.current[index] === generation) {
+            setCreation((prev) => ({
+              ...prev,
+              [index]: {
+                busy: false,
+                error: failure instanceof Error ? failure.message : String(failure),
+              },
+            }))
+          }
+          return undefined
         })
     },
     [cells, activeCell, items, workspaceItems, sessions],
   )
+
+  // Drop a tile's draft identity and supersede any request still in flight.
+  const forgetDraft = useCallback((index) => {
+    draftGeneration.current[index] = (draftGeneration.current[index] ?? 0) + 1
+    cellDrafts.forget(index)
+    setCreation((prev) => (prev[index] ? { ...prev, [index]: { busy: false, error: '' } } : prev))
+  }, [])
 
   // Tiles butt against each other: no gap, no radius. Each tile draws its own
   // leading and top hairline, and the grid carries the trailing and bottom
@@ -5392,6 +5437,8 @@ function SplitMain(props) {
         projectById,
         sessionsOfWorkspace,
         ready: list?.phase === 'ready',
+        creating: creation[i]?.busy === true,
+        createError: creation[i]?.error ?? '',
         onNewChat: () => createChat(i),
         active: i === activeCell,
         stopSequenceMs,
@@ -5409,12 +5456,12 @@ function SplitMain(props) {
           setDragOver(-1)
           const next = cellFromDrop(raw)
           if (next) {
-            cellDrafts.forget(i)
+            forgetDraft(i)
             setCell(i, next)
           }
         },
         onPick: (id) => {
-          cellDrafts.forget(i)
+          forgetDraft(i)
           if (id === null) {
             setCell(i, null)
             return
@@ -5676,6 +5723,8 @@ function SplitCell(props) {
     projectById,
     sessionsOfWorkspace,
     ready,
+    creating,
+    createError,
     onNewChat,
     active,
     stopSequenceMs,
@@ -5798,7 +5847,7 @@ function SplitCell(props) {
                 t('split.cell.empty.placeholder', { n: index + 1 }),
               ),
           sess === null ? null : h(SessionPicker, pickerProps),
-          sess === null ? null : h(NewChatButton, { onClick: onNewChat }),
+          sess === null ? null : h(NewChatButton, { disabled: creating, onClick: onNewChat }),
         ),
       },
       sid === null
@@ -5808,6 +5857,8 @@ function SplitCell(props) {
             picker: pickerProps,
             pickerLabel: t('split.chat.choose'),
             ready,
+            creating,
+            createError,
             onNewChat,
           })
         : h(CellView, {
@@ -5842,13 +5893,14 @@ function pickerPropsFor(sid, rows, wsTitle, onPick) {
 }
 
 /** Header action for an occupied tile: start a fresh chat in this tile. */
-function NewChatButton({ onClick }) {
+function NewChatButton({ disabled, onClick }) {
   return h(
     'button',
     {
       type: 'button',
       title: t('split.chat.new'),
       'aria-label': t('split.chat.new'),
+      disabled,
       onClick,
       style: {
         border: 0,
@@ -5914,22 +5966,7 @@ const emptyCellStyles = {
  * @param props - picker description, readiness, and the explicit creation action.
  */
 function EmptyCell(props) {
-  const { options, wsTitle, picker, pickerLabel, ready, onNewChat } = props
-  const [state, setState] = useState({ busy: false, error: '' })
-
-  const start = async () => {
-    if (!ready || state.busy) return
-    setState({ busy: true, error: '' })
-    try {
-      await onNewChat()
-      setState({ busy: false, error: '' })
-    } catch (failure) {
-      setState({
-        busy: false,
-        error: failure instanceof Error ? failure.message : String(failure),
-      })
-    }
-  }
+  const { options, wsTitle, picker, pickerLabel, ready, creating, createError, onNewChat } = props
 
   return h(
     'div',
@@ -5945,21 +5982,21 @@ function EmptyCell(props) {
         'button',
         {
           type: 'button',
-          style: emptyCellStyles.newChat(state.busy),
-          disabled: !ready || state.busy,
+          style: emptyCellStyles.newChat(creating),
+          disabled: !ready || creating,
           'data-dsws-new-chat': 'true',
-          onClick: start,
+          onClick: onNewChat,
         },
-        state.busy ? t('split.chat.creating') : t('split.chat.new'),
+        creating ? t('split.chat.creating') : t('split.chat.new'),
       ),
     ),
-    state.error === ''
+    createError === ''
       ? null
       : h(
           'div',
           { role: 'status', style: emptyCellStyles.error },
-          state.error,
-          h('button', { type: 'button', onClick: start }, t('split.chat.retry')),
+          createError,
+          h('button', { type: 'button', onClick: onNewChat }, t('split.chat.retry')),
         ),
   )
 }
