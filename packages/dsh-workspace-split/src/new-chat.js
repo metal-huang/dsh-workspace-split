@@ -33,7 +33,15 @@ export class CellDrafts {
   ensure(index, target, create) {
     const key = `${index}:${JSON.stringify(target)}`
     if (this.pending.has(key)) return this.pending.get(key)
-    if (typeof this.ids[key] !== 'string' || this.ids[key] === '') this.ids[key] = this.mint()
+    if (typeof this.ids[key] !== 'string' || this.ids[key] === '') {
+      try {
+        this.ids[key] = this.mint()
+      } catch (error) {
+        // Minting needs a secure context; keep the failure in the promise the
+        // caller already awaits instead of throwing before it gets one.
+        return Promise.reject(error)
+      }
+    }
     this.save()
     const request = { ...target, sessionId: this.ids[key] }
     const promise = Promise.resolve()
@@ -48,6 +56,18 @@ export class CellDrafts {
     })
     return promise
   }
+}
+
+/**
+ * Value of a tile after the picker's Clear action.
+ *
+ * A project tile keeps its Workspace scope: clearing the chat must not turn it
+ * into a free tile that later creates the next chat in another project.
+ * @param cell - the tile's current assignment.
+ * @returns the empty assignment to store.
+ */
+export function clearedCell(cell) {
+  return cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id: null } : null
 }
 
 /** Inherit the tile's project, then the active tile, then the most recent project. */

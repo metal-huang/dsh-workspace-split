@@ -69,7 +69,8 @@ const WIRING = [
   "'data-dsws-new-chat': 'true'",
   'sessions.create(request).then((sessionId) => ({ ok: true, value: { sessionId } }))',
   'if (draftGeneration.current[index] !== generation) return id',
-  'if (current?.id !== cell.id) return prev',
+  'setCell(i, clearedCell(cell))',
+  "'data-dsws-create-error': 'true'",
   "'configForms',",
   "const conversationForm = ctx.configForms?.get?.('ui-conversation')",
   "return snapshot?.status === 'ready' ? snapshot.value?.busyEnter : undefined",
@@ -125,11 +126,20 @@ describe('split-cell wiring', () => {
     assert.equal(occurrences(source, 'creationKey'), 0)
     assert.equal(occurrences(source, 'NewChatCell'), 0)
     assert.equal(occurrences(source, 'useEffect(() => { if (!ready) return undefined'), 0)
+    // No occupied-slot early return and no persisted clear: the generation token
+    // decides, and the tile keeps its Session until the replacement exists.
+    assert.equal(occurrences(source, 'if (current?.id) return prev'), 0)
+    assert.equal(
+      occurrences(
+        source,
+        "next[index] = current.t === 'workspace' ? { ...current, id: null } : null",
+      ),
+      0,
+    )
   })
 
   it('clears a tile on the picker clear instead of creating a chat', () => {
-    const fragment = 'if (id === null) { setCell(i, null) return }'
-    assert.equal(occurrences(source, fragment), 1)
+    assert.equal(occurrences(source, 'setCell(i, clearedCell(cell))'), 1)
   })
 
   it('counts both axis drags instead of storing one boolean', () => {

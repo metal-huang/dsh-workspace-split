@@ -68,6 +68,20 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     ])
   })
 
+  it('keeps the Session create request fields the empty tile uses', () => {
+    const relative = 'dsh-api-session-controller/lib/types/client/contract/sessions.d.ts'
+    includes(relative, [
+      'create(opts?: {',
+      'workspaceId?: WorkspaceId',
+      'cwd?: string',
+      'sessionId?: SessionId',
+      'agentPreset?: string',
+    ])
+    // PR #4 invented this field; the Host silently drops unknown keys, so a
+    // recurrence would look like it worked. Fail loudly instead.
+    assert.equal(read(relative).includes('creationKey'), false)
+  })
+
   it('keeps model and permission Remote surfaces', () => {
     includes('dsh-api-session-controller/lib/typert.remote-client.d.ts', [
       'modelCatalog',

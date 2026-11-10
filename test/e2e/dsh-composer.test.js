@@ -439,6 +439,107 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.equal(result.empty, true)
   })
 
+  it('shows the empty-tile failure and retries it', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__dswsCalls = 0
+        const picker = {
+          value: '',
+          rows: [],
+          showProject: true,
+          searchPlaceholder: '',
+          emptyTitle: '',
+          onChange: () => {},
+        }
+        window.__dswsTest.render('empty', root, {
+          options: [],
+          wsTitle: null,
+          picker,
+          pickerLabel: '选择已有会话',
+          ready: true,
+          creating: false,
+          createError: 'refused',
+          onNewChat: () => {
+            window.__dswsCalls += 1
+            return Promise.resolve('s1')
+          },
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        const status = root.querySelector('[role="status"]')?.innerText ?? ''
+        const retry = [...root.querySelectorAll('button')].find(
+          (button) => button.innerText === '重试',
+        )
+        retry?.click()
+        await new Promise((done) => setTimeout(done, 100))
+        const calls = window.__dswsCalls
+        window.__dswsTest.render('empty', root, {
+          options: [],
+          wsTitle: null,
+          picker,
+          pickerLabel: '选择已有会话',
+          ready: true,
+          creating: true,
+          createError: 'refused',
+          onNewChat: () => {},
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        const creating = [...root.querySelectorAll('button')].find((button) =>
+          button.innerText.includes('正在创建'),
+        )
+        const retryWhileBusy = [...root.querySelectorAll('button')].find(
+          (button) => button.innerText === '重试',
+        )
+        return {
+          status: status.includes('refused'),
+          retry: retry !== undefined,
+          calls,
+          creatingLabel: creating !== undefined,
+          creatingDisabled: creating?.disabled === true,
+          retryDisabled: retryWhileBusy?.disabled === true,
+        }
+      })()`,
+    )
+    assert.equal(result.status, true)
+    assert.equal(result.retry, true)
+    assert.equal(result.calls, 1)
+    assert.equal(result.creatingLabel, true)
+    assert.equal(result.creatingDisabled, true)
+    assert.equal(result.retryDisabled, true)
+  })
+
+  it('shows a creation failure above an occupied tile', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__dswsCalls = 0
+        window.__dswsTest.render('creationError', root, {
+          message: 'refused by host',
+          ready: true,
+          creating: false,
+          onRetry: () => {
+            window.__dswsCalls += 1
+          },
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        const notice = root.querySelector('[data-dsws-create-error]')
+        ;[...root.querySelectorAll('button')]
+          .find((button) => button.innerText === '重试')
+          ?.click()
+        return {
+          message: notice?.innerText ?? '',
+          calls: window.__dswsCalls,
+        }
+      })()`,
+    )
+    assert.equal(result.message.includes('refused by host'), true)
+    assert.equal(result.calls, 1)
+  })
+
   it('renders @ candidates as selectable rows', async () => {
     const result = await evaluate(
       page,

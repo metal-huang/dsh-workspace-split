@@ -81,7 +81,7 @@ import { SIDEBAR_STYLES, accountRowOf, alignToAccountRow } from './layout.js'
 import { projectBadgeStyle, projectColor, projectIndex, projectNameFrom } from './project.js'
 import { pickerRowOf } from './picker.js'
 import { SessionPicker } from './picker-ui.js'
-import { CellDrafts, newChatTarget } from './new-chat.js'
+import { CellDrafts, clearedCell, newChatTarget } from './new-chat.js'
 
 const cellDrafts = new CellDrafts(localStorage)
 
@@ -5086,6 +5086,12 @@ function SplitMain(props) {
   // so an older request settles without taking the tile back.
   const draftGeneration = useRef({})
   const [creation, setCreation] = useState({})
+  // Drop a tile's draft identity and supersede any request still in flight.
+  const forgetDraft = useCallback((index) => {
+    draftGeneration.current[index] = (draftGeneration.current[index] ?? 0) + 1
+    cellDrafts.forget(index)
+    setCreation((prev) => (prev[index] ? { ...prev, [index]: { busy: false, error: '' } } : prev))
+  }, [])
   const [cells, setCells] = useState(() => {
     const s = saved?.cells ?? []
     // Keep assignments that the current (smaller) grid hides, so shrinking and
@@ -5299,34 +5305,22 @@ function SplitMain(props) {
       else known.add(id)
     }
     cells.forEach((cell, index) => {
-      if (cell?.id && (!known.has(cell.id) || archived.has(cell.id))) cellDrafts.forget(index)
+      if (cell?.id && (!known.has(cell.id) || archived.has(cell.id))) forgetDraft(index)
     })
     setCells((prev) => reconcileCells(prev, known, archived))
-  }, [list, archived, cells])
+  }, [list, archived, cells, forgetDraft])
 
   // Create a Session only when the reader asks for one. Draft identity is
   // preallocated per tile, so a failed request or a renderer reload retries the
-  // same Session instead of minting another. The promise never rejects: the
-  // tile renders the failure from `creation` and offers the same Retry action
-  // as the empty-tile button.
+  // same Session instead of minting another. The tile keeps its current Session
+  // until the new one exists: clearing it first would persist an empty cell and
+  // destroy the composer draft when the request never settles.
   const createChat = useCallback(
     (index) => {
       const cell = cells[index]
       const target = newChatTarget(cell, cells[activeCell], items, workspaceItems)
       const generation = (draftGeneration.current[index] ?? 0) + 1
       draftGeneration.current[index] = generation
-      // An occupied tile becomes an empty slot first: the new Session has
-      // somewhere to land, and the reader sees the in-flight state instead of a
-      // silent no-op against a slot that already has an id.
-      if (cell?.id) {
-        setCells((prev) => {
-          const current = prev[index]
-          if (current?.id !== cell.id) return prev
-          const next = [...prev]
-          next[index] = current.t === 'workspace' ? { ...current, id: null } : null
-          return next
-        })
-      }
       setCreation((prev) => ({ ...prev, [index]: { busy: true, error: '' } }))
       return cellDrafts
         .ensure(index, target, (request) =>
@@ -5341,7 +5335,6 @@ function SplitMain(props) {
           setCells((prev) => {
             if (draftGeneration.current[index] !== generation) return prev
             const current = prev[index]
-            if (current?.id) return prev
             const next = [...prev]
             next[index] = current?.t === 'workspace' ? { ...current, id } : { t: 'session', id }
             return next
@@ -5364,13 +5357,6 @@ function SplitMain(props) {
     },
     [cells, activeCell, items, workspaceItems, sessions],
   )
-
-  // Drop a tile's draft identity and supersede any request still in flight.
-  const forgetDraft = useCallback((index) => {
-    draftGeneration.current[index] = (draftGeneration.current[index] ?? 0) + 1
-    cellDrafts.forget(index)
-    setCreation((prev) => (prev[index] ? { ...prev, [index]: { busy: false, error: '' } } : prev))
-  }, [])
 
   // Tiles butt against each other: no gap, no radius. Each tile draws its own
   // leading and top hairline, and the grid carries the trailing and bottom
@@ -5462,11 +5448,11 @@ function SplitMain(props) {
         },
         onPick: (id) => {
           forgetDraft(i)
+          const cell = cells[i]
           if (id === null) {
-            setCell(i, null)
+            setCell(i, clearedCell(cell))
             return
           }
-          const cell = cells[i]
           setCell(
             i,
             cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id } : { t: 'session', id },
@@ -5846,10 +5832,13 @@ function SplitCell(props) {
                 },
                 t('split.cell.empty.placeholder', { n: index + 1 }),
               ),
-          sess === null ? null : h(SessionPicker, pickerProps),
-          sess === null ? null : h(NewChatButton, { disabled: creating, onClick: onNewChat }),
+          sid === null ? null : h(SessionPicker, pickerProps),
+          sid === null ? null : h(NewChatButton, { creating, onClick: onNewChat }),
         ),
       },
+      sid !== null && createError !== ''
+        ? h(CreationNotice, { message: createError, ready, creating, onRetry: onNewChat })
+        : null,
       sid === null
         ? h(EmptyCell, {
             options,
@@ -5893,14 +5882,14 @@ function pickerPropsFor(sid, rows, wsTitle, onPick) {
 }
 
 /** Header action for an occupied tile: start a fresh chat in this tile. */
-function NewChatButton({ disabled, onClick }) {
+function NewChatButton({ creating, onClick }) {
   return h(
     'button',
     {
       type: 'button',
-      title: t('split.chat.new'),
+      title: creating ? t('split.chat.creating') : t('split.chat.new'),
       'aria-label': t('split.chat.new'),
-      disabled,
+      disabled: creating,
       onClick,
       style: {
         border: 0,
@@ -5949,12 +5938,48 @@ const emptyCellStyles = {
     opacity: busy ? 0.7 : 1,
     fontSize: 12,
   }),
-  error: {
-    maxWidth: 360,
-    textAlign: 'center',
-    fontSize: 12,
+}
+
+const creationNoticeStyles = {
+  row: {
+    flex: 'none',
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    padding: '6px 12px',
+    borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
+    background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))',
     color: 'var(--dsw-alias-state-error-primary, #e5484d)',
+    fontSize: 12,
   },
+  text: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' },
+  retry: { flex: 'none', fontSize: 12 },
+}
+
+/**
+ * Creation failure shown above the tile body, with the same Retry action as the
+ * empty-tile button. The tile keeps its current Session while a new one is being
+ * created, so this notice is how a failed header + becomes visible.
+ * @param props - message, readiness, in-flight state, and the retry action.
+ */
+function CreationNotice(props) {
+  const { message, ready, creating, onRetry } = props
+  return h(
+    'div',
+    { role: 'status', style: creationNoticeStyles.row, 'data-dsws-create-error': 'true' },
+    h('span', { style: creationNoticeStyles.text }, message),
+    h(
+      'button',
+      {
+        type: 'button',
+        style: creationNoticeStyles.retry,
+        disabled: !ready || creating,
+        onClick: onRetry,
+      },
+      t('split.chat.retry'),
+    ),
+  )
 }
 
 /**
@@ -5992,12 +6017,7 @@ function EmptyCell(props) {
     ),
     createError === ''
       ? null
-      : h(
-          'div',
-          { role: 'status', style: emptyCellStyles.error },
-          createError,
-          h('button', { type: 'button', onClick: onNewChat }, t('split.chat.retry')),
-        ),
+      : h(CreationNotice, { message: createError, ready, creating, onRetry: onNewChat }),
   )
 }
 
@@ -6254,6 +6274,7 @@ if (
     drafts: DraftImageStrip,
     picker: SessionPicker,
     empty: EmptyCell,
+    creationError: CreationNotice,
     gutters: SplitGutters,
   }
   window.__dswsTest = {

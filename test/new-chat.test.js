@@ -10,7 +10,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { CellDrafts, newChatTarget } from '../packages/dsh-workspace-split/src/new-chat.js'
+import {
+  CellDrafts,
+  clearedCell,
+  newChatTarget,
+} from '../packages/dsh-workspace-split/src/new-chat.js'
 
 /** In-memory localStorage stand-in. */
 function storage(initial = {}) {
@@ -101,6 +105,16 @@ describe('CellDrafts', () => {
     assert.equal(await drafts.ensure(0, { workspaceId: 'w1' }, create), 'session-1')
   })
 
+  it('turns a minting failure into a rejected request, not a synchronous throw', async () => {
+    const drafts = new CellDrafts(storage(), () => {
+      throw new Error('no secure context')
+    })
+    await assert.rejects(
+      drafts.ensure(0, { workspaceId: 'w1' }, async () => ({ ok: true })),
+      /no secure context/,
+    )
+  })
+
   it('survives unavailable storage and malformed saved identities', async () => {
     const broken = {
       getItem: () => {
@@ -116,6 +130,21 @@ describe('CellDrafts', () => {
 
     const malformed = new CellDrafts(storage({ 'dsws-new-chat-ids': '[]' }), minter())
     assert.equal(await malformed.ensure(0, { workspaceId: 'w1' }, create), 'session-1')
+  })
+})
+
+describe('clearedCell', () => {
+  it('keeps a project tile scoped when its chat is cleared', () => {
+    assert.deepEqual(clearedCell({ t: 'workspace', ws: 'w1', id: 's1' }), {
+      t: 'workspace',
+      ws: 'w1',
+      id: null,
+    })
+  })
+
+  it('empties a free tile', () => {
+    assert.equal(clearedCell({ t: 'session', id: 's1' }), null)
+    assert.equal(clearedCell(null), null)
   })
 })
 
