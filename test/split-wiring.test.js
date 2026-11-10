@@ -64,6 +64,12 @@ const WIRING = [
   "document.addEventListener('keydown', handler.onKeyDown, true)",
   'belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),',
   'const stopSequenceMs = ctx.shortcuts.stopSequenceMs',
+  'frozen: dragging > 0',
+  'if (frozen) return if (!event.ctrlKey) return',
+  'readMetrics() const sizePx = extentOf()',
+  'const delta = gutterKeyDelta(axis, event.key)',
+  'onChange(commitRatios(state.next, ratios))',
+  'onLostPointerCapture: () => stop(false)',
 ]
 
 describe('split-cell wiring', () => {
@@ -78,6 +84,20 @@ describe('split-cell wiring', () => {
       )
     })
   }
+
+  it('keeps the reshape hook above the single-track early return', () => {
+    const hook = source.indexOf(
+      'useEffect(() => { if (drag.current !== null && drag.current.ratios.length !== ratios.length) stop(false)',
+    )
+    const earlyReturn = source.indexOf('if (ratios.length < 2) return null')
+    assert.ok(hook >= 0 && earlyReturn > hook)
+  })
+
+  it('counts both axis drags instead of storing one boolean', () => {
+    const fragment =
+      'onDraggingChange: (active) => setDragging((count) => Math.max(0, count + (active ? 1 : -1)))'
+    assert.equal(occurrences(source, fragment), 2)
+  })
 
   it('goes red when the wiring is reverted', () => {
     // Same normalization, one revert: this is the failure the guard exists for.

@@ -85,18 +85,20 @@ export function gutterPercents(ratios) {
   return out
 }
 
-/**
- * Move one gutter by `deltaPx`, keeping both neighbours at or above their floor.
- *
- * The pair keeps its sum, so dragging one boundary never reflows the tracks it
- * does not separate, and the weights never leave the positive range the
- * template needs.
- * @param ratios - current weights, one per track.
- * @param index - gutter index: it separates tracks `index` and `index + 1`.
- * @param deltaPx - pointer movement in pixels; positive moves the gutter forward.
- * @param ctx - `sizePx` is the measured grid extent, `mins` the per-track floors.
- * @returns new weights, or the input array when the drag cannot apply.
- */
+/** Commit a drag only when its track count still matches the live grid. */
+export function commitRatios(next, current) {
+  return next.length === current.length ? next : current
+}
+
+/** Pixel delta for one keyboard resize step, or zero for an unrelated key. */
+export function gutterKeyDelta(axis, key) {
+  if (axis === 'x' && key === 'ArrowLeft') return -24
+  if (axis === 'x' && key === 'ArrowRight') return 24
+  if (axis === 'y' && key === 'ArrowUp') return -24
+  if (axis === 'y' && key === 'ArrowDown') return 24
+  return 0
+}
+
 /**
  * Collect the pair a drag can move, or null when this drag cannot apply.
  * @param ratios - current weights.
