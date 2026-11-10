@@ -28,12 +28,23 @@ function queueMode(mode) {
 }
 
 /**
+ * Resolve the mode immediately before the prompt.
+ *
+ * Encoding image parts can take long enough for the Session to start or finish
+ * a turn, so a mode decided before `encode()` describes the wrong phase. A
+ * resolver is called here instead; a plain mode is still accepted.
+ */
+function modeAtSend(mode) {
+  return queueMode(typeof mode === 'function' ? mode() : mode)
+}
+
+/**
  * Encode and send one prompt with the chosen mode while the tile still owns the
  * same Session.
  * @param session - Session face the composer is bound to.
  * @param isCurrentSession - identity guard checked before and after sending.
  * @param encode - builds the prompt parts.
- * @param mode - prompt mode; `queue` unless the caller resolved a running steer.
+ * @param mode - prompt mode, or a resolver evaluated at prompt time.
  * @returns settled outcome for the composer's draft and error handling.
  */
 export async function promptWhileCurrent(session, isCurrentSession, encode, mode) {
@@ -47,7 +58,7 @@ export async function promptWhileCurrent(session, isCurrentSession, encode, mode
   if (!isCurrentSession()) return { action: 'stale' }
   let result
   try {
-    result = await session.prompt(parts, queueMode(mode))
+    result = await session.prompt(parts, modeAtSend(mode))
   } catch (error) {
     return isCurrentSession() ? { action: 'error', stage: 'prompt', error } : { action: 'stale' }
   }

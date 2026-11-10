@@ -2441,6 +2441,12 @@ function Composer(props) {
   useLayoutEffect(() => {
     latestSessionRef.current = session
   }, [session])
+  // Resolve the mode at prompt time: the Session can start or finish a turn
+  // while image parts encode, and the Host setting can change between renders.
+  const readSendMode = useCallback(
+    () => sendMode(readBusyEnter?.(), session?.getSnapshot?.()?.running === true),
+    [readBusyEnter, session],
+  )
   const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const attachRef = useRef(null)
@@ -2543,7 +2549,6 @@ function Composer(props) {
     setError('')
     let outcome
     try {
-      const mode = sendMode(readBusyEnter?.(), running)
       outcome = await promptWhileCurrent(
         session,
         isCurrentSession,
@@ -2553,7 +2558,7 @@ function Composer(props) {
           )
           return buildPromptParts(text, encoded, fileParts)
         },
-        mode,
+        readSendMode,
       )
     } finally {
       setSending(false)
@@ -2583,8 +2588,7 @@ function Composer(props) {
     uploading,
     failed,
     sending,
-    running,
-    readBusyEnter,
+    readSendMode,
     setError,
     clearImages,
     clearFiles,
@@ -5954,10 +5958,10 @@ export function apply(ctx) {
   // The split composer must follow the same Host preference as the main one.
   // Read it per send rather than snapshotting it at mount: a settings change
   // applies to the next send without reloading the page.
-  const conversationForm = ctx.configForms.get('ui-conversation')
+  const conversationForm = ctx.configForms?.get?.('ui-conversation')
   const readBusyEnter = () => {
-    const snapshot = conversationForm.getSnapshot()
-    return snapshot.status === 'ready' ? snapshot.value?.busyEnter : undefined
+    const snapshot = conversationForm?.getSnapshot?.()
+    return snapshot?.status === 'ready' ? snapshot.value?.busyEnter : undefined
   }
   ctx.slots.inject('main', () =>
     ctx.slots.register(

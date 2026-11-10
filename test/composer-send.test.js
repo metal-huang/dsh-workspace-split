@@ -140,6 +140,53 @@ describe('promptWhileCurrent', () => {
   })
 })
 
+describe('promptWhileCurrent mode resolution', () => {
+  it('resolves a mode function after encoding, at prompt time', async () => {
+    const order = []
+    const session = {
+      prompt: async (_parts, mode) => {
+        order.push(`prompt:${mode}`)
+        return { ok: true }
+      },
+    }
+    const outcome = await promptWhileCurrent(
+      session,
+      () => true,
+      async () => {
+        order.push('encode')
+        return PARTS
+      },
+      () => {
+        order.push('mode')
+        return 'steer'
+      },
+    )
+    assert.deepEqual(outcome, { action: 'sent' })
+    assert.deepEqual(order, ['encode', 'mode', 'prompt:steer'])
+  })
+
+  it('sees a phase change that happens during encoding', async () => {
+    let running = true
+    const modes = []
+    const session = {
+      prompt: async (_parts, mode) => {
+        modes.push(mode)
+        return { ok: true }
+      },
+    }
+    await promptWhileCurrent(
+      session,
+      () => true,
+      async () => {
+        running = false
+        return PARTS
+      },
+      () => sendMode('steer', running),
+    )
+    assert.deepEqual(modes, ['queue'])
+  })
+})
+
 describe('sendMode', () => {
   it('steers only a running Session whose setting asks for it', () => {
     assert.equal(sendMode('steer', true), 'steer')
