@@ -118,7 +118,7 @@ function CellZoom(props) {
   const outerRef = useRef(null)
   const [auto, setAuto] = useState(1)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (frozen) return undefined
     const el = outerRef.current
     if (el === null || typeof ResizeObserver !== 'function') return undefined
@@ -133,6 +133,7 @@ function CellZoom(props) {
     const el = outerRef.current
     if (el === null) return undefined
     const onWheel = (event) => {
+      if (frozen) return
       if (!event.ctrlKey) return
       // Horizontal wheels and trackpad noise report deltaY 0; those must not
       // count as a zoom step.
@@ -142,7 +143,7 @@ function CellZoom(props) {
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [onZoom])
+  }, [onZoom, frozen])
 
   const scale = effectiveZoom(auto, zoom)
   return h(
@@ -5011,9 +5012,9 @@ function SplitMain(props) {
   })
   // Reader overrides for the per-cell text scale, one multiplier per cell.
   const [zooms, setZooms] = useState(() => savedZooms(saved))
-  // While a gutter moves, every tile keeps its last scale instead of recomputing
-  // on each width change. The release reads final widths once.
-  const [dragging, setDragging] = useState(false)
+  // While any gutter moves, every tile keeps its last scale instead of recomputing
+  // on each width change. Two pointers can drag different axes, so count them.
+  const [dragging, setDragging] = useState(0)
   // Column weights, one per column. Saved with the rest of the layout so a drag
   // survives a reload; a layout written before gutters existed carries none and
   // renders equal columns, which is what those layouts already showed.
@@ -5082,11 +5083,18 @@ function SplitMain(props) {
     // ignored it would leave room for a title and nothing else.
     const header = el.querySelector('[data-dsws-header-scale]')
     const headerPx = header === null ? 36 : header.getBoundingClientRect().height
-    setMetrics({
+    const next = {
       fontPx: base,
       linePx: linePx > 0 ? linePx : base * 1.5,
       headerPx: headerPx > 0 ? headerPx : 36,
-    })
+    }
+    // ResizeObserver can fire continuously during a sidebar drag. Do not render
+    // every cell again when the measured text metrics are unchanged.
+    setMetrics((prev) =>
+      prev.fontPx === next.fontPx && prev.linePx === next.linePx && prev.headerPx === next.headerPx
+        ? prev
+        : next,
+    )
   }, [])
 
   useLayoutEffect(() => {
@@ -5271,7 +5279,7 @@ function SplitMain(props) {
         stopSequenceMs,
         dragOver: dragOver === i,
         zoom: zooms[i] ?? 1,
-        frozen: dragging,
+        frozen: dragging > 0,
         cellStyle,
         headerStyle: cellHeaderStyle,
         onActivate: () => setActiveCell(i),
@@ -5303,7 +5311,7 @@ function SplitMain(props) {
       ratios: colRatios,
       mins: colFloor,
       onChange: setColRatios,
-      onDraggingChange: setDragging,
+      onDraggingChange: (active) => setDragging((count) => Math.max(0, count + (active ? 1 : -1))),
       readMetrics,
       gridRef,
       label: t('split.gutter.label'),
@@ -5313,7 +5321,7 @@ function SplitMain(props) {
       ratios: rowRatios,
       mins: rowFloor,
       onChange: setRowRatios,
-      onDraggingChange: setDragging,
+      onDraggingChange: (active) => setDragging((count) => Math.max(0, count + (active ? 1 : -1))),
       readMetrics,
       gridRef,
       label: t('split.gutter.rowLabel'),
@@ -5380,7 +5388,6 @@ function SplitGutters(props) {
     [],
   )
 
-  if (ratios.length < 2) return null
   const across = axis === 'x'
   const percents = gutterPercents(ratios)
 
@@ -5422,6 +5429,10 @@ function SplitGutters(props) {
   useEffect(() => {
     if (drag.current !== null && drag.current.ratios.length !== ratios.length) stop(false)
   }, [ratios.length])
+
+  // Keep every hook above this early return; changing the track count must not
+  // change the hook order between renders.
+  if (ratios.length < 2) return null
 
   const begin = (index) => (event) => {
     // Pointer detail is reliable even when preventDefault suppresses dblclick.

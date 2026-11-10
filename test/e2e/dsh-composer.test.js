@@ -484,6 +484,63 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.equal(result.tabIndex, 0)
   })
 
+  it('discards pointer-cancel and capture-loss drags without committing', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const grid = document.createElement('div')
+        Object.assign(grid.style, { width: '800px', height: '400px', display: 'grid' })
+        document.body.append(grid)
+        const root = document.createElement('div')
+        grid.append(root)
+        const changes = []
+        window.__dswsTest.render('gutters', root, {
+          axis: 'x',
+          ratios: [1, 1],
+          mins: [0, 0],
+          gridRef: { current: grid },
+          label: 'Columns',
+          onChange: (next) => changes.push(next),
+        })
+        await new Promise((done) => setTimeout(done, 80))
+        const gutter = root.querySelector('[role="separator"]')
+        const down = () => gutter.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          detail: 1,
+          pointerId: 1,
+          clientX: 100,
+          clientY: 100,
+        }))
+        const move = (clientX) => gutter.dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          clientX,
+          clientY: 100,
+        }))
+        down()
+        move(160)
+        const moved = grid.style.gridTemplateColumns
+        gutter.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1 }))
+        await new Promise((done) => setTimeout(done, 20))
+        const afterCancel = { count: changes.length, template: grid.style.gridTemplateColumns }
+        down()
+        move(220)
+        gutter.dispatchEvent(new Event('lostpointercapture', { bubbles: true }))
+        await new Promise((done) => setTimeout(done, 20))
+        const afterCaptureLoss = { count: changes.length, template: grid.style.gridTemplateColumns }
+        return { moved, afterCancel, afterCaptureLoss }
+      })()`,
+    )
+    assert.notEqual(result.moved, '')
+    assert.equal(result.afterCancel.count, 0)
+    assert.equal(result.afterCaptureLoss.count, 0)
+    assert.equal(result.afterCancel.template, 'minmax(0px, 1fr) minmax(0px, 1fr)')
+    assert.equal(result.afterCaptureLoss.template, 'minmax(0px, 1fr) minmax(0px, 1fr)')
+  })
+
   it('opens the model menu and reports a selection', async () => {
     const result = await evaluate(
       page,

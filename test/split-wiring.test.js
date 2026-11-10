@@ -64,7 +64,7 @@ const WIRING = [
   "document.addEventListener('keydown', handler.onKeyDown, true)",
   'belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),',
   'const stopSequenceMs = ctx.shortcuts.stopSequenceMs',
-  'frozen: dragging',
+  'frozen: dragging > 0',
   'readMetrics() const sizePx = extentOf()',
   'const delta = gutterKeyDelta(axis, event.key)',
   'onChange(commitRatios(state.next, ratios))',
@@ -83,6 +83,14 @@ describe('split-cell wiring', () => {
       )
     })
   }
+
+  it('keeps the reshape hook above the single-track early return', () => {
+    const hook = source.indexOf(
+      'useEffect(() => { if (drag.current !== null && drag.current.ratios.length !== ratios.length) stop(false)',
+    )
+    const earlyReturn = source.indexOf('if (ratios.length < 2) return null')
+    assert.ok(hook >= 0 && earlyReturn > hook)
+  })
 
   it('goes red when the wiring is reverted', () => {
     // Same normalization, one revert: this is the failure the guard exists for.
