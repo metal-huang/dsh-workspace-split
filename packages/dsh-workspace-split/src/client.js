@@ -23,11 +23,13 @@ const { useState, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExter
 import { detectLanguage, t } from './i18n.js'
 
 // ---------- cell text scaling ----------
-import { ZOOM_STEP, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
+import { ZOOM_STEP, autoZoomForWidth, effectiveZoom, savedZooms, stepZoom } from './zoom.js'
 
 // ---------- track ratios ----------
 import {
+  commitRatios,
   equalRatios,
+  gutterKeyDelta,
   gutterPercents,
   normalizeRatios,
   ratioTemplate,
@@ -112,8 +114,20 @@ const LIMIT_MAX = PICKER_MAX_ROWS * PICKER_MAX_COLS
  * @param props - `zoom` is the reader override, `onZoom` receives the next step.
  */
 function CellZoom(props) {
-  const { zoom, onZoom, header, children } = props
+  const { zoom, onZoom, header, children, frozen } = props
   const outerRef = useRef(null)
+  const [auto, setAuto] = useState(1)
+
+  useEffect(() => {
+    if (frozen) return undefined
+    const el = outerRef.current
+    if (el === null || typeof ResizeObserver !== 'function') return undefined
+    const read = () => setAuto(autoZoomForWidth(el.getBoundingClientRect().width))
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [frozen])
 
   useEffect(() => {
     const el = outerRef.current
@@ -130,20 +144,19 @@ function CellZoom(props) {
     return () => el.removeEventListener('wheel', onWheel)
   }, [onZoom])
 
-  const scale = effectiveZoom(zoom)
+  const scale = effectiveZoom(auto, zoom)
   return h(
     'div',
     {
       ref: outerRef,
       style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 },
     },
-    // The header stays at the app's own size: only the transcript and composer
-    // follow a manual Ctrl+wheel override, so two tiles never disagree on type
-    // size just because one of them is narrower.
+    // The header shares the width-driven factor but not the manual override.
+    // Both parts keep the same value while a drag is frozen, then recompute.
     h(
       'div',
       {
-        style: { flexShrink: 0, minWidth: 0 },
+        style: { zoom: auto, flexShrink: 0, minWidth: 0 },
         'data-dsws-header-scale': 'true',
       },
       header,
@@ -4998,6 +5011,9 @@ function SplitMain(props) {
   })
   // Reader overrides for the per-cell text scale, one multiplier per cell.
   const [zooms, setZooms] = useState(() => savedZooms(saved))
+  // While a gutter moves, every tile keeps its last scale instead of recomputing
+  // on each width change. The release reads final widths once.
+  const [dragging, setDragging] = useState(false)
   // Column weights, one per column. Saved with the rest of the layout so a drag
   // survives a reload; a layout written before gutters existed carries none and
   // renders equal columns, which is what those layouts already showed.
@@ -5055,28 +5071,37 @@ function SplitMain(props) {
 
   const total = rows * cols
 
+  const readMetrics = useCallback(() => {
+    const el = gridRef.current
+    if (el === null) return
+    const style = getComputedStyle(el)
+    const fontPx = Number.parseFloat(style.fontSize)
+    const linePx = Number.parseFloat(style.lineHeight)
+    const base = fontPx > 0 ? fontPx : 15
+    // The tile header is a fixed strip above the transcript; a row floor that
+    // ignored it would leave room for a title and nothing else.
+    const header = el.querySelector('[data-dsws-header-scale]')
+    const headerPx = header === null ? 36 : header.getBoundingClientRect().height
+    setMetrics({
+      fontPx: base,
+      linePx: linePx > 0 ? linePx : base * 1.5,
+      headerPx: headerPx > 0 ? headerPx : 36,
+    })
+  }, [])
+
   useLayoutEffect(() => {
+    readMetrics()
     const el = gridRef.current
     if (el === null) return undefined
-    const read = () => {
-      const style = getComputedStyle(el)
-      const fontPx = Number.parseFloat(style.fontSize)
-      const linePx = Number.parseFloat(style.lineHeight)
-      const base = fontPx > 0 ? fontPx : 15
-      // The tile header is a fixed strip above the transcript; a row floor that
-      // ignored it would leave room for a title and nothing else.
-      const header = el.querySelector('[data-dsws-header-scale]')
-      const headerPx = header === null ? 36 : header.getBoundingClientRect().height
-      setMetrics({
-        fontPx: base,
-        linePx: linePx > 0 ? linePx : base * 1.5,
-        headerPx: headerPx > 0 ? headerPx : 36,
-      })
+    // A sidebar splitter does not emit window.resize, so observe the grid itself.
+    const observer = new ResizeObserver(readMetrics)
+    observer.observe(el)
+    window.addEventListener('resize', readMetrics)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', readMetrics)
     }
-    read()
-    window.addEventListener('resize', read)
-    return () => window.removeEventListener('resize', read)
-  }, [gridRef])
+  }, [readMetrics])
 
   // One floor per track: 18 characters wide, 4 lines tall, raised by the
   // strictest reader override the track holds.
@@ -5150,8 +5175,9 @@ function SplitMain(props) {
   }, [rows, cols])
 
   // The grid outlives a shape change: pad a grown grid with equal columns and
-  // drop the weights of columns that no longer exist.
-  useEffect(() => {
+  // drop the weights of columns that no longer exist. Normalize before the save
+  // effect so an old-length list never gets persisted on the shape-change pass.
+  useLayoutEffect(() => {
     setColRatios((prev) => normalizeRatios(prev, cols))
     setRowRatios((prev) => normalizeRatios(prev, rows))
   }, [cols, rows])
@@ -5245,6 +5271,7 @@ function SplitMain(props) {
         stopSequenceMs,
         dragOver: dragOver === i,
         zoom: zooms[i] ?? 1,
+        frozen: dragging,
         cellStyle,
         headerStyle: cellHeaderStyle,
         onActivate: () => setActiveCell(i),
@@ -5276,6 +5303,8 @@ function SplitMain(props) {
       ratios: colRatios,
       mins: colFloor,
       onChange: setColRatios,
+      onDraggingChange: setDragging,
+      readMetrics,
       gridRef,
       label: t('split.gutter.label'),
     }),
@@ -5284,10 +5313,27 @@ function SplitMain(props) {
       ratios: rowRatios,
       mins: rowFloor,
       onChange: setRowRatios,
+      onDraggingChange: setDragging,
+      readMetrics,
       gridRef,
       label: t('split.gutter.rowLabel'),
     }),
   )
+}
+
+/** Keyboard adjustment for one separator, shared by the gutter component. */
+function handleGutterKey(props, index, event) {
+  const { axis, ratios, mins, onChange, extentOf, reset } = props
+  if (event.key === 'Home') {
+    event.preventDefault()
+    reset()
+    return
+  }
+  const delta = gutterKeyDelta(axis, event.key)
+  if (delta === 0) return
+  event.preventDefault()
+  const next = resizeTracks(ratios, index, delta, { sizePx: extentOf(), mins })
+  onChange(commitRatios(next, ratios))
 }
 
 /**
@@ -5302,18 +5348,29 @@ function SplitMain(props) {
  * @returns one separator per boundary, or null below two tracks.
  */
 function SplitGutters(props) {
-  const { axis, ratios, mins, onChange, gridRef, label } = props
+  const {
+    axis,
+    ratios,
+    mins,
+    onChange,
+    onDraggingChange = () => {},
+    readMetrics = () => {},
+    gridRef,
+    label,
+  } = props
   const [active, setActive] = useState(-1)
   const drag = useRef(null)
 
-  // Unmounting mid-drag (panel closed, grid reshaped) must not leave the body
-  // override or a captured pointer behind.
+  // Unmounting mid-drag (panel closed, grid reshaped) must not leave listeners,
+  // a body selection override, or a captured pointer behind.
   useEffect(
     () => () => {
       const state = drag.current
       if (state === null) return
+      state.settle?.()
       drag.current = null
-      document.body.style.userSelect = ''
+      onDraggingChange(false)
+      document.body.style.userSelect = state.userSelect
       try {
         state.el?.releasePointerCapture(state.pointerId)
       } catch (_e) {
@@ -5338,9 +5395,11 @@ function SplitGutters(props) {
   const stop = (commit) => {
     const state = drag.current
     if (state === null) return
+    state.settle?.()
     drag.current = null
     setActive(-1)
-    document.body.style.userSelect = ''
+    onDraggingChange(false)
+    document.body.style.userSelect = state.userSelect
     // Release the capture before anything else: a captured pointer that is never
     // released keeps the resize cursor even over other windows.
     try {
@@ -5356,11 +5415,24 @@ function SplitGutters(props) {
       if (across) el.style.gridTemplateColumns = ratioTemplate(ratios)
       else el.style.gridTemplateRows = ratioTemplate(ratios)
     }
-    if (commit && state.next !== state.ratios) onChange(state.next)
+    // A picker can change the track count mid-drag. Commit only a matching list.
+    if (commit && state.next !== state.ratios) onChange(commitRatios(state.next, ratios))
   }
 
+  useEffect(() => {
+    if (drag.current !== null && drag.current.ratios.length !== ratios.length) stop(false)
+  }, [ratios.length])
+
   const begin = (index) => (event) => {
+    // Pointer detail is reliable even when preventDefault suppresses dblclick.
+    if (event.detail === 2) {
+      event.preventDefault()
+      reset()
+      return
+    }
     if (event.button !== 0 || drag.current !== null) return
+    // Font and header metrics may have changed without a window resize.
+    readMetrics()
     const sizePx = extentOf()
     if (!(sizePx > 0)) return
     event.preventDefault()
@@ -5378,8 +5450,10 @@ function SplitGutters(props) {
       next: ratios,
       el: event.currentTarget,
       pointerId: event.pointerId,
+      userSelect: document.body.style.userSelect,
     }
     setActive(index)
+    onDraggingChange(true)
     // A drag across cells would otherwise start selecting transcript text.
     document.body.style.userSelect = 'none'
 
@@ -5388,19 +5462,24 @@ function SplitGutters(props) {
     // pointer left behind pins the resize cursor on the page.
     const settle = () => {
       window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
+      window.removeEventListener('pointercancel', onCancel)
       window.removeEventListener('blur', onBlur)
     }
     const onUp = () => {
       settle()
       stop(true)
     }
+    const onCancel = () => {
+      settle()
+      stop(false)
+    }
     const onBlur = () => {
       settle()
       stop(false)
     }
+    drag.current.settle = settle
     window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
+    window.addEventListener('pointercancel', onCancel)
     window.addEventListener('blur', onBlur)
   }
 
@@ -5419,6 +5498,9 @@ function SplitGutters(props) {
     else el.style.gridTemplateRows = css
   }
 
+  const onKeyDown = (index) => (event) =>
+    handleGutterKey({ axis, ratios, mins, onChange, extentOf, reset }, index, event)
+
   const reset = () => onChange(equalRatios(ratios.length))
 
   return h(
@@ -5432,11 +5514,12 @@ function SplitGutters(props) {
         'aria-orientation': across ? 'vertical' : 'horizontal',
         'aria-label': label,
         'data-active': active === index ? 'true' : undefined,
+        tabIndex: 0,
         style: across ? { left: `${percent}%` } : { top: `${percent}%` },
+        onKeyDown: onKeyDown(index),
         onPointerDown: begin(index),
         onPointerMove: move,
-        onLostPointerCapture: () => stop(true),
-        onDoubleClick: reset,
+        onLostPointerCapture: () => stop(false),
       }),
     ),
   )
@@ -5463,6 +5546,7 @@ function SplitCell(props) {
     stopSequenceMs,
     dragOver,
     zoom,
+    frozen,
     cellStyle,
     headerStyle,
     onActivate,
@@ -5543,6 +5627,7 @@ function SplitCell(props) {
       {
         zoom,
         onZoom,
+        frozen,
         header: h(
           'div',
           {
@@ -5853,6 +5938,7 @@ if (
     image: UserImageThumb,
     drafts: DraftImageStrip,
     picker: SessionPicker,
+    gutters: SplitGutters,
   }
   window.__dswsTest = {
     render(name, node, props = {}) {

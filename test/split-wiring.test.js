@@ -64,6 +64,11 @@ const WIRING = [
   "document.addEventListener('keydown', handler.onKeyDown, true)",
   'belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),',
   'const stopSequenceMs = ctx.shortcuts.stopSequenceMs',
+  'frozen: dragging',
+  'readMetrics() const sizePx = extentOf()',
+  'const delta = gutterKeyDelta(axis, event.key)',
+  'onChange(commitRatios(state.next, ratios))',
+  'onLostPointerCapture: () => stop(false)',
 ]
 
 describe('split-cell wiring', () => {

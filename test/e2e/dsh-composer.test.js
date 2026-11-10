@@ -438,6 +438,52 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.ok(result.small.body < result.normal.body - 2)
   })
 
+  it('resets a gutter on pointer double-click and resizes with arrow keys', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const grid = document.createElement('div')
+        Object.assign(grid.style, { width: '800px', height: '400px', display: 'grid' })
+        document.body.append(grid)
+        const root = document.createElement('div')
+        grid.append(root)
+        const changes = []
+        window.__dswsTest.render('gutters', root, {
+          axis: 'x',
+          ratios: [1, 2],
+          mins: [0, 0],
+          gridRef: { current: grid },
+          label: 'Columns',
+          onChange: (next) => changes.push(next),
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        const gutter = root.querySelector('[role="separator"]')
+        const down = (detail) => gutter.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          detail,
+          pointerId: 1,
+          clientX: 100,
+          clientY: 100,
+        }))
+        down(1)
+        down(2)
+        const afterDouble = changes.at(-1)
+        gutter.dispatchEvent(new KeyboardEvent('keydown', {
+          bubbles: true,
+          cancelable: true,
+          key: 'ArrowLeft',
+        }))
+        const afterKey = changes.at(-1)
+        return { afterDouble, afterKey, tabIndex: gutter.tabIndex }
+      })()`,
+    )
+    assert.deepEqual(result.afterDouble, [1, 1])
+    assert.ok(result.afterKey[0] < 1 && result.afterKey[1] > 1)
+    assert.equal(result.tabIndex, 0)
+  })
+
   it('opens the model menu and reports a selection', async () => {
     const result = await evaluate(
       page,

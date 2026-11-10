@@ -12,7 +12,9 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  commitRatios,
   equalRatios,
+  gutterKeyDelta,
   gutterPercents,
   normalizeRatios,
   ratioTemplate,
@@ -116,5 +118,30 @@ describe('resizeTracks', () => {
   it('never returns a weight at or below zero', () => {
     const next = resizeTracks([1, 1], 0, 10000, ctx)
     assert.ok(next[0] > 0 && next[1] > 0)
+  })
+})
+
+describe('commitRatios', () => {
+  it('commits a matching track list', () => {
+    assert.deepEqual(commitRatios([2, 1, 0.5], [1, 1, 1]), [2, 1, 0.5])
+  })
+
+  it('reverts to the live grid when a reshape changed the track count', () => {
+    assert.deepEqual(commitRatios([2, 1, 0.5], [1, 1]), [1, 1])
+  })
+})
+
+describe('gutterKeyDelta', () => {
+  it('maps arrows to one resize step on each axis', () => {
+    assert.equal(gutterKeyDelta('x', 'ArrowLeft'), -24)
+    assert.equal(gutterKeyDelta('x', 'ArrowRight'), 24)
+    assert.equal(gutterKeyDelta('y', 'ArrowUp'), -24)
+    assert.equal(gutterKeyDelta('y', 'ArrowDown'), 24)
+  })
+
+  it('ignores unrelated keys and wrong-axis arrows', () => {
+    assert.equal(gutterKeyDelta('x', 'ArrowUp'), 0)
+    assert.equal(gutterKeyDelta('y', 'ArrowLeft'), 0)
+    assert.equal(gutterKeyDelta('x', 'Enter'), 0)
   })
 })
