@@ -59,6 +59,7 @@ import {
   latestEventTime,
   runningHint,
 } from './transcript.js'
+import { processSummary, reasoningPreview } from './process-group.js'
 
 // ---------- composer image intake ----------
 import {
@@ -3259,15 +3260,6 @@ const reasoningStyles = {
   },
 }
 
-/**
- * One Turn's process group: reasoning text and Tool rows under one disclosure.
- *
- * Chat's standard view folds a completed Turn's process rows and leaves the
- * answer outside; a running group stays open. This is the same shape, sized for
- * a tile: the header names the tools and whether reasoning is present, and the
- * body keeps the existing Tool rows.
- * @param props - one `kind: 'process'` row from `groupProcessRows`.
- */
 /** Elapsed label of one process group; ticks while the group is running. */
 function GroupDuration(props) {
   const { group } = props
@@ -3287,10 +3279,80 @@ function GroupDuration(props) {
   )
 }
 
+/**
+ * One disclosure header: chevron, label, and the caller's trailing detail.
+ *
+ * The process group and its nested "Think" rows share this row so their hover,
+ * chevron, and expansion affordances cannot drift apart.
+ * @param props - open state, label, title, toggle, and trailing children.
+ */
+function DisclosureHeader(props) {
+  const { open, label, title, onToggle, children } = props
+  const [hover, setHover] = useState(false)
+  return h(
+    'div',
+    {
+      style: toolStyles.row(hover, open),
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => setHover(false),
+      onClick: onToggle,
+      role: 'button',
+      'aria-expanded': open,
+      title,
+    },
+    h('span', { style: toolStyles.chevron(open) }, '▶'),
+    h('span', { style: reasoningStyles.label }, label),
+    children,
+  )
+}
+
+/**
+ * One reasoning block inside a process group, folded behind its own "Think" row.
+ *
+ * Chat keeps reasoning as a group member and reveals the block when the group
+ * opens, but the text itself starts collapsed and previews one line. Expanding
+ * "Think" is the reader's decision, so a long chain of thought never pushes the
+ * commands out of view.
+ * @param props - one `kind: 'reasoning'` item from `groupProcessRows`.
+ */
+function ReasoningItem(props) {
+  const { item } = props
+  const [open, setOpen] = useState(false)
+  const preview = reasoningPreview(item.text, item.streaming === true)
+  return h(
+    'div',
+    { style: { minWidth: 0 }, 'data-dsws-reasoning-row': 'true' },
+    h(
+      DisclosureHeader,
+      {
+        open,
+        label: t('reasoning.think'),
+        title: open ? t('reasoning.collapse') : t('reasoning.expand'),
+        onToggle: () => setOpen((value) => !value),
+      },
+      item.streaming === true
+        ? h('span', { style: reasoningStyles.dot, 'data-dsws-reasoning-streaming': 'true' })
+        : null,
+      preview === '' ? null : h('span', { style: reasoningStyles.preview }, preview),
+    ),
+    open
+      ? h('div', { style: reasoningStyles.body, 'data-dsws-reasoning': 'true' }, item.text)
+      : null,
+  )
+}
+
+/**
+ * One Turn's process group: Tool rows and reasoning blocks under one disclosure.
+ *
+ * Chat's standard view folds a completed Turn's process rows and leaves the
+ * answer outside; a running group stays open. This is the same shape, sized for
+ * a tile: the header names the tools (or the reasoning, when no tool ran), and
+ * the body keeps every member in order.
+ * @param props - one `kind: 'process'` row from `groupProcessRows`.
+ */
 function ProcessGroup(props) {
   const { group } = props
   const [open, setOpen] = useState(group.running === true)
-  const [hover, setHover] = useState(false)
   // Chat's standard view keeps a running process open and folds it once the
   // turn settles; a reader who opens a completed group keeps it open because the
   // effect only runs when `running` changes.
@@ -3298,11 +3360,10 @@ function ProcessGroup(props) {
     setOpen(group.running === true)
   }, [group.running])
 
-  // Process is an execution disclosure. Reasoning remains in the Session log,
-  // but expanding this view should reveal commands and their results only.
-  const toolItems = group.items.filter((item) => item.kind === 'tool')
-  if (toolItems.length === 0) return null
-  const summary = [...new Set(toolItems.map((item) => item.tool.name))].join(', ')
+  // Reasoning-only groups stay: they are how a Turn shows thinking before the
+  // first answer token, and Chat gives them their own title rather than hiding
+  // them.
+  const summary = processSummary(group.items, { reasoning: t('reasoning.label') })
   return h(
     'div',
     {
@@ -3311,22 +3372,13 @@ function ProcessGroup(props) {
       'data-running': group.running === true ? 'true' : 'false',
     },
     h(
-      'div',
+      DisclosureHeader,
       {
-        style: toolStyles.row(hover, open),
-        onMouseEnter: () => setHover(true),
-        onMouseLeave: () => setHover(false),
-        onClick: () => setOpen((value) => !value),
-        role: 'button',
-        'aria-expanded': open,
+        open,
+        label: group.running === true ? t('process.running') : t('process.label'),
         title: open ? t('process.collapse') : t('process.expand'),
+        onToggle: () => setOpen((value) => !value),
       },
-      h('span', { style: toolStyles.chevron(open) }, '▶'),
-      h(
-        'span',
-        { style: reasoningStyles.label },
-        group.running === true ? t('process.running') : t('process.label'),
-      ),
       group.running === true
         ? h('span', { className: 'dsws-running-dot', style: reasoningStyles.dot })
         : null,
@@ -3337,7 +3389,11 @@ function ProcessGroup(props) {
       ? h(
           'div',
           { style: { minWidth: 0 } },
-          toolItems.map((item) => h(ToolRow, { key: item.key, ...item.tool })),
+          group.items.map((item) =>
+            item.kind === 'tool'
+              ? h(ToolRow, { key: item.key, ...item.tool })
+              : h(ReasoningItem, { key: item.key, item }),
+          ),
         )
       : null,
   )

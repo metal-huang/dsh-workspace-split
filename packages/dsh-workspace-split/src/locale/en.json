@@ -85,6 +85,7 @@
   "transcript.image.close": "Close preview",
   "reasoning.label": "Reasoning",
   "reasoning.streaming": "Thinking",
+  "reasoning.think": "Think",
   "reasoning.expand": "Expand reasoning",
   "reasoning.collapse": "Collapse reasoning",
   "process.label": "Process",

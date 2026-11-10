@@ -70,6 +70,9 @@ const WIRING = [
   'const delta = gutterKeyDelta(axis, event.key)',
   'onChange(commitRatios(state.next, ratios))',
   'onLostPointerCapture: () => stop(false)',
+  "const summary = processSummary(group.items, { reasoning: t('reasoning.label') })",
+  'h(ReasoningItem, { key: item.key, item })',
+  "h('div', { style: reasoningStyles.body, 'data-dsws-reasoning': 'true' }, item.text)",
 ]
 
 describe('split-cell wiring', () => {
@@ -91,6 +94,14 @@ describe('split-cell wiring', () => {
     )
     const earlyReturn = source.indexOf('if (ratios.length < 2) return null')
     assert.ok(hook >= 0 && earlyReturn > hook)
+  })
+
+  it('keeps reasoning in the process group instead of dropping it', () => {
+    // PR #3 merged the contributor's tool-only body. This fails if that step
+    // comes back: a reasoning-only group must render, not return null.
+    assert.equal(occurrences(source, 'if (toolItems.length === 0) return null'), 0)
+    assert.equal(occurrences(source, 'toolItems'), 0)
+    assert.ok(source.includes('data-dsws-reasoning-row'))
   })
 
   it('counts both axis drags instead of storing one boolean', () => {

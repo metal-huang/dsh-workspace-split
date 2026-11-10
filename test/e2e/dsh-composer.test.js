@@ -353,6 +353,46 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.deepEqual(result, { duration: '1.6s', context: '42% · ~42.0k / 100k' })
   })
 
+  it('keeps a reasoning-only group folded behind a Think row', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__dswsTest.render('process', root, {
+          group: {
+            kind: 'process',
+            running: false,
+            startedAt: 1000,
+            endedAt: 2000,
+            items: [
+              { kind: 'reasoning', key: 'r1', text: '先看目录\\n再看文件', streaming: false },
+            ],
+          },
+        })
+        await new Promise((done) => setTimeout(done, 100))
+        root.querySelector('[data-dsws-process] > div[role="button"]')?.click()
+        await new Promise((done) => setTimeout(done, 100))
+        const row = root.querySelector('[data-dsws-reasoning-row]')
+        const beforeThink = root.querySelector('[data-dsws-reasoning]') === null
+        row?.querySelector('[role="button"]')?.click()
+        await new Promise((done) => setTimeout(done, 100))
+        return {
+          header: root.querySelector('[data-dsws-process]')?.innerText ?? '',
+          hasRow: row !== null,
+          beforeThink,
+          think: row?.innerText ?? '',
+          body: root.querySelector('[data-dsws-reasoning]')?.textContent ?? '',
+        }
+      })()`,
+    )
+    assert.equal(result.hasRow, true)
+    assert.equal(result.beforeThink, true)
+    assert.equal(result.think.includes('思考'), true)
+    assert.equal(result.header.includes('思考过程'), true)
+    assert.equal(result.body, '先看目录\n再看文件')
+  })
+
   it('renders @ candidates as selectable rows', async () => {
     const result = await evaluate(
       page,
