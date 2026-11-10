@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { promptWhileCurrent } from '../packages/dsh-workspace-split/src/composer-send.js'
+import { promptWhileCurrent, sendMode } from '../packages/dsh-workspace-split/src/composer-send.js'
 
 function deferred() {
   let resolve
@@ -115,5 +115,41 @@ describe('promptWhileCurrent', () => {
       },
     )
     assert.deepEqual(outcome, { action: 'stale' })
+  })
+
+  it('passes the resolved mode through to the prompt call', async () => {
+    const modes = []
+    const session = {
+      prompt: async (_parts, mode) => {
+        modes.push(mode)
+        return { ok: true }
+      },
+    }
+    await promptWhileCurrent(
+      session,
+      () => true,
+      async () => PARTS,
+      'steer',
+    )
+    await promptWhileCurrent(
+      session,
+      () => true,
+      async () => PARTS,
+    )
+    assert.deepEqual(modes, ['steer', 'queue'])
+  })
+})
+
+describe('sendMode', () => {
+  it('steers only a running Session whose setting asks for it', () => {
+    assert.equal(sendMode('steer', true), 'steer')
+  })
+
+  it('falls back to queue for every other combination', () => {
+    assert.equal(sendMode('queue', true), 'queue')
+    assert.equal(sendMode('steer', false), 'queue')
+    assert.equal(sendMode('steer', undefined), 'queue')
+    assert.equal(sendMode(undefined, true), 'queue')
+    assert.equal(sendMode('unexpected', true), 'queue')
   })
 })
