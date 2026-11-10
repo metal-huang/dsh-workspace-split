@@ -24,29 +24,42 @@ const { useCallback, useEffect, useId, useRef, useState } = React
 const PANEL_WIDTH = 360
 const PANEL_HEIGHT = 320
 
+/** Frame shared by the icon trigger and the labelled empty-tile trigger. */
+const triggerBox = (open, hover) => ({
+  position: 'relative',
+  flex: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background:
+    open || hover
+      ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
+      : 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))',
+  color:
+    open || hover
+      ? 'var(--dsw-alias-label-primary, inherit)'
+      : 'var(--dsw-alias-label-secondary, #999)',
+  cursor: 'pointer',
+})
+
 const styles = {
   trigger: (open, hover) => ({
-    position: 'relative',
-    flex: 'none',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    ...triggerBox(open, hover),
     width: 38,
     height: 30,
     marginLeft: 6,
     padding: 0,
-    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
-    borderRadius: 'var(--dsw-radius-sm, 6px)',
-    background:
-      open || hover
-        ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.16))'
-        : 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))',
-    color:
-      open || hover
-        ? 'var(--dsw-alias-label-primary, inherit)'
-        : 'var(--dsw-alias-label-secondary, #999)',
-    cursor: 'pointer',
   }),
+  // The empty tile names the action instead of showing a lone chevron.
+  triggerWide: (open, hover) => ({
+    ...triggerBox(open, hover),
+    height: 30,
+    padding: '0 12px',
+    gap: 6,
+  }),
+  triggerLabel: { fontSize: 12, lineHeight: '16px', whiteSpace: 'nowrap' },
   glyph: { fontSize: 16, lineHeight: 1, pointerEvents: 'none', transform: 'translateY(-1px)' },
   panel: (box) => ({
     position: 'fixed',
@@ -321,7 +334,7 @@ function sameBox(left, right) {
  *   `t`, and `onChange(id|null)`.
  */
 export function SessionPicker(props) {
-  const { rows, value, searchPlaceholder, emptyTitle, t, onChange } = props
+  const { rows, value, searchPlaceholder, emptyTitle, t, onChange, label } = props
   const [open, setOpen] = useState(false)
   const [hover, setHover] = useState(false)
   const [box, setBox] = useState(null)
@@ -402,7 +415,7 @@ export function SessionPicker(props) {
         'aria-expanded': open,
         'aria-label': t('split.session.picker.aria'),
         title: emptyTitle,
-        style: styles.trigger(open, hover),
+        style: label === undefined ? styles.trigger(open, hover) : styles.triggerWide(open, hover),
         onMouseEnter: () => setHover(true),
         onMouseLeave: () => setHover(false),
         onClick: toggle,
@@ -412,7 +425,14 @@ export function SessionPicker(props) {
           toggle()
         },
       },
-      h('span', { style: styles.glyph, 'aria-hidden': true }, '▾'),
+      label === undefined
+        ? h('span', { style: styles.glyph, 'aria-hidden': true }, '▾')
+        : h(
+            'span',
+            { style: styles.triggerLabel },
+            label,
+            h('span', { style: styles.glyph, 'aria-hidden': true }, '▾'),
+          ),
     ),
     open && box !== null
       ? h(PickerPanel, {

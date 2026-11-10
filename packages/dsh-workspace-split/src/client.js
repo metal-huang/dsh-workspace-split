@@ -5300,6 +5300,33 @@ function SplitMain(props) {
     setCells((prev) => reconcileCells(prev, known, archived))
   }, [list, archived, cells])
 
+  // Create a Session only when the reader asks for one. Draft identity is
+  // preallocated per tile, so a failed request or a renderer reload retries the
+  // same Session instead of minting another.
+  const createChat = useCallback(
+    (index) => {
+      const cell = cells[index]
+      const target = newChatTarget(cell, cells[activeCell], items, workspaceItems)
+      return cellDrafts
+        .ensure(index, target, (request) =>
+          sessions.create(request).then((sessionId) => ({ ok: true, value: { sessionId } })),
+        )
+        .then((id) => {
+          freshSessions.current.add(id)
+          cellDrafts.forget(index)
+          setCells((prev) => {
+            const current = prev[index]
+            if (current?.id) return prev
+            const next = [...prev]
+            next[index] = current?.t === 'workspace' ? { ...current, id } : { t: 'session', id }
+            return next
+          })
+          return id
+        })
+    },
+    [cells, activeCell, items, workspaceItems, sessions],
+  )
+
   // Tiles butt against each other: no gap, no radius. Each tile draws its own
   // leading and top hairline, and the grid carries the trailing and bottom
   // ones, so neighbours share exactly one 0.5px rule instead of stacking two.
@@ -5364,17 +5391,8 @@ function SplitMain(props) {
         workspaceItems,
         projectById,
         sessionsOfWorkspace,
-        newTarget: newChatTarget(cells[i], cells[activeCell], items, workspaceItems),
         ready: list?.phase === 'ready',
-        onCreated: (id) => {
-          freshSessions.current.add(id)
-          setCells((prev) => {
-            if (prev[i]?.id || (prev[i]?.ws ?? null) !== (cells[i]?.ws ?? null)) return prev
-            const next = [...prev]
-            next[i] = prev[i]?.t === 'workspace' ? { ...prev[i], id } : { t: 'session', id }
-            return next
-          })
-        },
+        onNewChat: () => createChat(i),
         active: i === activeCell,
         stopSequenceMs,
         dragOver: dragOver === i,
@@ -5390,19 +5408,18 @@ function SplitMain(props) {
           // following dragleave, which would leave the tile looking hovered.
           setDragOver(-1)
           const next = cellFromDrop(raw)
-          if (next) setCell(i, next)
+          if (next) {
+            cellDrafts.forget(i)
+            setCell(i, next)
+          }
         },
         onPick: (id) => {
-          const cell = cells[i]
+          cellDrafts.forget(i)
           if (id === null) {
-            cellDrafts.forget(i)
-            const target = newChatTarget(cell, cells[activeCell], items, workspaceItems)
-            setCell(
-              i,
-              target.workspaceId ? { t: 'workspace', ws: target.workspaceId, id: null } : null,
-            )
+            setCell(i, null)
             return
           }
+          const cell = cells[i]
           setCell(
             i,
             cell?.t === 'workspace' ? { t: 'workspace', ws: cell.ws, id } : { t: 'session', id },
@@ -5658,9 +5675,8 @@ function SplitCell(props) {
     workspaceItems,
     projectById,
     sessionsOfWorkspace,
-    newTarget,
-    onCreated,
     ready,
+    onNewChat,
     active,
     stopSequenceMs,
     dragOver,
@@ -5694,6 +5710,9 @@ function SplitCell(props) {
   const pickerRows = options.map((s) =>
     pickerRowOf(s, wsTitle === null ? projectNameFrom(projectById, s) : ''),
   )
+  // One picker description for the header (occupied tile) and the empty-tile
+  // body (labelled action), so both list the same rows with the same scope.
+  const pickerProps = pickerPropsFor(sid, pickerRows, wsTitle, onPick)
   // Clicking a tile is the reader's "I have seen this": DSH only clears the
   // completion dot for the main view and a tile is never the main view, so the
   // acknowledgement happens here. Failing to clear it only leaves the dot lit.
@@ -5761,9 +5780,9 @@ function SplitCell(props) {
             ? h(CellTitle, {
                 sessions,
                 sessionId: sess.id,
-                title:
-                  sess.title ||
-                  (sess.blank ? t('split.chat.new') : sess.displayTitle || sess.id.slice(0, 8)),
+                title: sess.blank
+                  ? t('split.chat.new')
+                  : sess.displayTitle || sess.title || sess.id.slice(0, 8),
                 running: sess.running,
                 project: projectTitle,
               })
@@ -5778,26 +5797,19 @@ function SplitCell(props) {
                 },
                 t('split.cell.empty.placeholder', { n: index + 1 }),
               ),
-          h(SessionPicker, {
-            value: sid ?? '',
-            rows: pickerRows,
-            showProject: wsTitle === null,
-            searchPlaceholder:
-              wsTitle === null
-                ? t('split.session.picker.search')
-                : t('split.session.picker.searchScoped', { ws: wsTitle }),
-            emptyTitle:
-              wsTitle === null
-                ? t('split.session.pick')
-                : t('split.session.pickScoped', { ws: wsTitle }),
-            t,
-            onChange: onPick,
-          }),
-          h(NewChatButton, { disabled: sid === null, onClick: () => onPick(null) }),
+          sess === null ? null : h(SessionPicker, pickerProps),
+          sess === null ? null : h(NewChatButton, { onClick: onNewChat }),
         ),
       },
       sid === null
-        ? h(NewChatCell, { index, sessions, target: newTarget, onCreated, ready })
+        ? h(EmptyCell, {
+            options,
+            wsTitle,
+            picker: pickerProps,
+            pickerLabel: t('split.chat.choose'),
+            ready,
+            onNewChat,
+          })
         : h(CellView, {
             sessions,
             sessionId: sid,
@@ -5812,13 +5824,31 @@ function SplitCell(props) {
   )
 }
 
-function NewChatButton({ disabled, onClick }) {
+/** Picker description shared by the tile header and the empty-tile body. */
+function pickerPropsFor(sid, rows, wsTitle, onPick) {
+  return {
+    value: sid ?? '',
+    rows,
+    showProject: wsTitle === null,
+    searchPlaceholder:
+      wsTitle === null
+        ? t('split.session.picker.search')
+        : t('split.session.picker.searchScoped', { ws: wsTitle }),
+    emptyTitle:
+      wsTitle === null ? t('split.session.pick') : t('split.session.pickScoped', { ws: wsTitle }),
+    t,
+    onChange: onPick,
+  }
+}
+
+/** Header action for an occupied tile: start a fresh chat in this tile. */
+function NewChatButton({ onClick }) {
   return h(
     'button',
     {
+      type: 'button',
       title: t('split.chat.new'),
       'aria-label': t('split.chat.new'),
-      disabled,
       onClick,
       style: {
         border: 0,
@@ -5832,42 +5862,105 @@ function NewChatButton({ disabled, onClick }) {
   )
 }
 
-/** One empty tile owns one stable creation request; rerenders do not create duplicates. */
-function NewChatCell({ index, sessions, target, onCreated, ready }) {
-  const [error, setError] = useState(null)
-  const [attempt, setAttempt] = useState(0)
-  const created = useRef(onCreated)
-  created.current = onCreated
-  const targetKey = JSON.stringify(target)
-  useEffect(() => {
-    if (!ready) return undefined
-    let alive = true
-    setError(null)
-    cellDrafts
-      .ensure(index, JSON.parse(targetKey), (request) =>
-        sessions
-          .create({ ...request, creationKey: 'workspace-split:' + request.sessionId })
-          .then((sessionId) => ({ ok: true, value: { sessionId } })),
-      )
-      .then(
-        (id) => {
-          if (alive) created.current(id)
-        },
-        (failure) => {
-          if (alive) setError(failure.message)
-        },
-      )
-    return () => {
-      alive = false
+const emptyCellStyles = {
+  wrap: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    padding: 16,
+  },
+  hint: {
+    maxWidth: 360,
+    textAlign: 'center',
+    fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
+    color: 'var(--dsw-alias-label-secondary, #999)',
+  },
+  actions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  newChat: (busy) => ({
+    height: 30,
+    padding: '0 12px',
+    border: '0.5px solid var(--dsw-alias-border-l2, #555)',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,.08))',
+    color: 'var(--dsw-alias-label-primary, inherit)',
+    cursor: busy ? 'default' : 'pointer',
+    opacity: busy ? 0.7 : 1,
+    fontSize: 12,
+  }),
+  error: {
+    maxWidth: 360,
+    textAlign: 'center',
+    fontSize: 12,
+    color: 'var(--dsw-alias-state-error-primary, #e5484d)',
+  },
+}
+
+/**
+ * Empty tile: choose an existing Session or start a new one.
+ *
+ * Nothing is created until the reader clicks New chat, so opening a split
+ * layout never mints Sessions behind their back. The picker lives here rather
+ * than in the header because the empty tile has room to name the action.
+ * @param props - picker description, readiness, and the explicit creation action.
+ */
+function EmptyCell(props) {
+  const { options, wsTitle, picker, pickerLabel, ready, onNewChat } = props
+  const [state, setState] = useState({ busy: false, error: '' })
+
+  const start = async () => {
+    if (!ready || state.busy) return
+    setState({ busy: true, error: '' })
+    try {
+      await onNewChat()
+      setState({ busy: false, error: '' })
+    } catch (failure) {
+      setState({
+        busy: false,
+        error: failure instanceof Error ? failure.message : String(failure),
+      })
     }
-  }, [index, sessions, targetKey, attempt, ready])
+  }
+
   return h(
     'div',
-    { role: 'status', style: { padding: 12 } },
-    error ?? t('split.chat.creating'),
-    error
-      ? h('button', { onClick: () => setAttempt((value) => value + 1) }, t('split.chat.retry'))
+    { style: emptyCellStyles.wrap, 'data-dsws-empty': 'true' },
+    options.length === 0 && wsTitle !== null
+      ? h('div', { style: emptyCellStyles.hint }, t('split.workspace.empty', { ws: wsTitle }))
       : null,
+    h(
+      'div',
+      { style: emptyCellStyles.actions },
+      h(SessionPicker, { ...picker, t, label: pickerLabel }),
+      h(
+        'button',
+        {
+          type: 'button',
+          style: emptyCellStyles.newChat(state.busy),
+          disabled: !ready || state.busy,
+          'data-dsws-new-chat': 'true',
+          onClick: start,
+        },
+        state.busy ? t('split.chat.creating') : t('split.chat.new'),
+      ),
+    ),
+    state.error === ''
+      ? null
+      : h(
+          'div',
+          { role: 'status', style: emptyCellStyles.error },
+          state.error,
+          h('button', { type: 'button', onClick: start }, t('split.chat.retry')),
+        ),
   )
 }
 
@@ -6123,6 +6216,7 @@ if (
     image: UserImageThumb,
     drafts: DraftImageStrip,
     picker: SessionPicker,
+    empty: EmptyCell,
     gutters: SplitGutters,
   }
   window.__dswsTest = {

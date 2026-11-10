@@ -393,6 +393,50 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.equal(result.body, '先看目录\n再看文件')
   })
 
+  it('creates a new chat only after the empty tile action', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        const root = document.createElement('div')
+        document.body.append(root)
+        window.__dswsCalls = 0
+        window.__dswsTest.render('empty', root, {
+          options: [],
+          wsTitle: null,
+          picker: {
+            value: '',
+            rows: [],
+            showProject: true,
+            searchPlaceholder: '',
+            emptyTitle: '',
+            onChange: () => {},
+          },
+          pickerLabel: '选择已有会话',
+          ready: true,
+          onNewChat: () => {
+            window.__dswsCalls += 1
+            return Promise.resolve('s1')
+          },
+        })
+        await new Promise((done) => setTimeout(done, 150))
+        const before = window.__dswsCalls
+        const choose = root.querySelector('[aria-haspopup="listbox"]')
+        root.querySelector('[data-dsws-new-chat]')?.click()
+        await new Promise((done) => setTimeout(done, 150))
+        return {
+          before,
+          after: window.__dswsCalls,
+          choose: choose?.innerText ?? '',
+          empty: root.querySelector('[data-dsws-empty]') !== null,
+        }
+      })()`,
+    )
+    assert.equal(result.before, 0)
+    assert.equal(result.after, 1)
+    assert.equal(result.choose.includes('选择已有会话'), true)
+    assert.equal(result.empty, true)
+  })
+
   it('renders @ candidates as selectable rows', async () => {
     const result = await evaluate(
       page,

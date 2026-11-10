@@ -63,6 +63,11 @@ const WIRING = [
   '() => sendMode(readBusyEnter?.(), readRunning?.() === true)',
   'const readRunning = useCallback(',
   'runningState(sessions.list.getSnapshot(), sessionId, binding?.session?.getSnapshot() ?? null)',
+  'const createChat = useCallback(',
+  'onNewChat: () => createChat(i)',
+  "'data-dsws-new-chat': 'true'",
+  'const start = async () => {',
+  'sessions.create(request).then((sessionId) => ({ ok: true, value: { sessionId } }))',
   "'configForms',",
   "const conversationForm = ctx.configForms?.get?.('ui-conversation')",
   "return snapshot?.status === 'ready' ? snapshot.value?.busyEnter : undefined",
@@ -109,6 +114,20 @@ describe('split-cell wiring', () => {
     assert.equal(occurrences(source, 'if (toolItems.length === 0) return null'), 0)
     assert.equal(occurrences(source, 'toolItems'), 0)
     assert.ok(source.includes('data-dsws-reasoning-row'))
+  })
+
+  it('creates an empty-cell chat only after the explicit action', () => {
+    // PR #4 minted a Session as soon as an empty tile rendered. The creation
+    // effect, the client-side operation key and the auto-create component must
+    // all stay gone.
+    assert.equal(occurrences(source, 'creationKey'), 0)
+    assert.equal(occurrences(source, 'NewChatCell'), 0)
+    assert.equal(occurrences(source, 'useEffect(() => { if (!ready) return undefined'), 0)
+  })
+
+  it('clears a tile on the picker clear instead of creating a chat', () => {
+    const fragment = 'if (id === null) { setCell(i, null) return }'
+    assert.equal(occurrences(source, fragment), 1)
   })
 
   it('counts both axis drags instead of storing one boolean', () => {
