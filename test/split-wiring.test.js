@@ -63,6 +63,14 @@ const WIRING = [
   '() => sendMode(readBusyEnter?.(), readRunning?.() === true)',
   'const readRunning = useCallback(',
   'runningState(sessions.list.getSnapshot(), sessionId, binding?.session?.getSnapshot() ?? null)',
+  'const createChat = useCallback(',
+  'const forgetDraft = useCallback(',
+  'onNewChat: () => createChat(i)',
+  "'data-dsws-new-chat': 'true'",
+  'sessions.create(request).then((sessionId) => ({ ok: true, value: { sessionId } }))',
+  'if (draftGeneration.current[index] !== generation) return id',
+  'setCell(i, clearedCell(cell))',
+  "'data-dsws-create-error': 'true'",
   "'configForms',",
   "const conversationForm = ctx.configForms?.get?.('ui-conversation')",
   "return snapshot?.status === 'ready' ? snapshot.value?.busyEnter : undefined",
@@ -109,6 +117,29 @@ describe('split-cell wiring', () => {
     assert.equal(occurrences(source, 'if (toolItems.length === 0) return null'), 0)
     assert.equal(occurrences(source, 'toolItems'), 0)
     assert.ok(source.includes('data-dsws-reasoning-row'))
+  })
+
+  it('creates an empty-cell chat only after the explicit action', () => {
+    // PR #4 minted a Session as soon as an empty tile rendered. The creation
+    // effect, the client-side operation key and the auto-create component must
+    // all stay gone.
+    assert.equal(occurrences(source, 'creationKey'), 0)
+    assert.equal(occurrences(source, 'NewChatCell'), 0)
+    assert.equal(occurrences(source, 'useEffect(() => { if (!ready) return undefined'), 0)
+    // No occupied-slot early return and no persisted clear: the generation token
+    // decides, and the tile keeps its Session until the replacement exists.
+    assert.equal(occurrences(source, 'if (current?.id) return prev'), 0)
+    assert.equal(
+      occurrences(
+        source,
+        "next[index] = current.t === 'workspace' ? { ...current, id: null } : null",
+      ),
+      0,
+    )
+  })
+
+  it('clears a tile on the picker clear instead of creating a chat', () => {
+    assert.equal(occurrences(source, 'setCell(i, clearedCell(cell))'), 1)
   })
 
   it('counts both axis drags instead of storing one boolean', () => {

@@ -161,6 +161,7 @@ export const CHINESE = {
   // --- aria-labels (not shown, but must match translation) ---
   'aria.split.panel': '分屏视图',
   'split.chat.new': '新建对话',
+  'split.chat.choose': '选择已有会话',
   'split.chat.creating': '正在创建新对话…',
   'split.chat.retry': '重试',
   'aria.chooseGrid': '选择行数与列数',
