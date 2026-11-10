@@ -2407,6 +2407,7 @@ function Composer(props) {
     metaError,
     remote,
     readBusyEnter,
+    readRunning,
   } = props
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -2444,8 +2445,8 @@ function Composer(props) {
   // Resolve the mode at prompt time: the Session can start or finish a turn
   // while image parts encode, and the Host setting can change between renders.
   const readSendMode = useCallback(
-    () => sendMode(readBusyEnter?.(), session?.getSnapshot?.()?.running === true),
-    [readBusyEnter, session],
+    () => sendMode(readBusyEnter?.(), readRunning?.() === true),
+    [readBusyEnter, readRunning],
   )
   const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -4097,6 +4098,12 @@ function CellView(props) {
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
   const running = runningState(catalog, sessionId, sessionState)
+  // Prompt-time decisions need the catalog-aware value: the binding can stay
+  // "running" for a moment after the Host already settled the turn.
+  const readRunning = useCallback(
+    () => runningState(catalog, sessionId, binding?.session?.getSnapshot() ?? null),
+    [catalog, sessionId, binding],
+  )
   const stoppable = sessionStoppable(sessionState, running)
 
   // Host inbox projection: queued prompts are not in the event window until the
@@ -4335,6 +4342,7 @@ function CellView(props) {
         metaError,
         remote,
         readBusyEnter,
+        readRunning,
       }),
     }),
   )

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { promptWhileCurrent, sendMode } from '../packages/dsh-workspace-split/src/composer-send.js'
+import { runningState } from '../packages/dsh-workspace-split/src/session-state.js'
 
 function deferred() {
   let resolve
@@ -163,6 +164,13 @@ describe('promptWhileCurrent mode resolution', () => {
     )
     assert.deepEqual(outcome, { action: 'sent' })
     assert.deepEqual(order, ['encode', 'mode', 'prompt:steer'])
+  })
+
+  it('queues when the catalog settled the turn but the binding still runs', () => {
+    // The binding snapshot can lag after settlement; the catalog is authoritative.
+    const catalog = { phase: 'ready', byId: { s1: { running: false } } }
+    const mode = sendMode('steer', runningState(catalog, 's1', { running: true }))
+    assert.equal(mode, 'queue')
   })
 
   it('sees a phase change that happens during encoding', async () => {
