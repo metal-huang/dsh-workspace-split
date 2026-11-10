@@ -62,7 +62,7 @@ const WIRING = [
   'const readSendMode = useCallback(',
   '() => sendMode(readBusyEnter?.(), readRunning?.() === true)',
   'const readRunning = useCallback(',
-  '() => runningState(catalog, sessionId, binding?.session?.getSnapshot() ?? null)',
+  'runningState(sessions.list.getSnapshot(), sessionId, binding?.session?.getSnapshot() ?? null)',
   "'configForms',",
   "const conversationForm = ctx.configForms?.get?.('ui-conversation')",
   "return snapshot?.status === 'ready' ? snapshot.value?.busyEnter : undefined",

@@ -4098,11 +4098,13 @@ function CellView(props) {
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
   const running = runningState(catalog, sessionId, sessionState)
-  // Prompt-time decisions need the catalog-aware value: the binding can stay
-  // "running" for a moment after the Host already settled the turn.
+  // Prompt-time decisions need the catalog-aware value, read live: encoding can
+  // take long enough for the Host to settle the turn, and a catalog captured at
+  // click time would still say running.
   const readRunning = useCallback(
-    () => runningState(catalog, sessionId, binding?.session?.getSnapshot() ?? null),
-    [catalog, sessionId, binding],
+    () =>
+      runningState(sessions.list.getSnapshot(), sessionId, binding?.session?.getSnapshot() ?? null),
+    [sessions, sessionId, binding],
   )
   const stoppable = sessionStoppable(sessionState, running)
 
