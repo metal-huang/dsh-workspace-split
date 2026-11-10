@@ -102,6 +102,7 @@ export const CHINESE = {
   'transcript.image.close': '关闭预览',
   'reasoning.label': '思考过程',
   'reasoning.streaming': '思考中',
+  'reasoning.think': '思考',
   'reasoning.expand': '展开思考过程',
   'reasoning.collapse': '收起思考过程',
   'process.label': '处理过程',
