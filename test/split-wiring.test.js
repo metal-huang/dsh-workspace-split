@@ -65,6 +65,7 @@ const WIRING = [
   'belongsToCell: (event) => escapeBelongsToCell(event, textareaRef),',
   'const stopSequenceMs = ctx.shortcuts.stopSequenceMs',
   'frozen: dragging > 0',
+  'if (frozen) return if (!event.ctrlKey) return',
   'readMetrics() const sizePx = extentOf()',
   'const delta = gutterKeyDelta(axis, event.key)',
   'onChange(commitRatios(state.next, ratios))',
@@ -90,6 +91,12 @@ describe('split-cell wiring', () => {
     )
     const earlyReturn = source.indexOf('if (ratios.length < 2) return null')
     assert.ok(hook >= 0 && earlyReturn > hook)
+  })
+
+  it('counts both axis drags instead of storing one boolean', () => {
+    const fragment =
+      'onDraggingChange: (active) => setDragging((count) => Math.max(0, count + (active ? 1 : -1)))'
+    assert.equal(occurrences(source, fragment), 2)
   })
 
   it('goes red when the wiring is reverted', () => {
