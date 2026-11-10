@@ -1,11 +1,53 @@
 /**
- * Encode and queue one prompt only while the tile still owns the same Session.
+ * Send one prompt only while the tile still owns the same Session.
  *
  * An accepted prompt cannot be recalled client-side. Therefore identity is
- * checked immediately before queueing and again on settlement; a stale result
+ * checked immediately before sending and again on settlement; a stale result
  * never clears the rebound tile's draft or surfaces the old Session's error.
  */
-export async function promptWhileCurrent(session, isCurrentSession, encode) {
+
+/**
+ * Prompt mode for one split-composer send.
+ *
+ * Native's plain-Enter rule: the Host preference decides only while a turn is
+ * already running; an idle Session always starts a new turn, and a preference
+ * that cannot be read falls back to the Host default `queue`. Hardcoding either
+ * value would make the same Enter key behave differently here and in the main
+ * composer.
+ * @param busyEnter - the Host `ui-conversation.busyEnter` value, when readable.
+ * @param running - whether the Session is running at send time.
+ * @returns the mode to pass to `session.prompt`.
+ */
+export function sendMode(busyEnter, running) {
+  return running === true && busyEnter === 'steer' ? 'steer' : 'queue'
+}
+
+/** Keep the Host default when a caller cannot name a mode. */
+function queueMode(mode) {
+  return mode === 'steer' ? 'steer' : 'queue'
+}
+
+/**
+ * Resolve the mode immediately before the prompt.
+ *
+ * Encoding image parts can take long enough for the Session to start or finish
+ * a turn, so a mode decided before `encode()` describes the wrong phase. A
+ * resolver is called here instead; a plain mode is still accepted.
+ */
+function modeAtSend(mode) {
+  return queueMode(typeof mode === 'function' ? mode() : mode)
+}
+
+/**
+ * Encode and send one prompt with the chosen mode while the tile still owns the
+ * same Session.
+ * @param session - Session face the composer is bound to.
+ * @param isCurrentSession - identity guard checked before and after sending.
+ * @param encode - builds the prompt parts.
+ * @param mode - prompt mode, or a resolver evaluated at prompt time.
+ * @returns settled outcome for the composer's draft and error handling.
+ */
+export async function promptWhileCurrent(session, isCurrentSession, encode, mode) {
   let parts
   try {
     parts = await encode()
@@ -16,7 +58,7 @@ export async function promptWhileCurrent(session, isCurrentSession, encode) {
   if (!isCurrentSession()) return { action: 'stale' }
   let result
   try {
-    result = await session.prompt(parts, 'steer')
+    result = await session.prompt(parts, modeAtSend(mode))
   } catch (error) {
     return isCurrentSession() ? { action: 'error', stage: 'prompt', error } : { action: 'stale' }
   }

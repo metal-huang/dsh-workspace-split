@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { promptWhileCurrent } from '../packages/dsh-workspace-split/src/composer-send.js'
+import { promptWhileCurrent, sendMode } from '../packages/dsh-workspace-split/src/composer-send.js'
+import { runningState } from '../packages/dsh-workspace-split/src/session-state.js'
 
 function deferred() {
   let resolve
@@ -115,5 +116,95 @@ describe('promptWhileCurrent', () => {
       },
     )
     assert.deepEqual(outcome, { action: 'stale' })
+  })
+
+  it('passes the resolved mode through to the prompt call', async () => {
+    const modes = []
+    const session = {
+      prompt: async (_parts, mode) => {
+        modes.push(mode)
+        return { ok: true }
+      },
+    }
+    await promptWhileCurrent(
+      session,
+      () => true,
+      async () => PARTS,
+      'steer',
+    )
+    await promptWhileCurrent(
+      session,
+      () => true,
+      async () => PARTS,
+    )
+    assert.deepEqual(modes, ['steer', 'queue'])
+  })
+})
+
+describe('promptWhileCurrent mode resolution', () => {
+  it('resolves a mode function after encoding, at prompt time', async () => {
+    const order = []
+    const session = {
+      prompt: async (_parts, mode) => {
+        order.push(`prompt:${mode}`)
+        return { ok: true }
+      },
+    }
+    const outcome = await promptWhileCurrent(
+      session,
+      () => true,
+      async () => {
+        order.push('encode')
+        return PARTS
+      },
+      () => {
+        order.push('mode')
+        return 'steer'
+      },
+    )
+    assert.deepEqual(outcome, { action: 'sent' })
+    assert.deepEqual(order, ['encode', 'mode', 'prompt:steer'])
+  })
+
+  it('queues when the catalog settled the turn but the binding still runs', () => {
+    // The binding snapshot can lag after settlement; the catalog is authoritative.
+    const catalog = { phase: 'ready', byId: { s1: { running: false } } }
+    const mode = sendMode('steer', runningState(catalog, 's1', { running: true }))
+    assert.equal(mode, 'queue')
+  })
+
+  it('sees a phase change that happens during encoding', async () => {
+    let running = true
+    const modes = []
+    const session = {
+      prompt: async (_parts, mode) => {
+        modes.push(mode)
+        return { ok: true }
+      },
+    }
+    await promptWhileCurrent(
+      session,
+      () => true,
+      async () => {
+        running = false
+        return PARTS
+      },
+      () => sendMode('steer', running),
+    )
+    assert.deepEqual(modes, ['queue'])
+  })
+})
+
+describe('sendMode', () => {
+  it('steers only a running Session whose setting asks for it', () => {
+    assert.equal(sendMode('steer', true), 'steer')
+  })
+
+  it('falls back to queue for every other combination', () => {
+    assert.equal(sendMode('queue', true), 'queue')
+    assert.equal(sendMode('steer', false), 'queue')
+    assert.equal(sendMode('steer', undefined), 'queue')
+    assert.equal(sendMode(undefined, true), 'queue')
+    assert.equal(sendMode('unexpected', true), 'queue')
   })
 })

@@ -40,7 +40,7 @@ import { columnMins, rowMins } from './grid-limits.js'
 // ---------- composer metadata ----------
 import { contextOccupancy, formatTokens, parseSlashLine } from './composer-meta.js'
 import { admitSlashLine } from './composer-slash.js'
-import { promptWhileCurrent } from './composer-send.js'
+import { promptWhileCurrent, sendMode } from './composer-send.js'
 import { createEscapeStopHandler, sessionStoppable } from './escape-stop.js'
 
 // ---------- pending interactions ----------
@@ -2406,6 +2406,8 @@ function Composer(props) {
     controls,
     metaError,
     remote,
+    readBusyEnter,
+    readRunning,
   } = props
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -2440,6 +2442,12 @@ function Composer(props) {
   useLayoutEffect(() => {
     latestSessionRef.current = session
   }, [session])
+  // Resolve the mode at prompt time: the Session can start or finish a turn
+  // while image parts encode, and the Host setting can change between renders.
+  const readSendMode = useCallback(
+    () => sendMode(readBusyEnter?.(), readRunning?.() === true),
+    [readBusyEnter, readRunning],
+  )
   const imageInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const attachRef = useRef(null)
@@ -2542,12 +2550,17 @@ function Composer(props) {
     setError('')
     let outcome
     try {
-      outcome = await promptWhileCurrent(session, isCurrentSession, async () => {
-        const encoded = await Promise.all(
-          images.map((image) => imagePart(image.file, readFileBase64)),
-        )
-        return buildPromptParts(text, encoded, fileParts)
-      })
+      outcome = await promptWhileCurrent(
+        session,
+        isCurrentSession,
+        async () => {
+          const encoded = await Promise.all(
+            images.map((image) => imagePart(image.file, readFileBase64)),
+          )
+          return buildPromptParts(text, encoded, fileParts)
+        },
+        readSendMode,
+      )
     } finally {
       setSending(false)
     }
@@ -2576,6 +2589,7 @@ function Composer(props) {
     uploading,
     failed,
     sending,
+    readSendMode,
     setError,
     clearImages,
     clearFiles,
@@ -4051,7 +4065,16 @@ function PendingSeat(props) {
 
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
-  const { sessions, sessionId, fileUpload, uiSession, remote, active, stopSequenceMs } = props
+  const {
+    sessions,
+    sessionId,
+    fileUpload,
+    uiSession,
+    remote,
+    readBusyEnter,
+    active,
+    stopSequenceMs,
+  } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
@@ -4075,6 +4098,14 @@ function CellView(props) {
   const sessionSnapshot = useCallback(() => binding?.session?.getSnapshot() ?? null, [binding])
   const sessionState = useSyncExternalStore(sessionSubscribe, sessionSnapshot)
   const running = runningState(catalog, sessionId, sessionState)
+  // Prompt-time decisions need the catalog-aware value, read live: encoding can
+  // take long enough for the Host to settle the turn, and a catalog captured at
+  // click time would still say running.
+  const readRunning = useCallback(
+    () =>
+      runningState(sessions.list.getSnapshot(), sessionId, binding?.session?.getSnapshot() ?? null),
+    [sessions, sessionId, binding],
+  )
   const stoppable = sessionStoppable(sessionState, running)
 
   // Host inbox projection: queued prompts are not in the event window until the
@@ -4312,6 +4343,8 @@ function CellView(props) {
         controls,
         metaError,
         remote,
+        readBusyEnter,
+        readRunning,
       }),
     }),
   )
@@ -5026,6 +5059,7 @@ function SplitMain(props) {
   const fileUpload = props.__fileUpload
   const uiSession = props.__uiSession
   const remote = props.__remote
+  const readBusyEnter = props.__readBusyEnter
   const stopSequenceMs = props.__stopSequenceMs ?? 500
   const subscribe = useCallback((cb) => sessions.list.subscribe(cb), [sessions])
   const getSnapshot = useCallback(() => sessions.list.getSnapshot(), [sessions])
@@ -5313,6 +5347,7 @@ function SplitMain(props) {
         fileUpload,
         uiSession,
         remote,
+        readBusyEnter,
         nonBlank,
         pickable,
         workspaceItems,
@@ -5629,7 +5664,6 @@ function SplitCell(props) {
   const pickerRows = options.map((s) =>
     pickerRowOf(s, wsTitle === null ? projectNameFrom(projectById, s) : ''),
   )
-
   // Clicking a tile is the reader's "I have seen this": DSH only clears the
   // completion dot for the main view and a tile is never the main view, so the
   // acknowledgement happens here. Failing to clear it only leaves the dot lit.
@@ -5743,6 +5777,7 @@ function SplitCell(props) {
             fileUpload,
             uiSession,
             remote,
+            readBusyEnter: props.readBusyEnter,
             active,
             stopSequenceMs,
           }),
@@ -5842,6 +5877,7 @@ export const inject = [
   'fileUpload',
   'uiSession',
   'shortcuts',
+  'configForms',
   'remote',
   'remote.session',
   'remote.permissionPresets',
@@ -5929,6 +5965,14 @@ export function apply(ctx) {
   const uiSessionRef = ctx.uiSession
   const stopSequenceMs = ctx.shortcuts.stopSequenceMs
   const remoteRef = ctx.remote
+  // The split composer must follow the same Host preference as the main one.
+  // Read it per send rather than snapshotting it at mount: a settings change
+  // applies to the next send without reloading the page.
+  const conversationForm = ctx.configForms?.get?.('ui-conversation')
+  const readBusyEnter = () => {
+    const snapshot = conversationForm?.getSnapshot?.()
+    return snapshot?.status === 'ready' ? snapshot.value?.busyEnter : undefined
+  }
   ctx.slots.inject('main', () =>
     ctx.slots.register(
       {
@@ -5943,6 +5987,7 @@ export function apply(ctx) {
           __uiSession: uiSessionRef,
           __stopSequenceMs: stopSequenceMs,
           __remote: remoteRef,
+          __readBusyEnter: readBusyEnter,
         })
       },
     ),
