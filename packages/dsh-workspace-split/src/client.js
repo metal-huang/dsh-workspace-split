@@ -3298,12 +3298,11 @@ function ProcessGroup(props) {
     setOpen(group.running === true)
   }, [group.running])
 
-  const tools = group.items.filter((item) => item.kind === 'tool').map((item) => item.tool.name)
-  const hasReasoning = group.items.some((item) => item.kind === 'reasoning')
-  const summaryParts = []
-  if (tools.length > 0) summaryParts.push([...new Set(tools)].join(', '))
-  if (hasReasoning) summaryParts.push(t('reasoning.label'))
-  const summary = summaryParts.join(' · ')
+  // Process is an execution disclosure. Reasoning remains in the Session log,
+  // but expanding this view should reveal commands and their results only.
+  const toolItems = group.items.filter((item) => item.kind === 'tool')
+  if (toolItems.length === 0) return null
+  const summary = [...new Set(toolItems.map((item) => item.tool.name))].join(', ')
   return h(
     'div',
     {
@@ -3338,19 +3337,7 @@ function ProcessGroup(props) {
       ? h(
           'div',
           { style: { minWidth: 0 } },
-          group.items.map((item) =>
-            item.kind === 'tool'
-              ? h(ToolRow, { key: item.key, ...item.tool })
-              : h(
-                  'div',
-                  {
-                    key: item.key,
-                    style: reasoningStyles.body,
-                    'data-dsws-reasoning': 'true',
-                  },
-                  item.text,
-                ),
-          ),
+          toolItems.map((item) => h(ToolRow, { key: item.key, ...item.tool })),
         )
       : null,
   )
