@@ -164,6 +164,28 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     ])
   })
 
+  it('keeps the subagent lineage fields the native-follow guard reads', () => {
+    // native-context.js skips the sync when the native current view is a
+    // subagent of the active tile. The public summary names the link parentId
+    // (the internal lineage record's parentSessionId is renamed in the list
+    // snapshot mapping), so a rename here would silently re-enable destroying
+    // the subagent view on every parent-tile click.
+    includes('dsh-api-session-controller/lib/types/client/sessions/service.d.ts', [
+      'export interface SessionSummary {',
+      'parentId?: SessionId;',
+      "origin?: 'subagent';",
+    ])
+  })
+
+  it('keeps openSession single-target, with no panel-preserving option', () => {
+    // The keepSplit workaround exists because openSession always reveals the
+    // Conversation. An added options parameter is the upstream API the BACKLOG
+    // waits for: fail here so the workaround gets removed instead of rotting.
+    includes('dsh-client-ui-workspace/lib/types/client/navigation.d.ts', [
+      'openSession(target: SessionTarget): void;',
+    ])
+  })
+
   it('keeps the private unread writers the tile has to reach into', () => {
     // Boundary guard, not public contract: DSH clears `completionUnread` only
     // for the main view and exposes no write path, so a tile clears the

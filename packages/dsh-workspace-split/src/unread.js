@@ -4,9 +4,14 @@
  * DSH lights `SessionStatus.completionUnread` when a Session finishes, and
  * clears it on two normal paths: that Session is retained by the main view, or
  * it starts running again (a Session that leaves the catalog is cleaned up as
- * well). A tile retains through its own source (`source: 'controllerOperation'`)
- * and is never the main view, so without this module the dot stays lit until
- * the reader opens Chat.
+ * well). A tile retains through its own source (`source: 'controllerOperation'`),
+ * and only the *active* tile becomes the main view (native-context.js), so the
+ * other tiles would keep the dot lit until the reader opens Chat. When the
+ * native sync succeeds, the active tile no longer lights the completion dot at
+ * all — DSH treats it as watched — which matches the reader looking at it.
+ * Exceptions: while a guard deliberately skips the sync (the native view is on
+ * the tile's subagent, the tile is archived, or the open failed), the tile's
+ * Session is not the main view and its dot still lights.
  *
  * There is no public write path for the marker: `ctx.uiSession.sessionStatus` is
  * read-only. So this module reaches the client-side `uiSession` instance's own

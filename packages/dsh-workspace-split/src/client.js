@@ -91,8 +91,12 @@ import {
   isArchivedSession,
   pickableSessions,
   reconcileCells,
+  restoredActiveCell,
   runningState,
 } from './session-state.js'
+
+// ---------- native current Session follows the active tile ----------
+import { nativeSyncTarget } from './native-context.js'
 
 // ---------- completion unread ----------
 import { acknowledgeUnread } from './unread.js'
@@ -5061,6 +5065,8 @@ function SplitMain(props) {
   const workspaces = props.__workspaces
   const fileUpload = props.__fileUpload
   const uiSession = props.__uiSession
+  const uiWorkspace = props.__uiWorkspace
+  const keepSplit = props.__keepSplit
   const remote = props.__remote
   const readBusyEnter = props.__readBusyEnter
   const stopSequenceMs = props.__stopSequenceMs ?? 500
@@ -5079,7 +5085,9 @@ function SplitMain(props) {
   // Shared with the sidebar control, which owns the picker for this panel.
   const geometry = useSyncExternalStore(subscribeGeometry, getGeometry)
   const { rows, cols } = geometry
-  const [activeCell, setActiveCell] = useState(0)
+  // Restore the last active tile so the native current Session follows where
+  // the reader actually was, not always tile 0.
+  const [activeCell, setActiveCell] = useState(() => restoredActiveCell(saved, rows * cols))
   const [dragOver, setDragOver] = useState(-1)
   const freshSessions = useRef(new Set())
   // One in-flight creation per tile. A pick, drop, or clear bumps the generation
@@ -5101,6 +5109,47 @@ function SplitMain(props) {
     for (let i = 0; i < s.length; i++) arr[i] = normalizeCell(s[i])
     return arr
   })
+  const activeSessionId = cells[activeCell]?.id
+  // The native current key is an input, not just a guard read: DSH's startup
+  // restore and the sidebar change it, and each change must re-run the sync so
+  // a late-arriving tile Session still becomes current once the catalog and
+  // the native view settle. Read it live inside syncNative too, because the
+  // click handler must not trust a render-time snapshot.
+  const subscribeCurrentKey = useCallback(
+    (cb) => uiSession.adapter.current.subscribe(cb),
+    [uiSession],
+  )
+  const readCurrentKey = useCallback(() => uiSession.adapter.current.getSnapshot().key, [uiSession])
+  const currentKey = useSyncExternalStore(subscribeCurrentKey, readCurrentKey)
+  const syncNative = useCallback(
+    (id) => {
+      const target = nativeSyncTarget({
+        targetId: id,
+        byId: list?.byId,
+        archived,
+        archivedReady: wsState?.phase === 'ready',
+        currentKey: readCurrentKey(),
+      })
+      if (target === null) return
+      try {
+        uiWorkspace.openSession(target)
+      } catch (error) {
+        // A retain failure must not escape into the React event handler or
+        // crash the slot entry; the tile itself stays usable.
+        console.warn('workspace-split: native Session sync failed:', error)
+      } finally {
+        // openSession hardcodes 'reveal' → selectPanel(null); 0.2.2-rc.1 has
+        // no preservePanel, so take the split panel back in the same
+        // synchronous block and let React batch the two store writes. The
+        // finally also covers a throw after the native reveal already ran.
+        keepSplit()
+      }
+    },
+    [list, archived, wsState, uiWorkspace, keepSplit, readCurrentKey],
+  )
+  useEffect(() => {
+    if (activeSessionId) syncNative(activeSessionId)
+  }, [activeSessionId, list, currentKey, archived, syncNative])
   // Reader overrides for the per-cell text scale, one multiplier per cell.
   const [zooms, setZooms] = useState(() => savedZooms(saved))
   // While any gutter moves, every tile keeps its last scale instead of recomputing
@@ -5286,12 +5335,13 @@ function SplitMain(props) {
       rows,
       cols,
       cells,
+      activeCell,
       zooms,
       colRatios,
       rowRatios,
       inSplit: window.__dswsInSplit ?? false,
     })
-  }, [rows, cols, cells, zooms, colRatios, rowRatios])
+  }, [rows, cols, cells, activeCell, zooms, colRatios, rowRatios])
 
   // Drop stale references: a pinned cell whose Session left the catalog empties,
   // and a Workspace cell keeps its scope but lets the dead Session go. Archiving
@@ -5433,7 +5483,11 @@ function SplitMain(props) {
         frozen: dragging > 0,
         cellStyle,
         headerStyle: cellHeaderStyle,
-        onActivate: () => setActiveCell(i),
+        onActivate: () => {
+          setActiveCell(i)
+          const id = cells[i]?.id
+          if (id) syncNative(id)
+        },
         onDragOverCell: () => setDragOver(i),
         onDragLeaveCell: () => setDragOver((current) => (current === i ? -1 : current)),
         onDropCell: (raw) => {
@@ -6112,6 +6166,7 @@ export const inject = [
   'workspaces',
   'fileUpload',
   'uiSession',
+  'uiWorkspace',
   'shortcuts',
   'configForms',
   'remote',
@@ -6199,6 +6254,15 @@ export function apply(ctx) {
   const workspacesRef = ctx.workspaces
   const fileUploadRef = ctx.fileUpload
   const uiSessionRef = ctx.uiSession
+  const uiWorkspaceRef = ctx.uiWorkspace
+  // The panel re-selects itself after every native openSession: 'reveal' hands
+  // the main slot back to the Conversation, and the unregistered-id throw is
+  // guarded because a disappearing panel registration must not break a click.
+  const keepSplit = () => {
+    try {
+      ctx.layout.selectPanel('split')
+    } catch (_e) {}
+  }
   const stopSequenceMs = ctx.shortcuts.stopSequenceMs
   const remoteRef = ctx.remote
   // The split composer must follow the same Host preference as the main one.
@@ -6221,6 +6285,8 @@ export function apply(ctx) {
           __workspaces: workspacesRef,
           __fileUpload: fileUploadRef,
           __uiSession: uiSessionRef,
+          __uiWorkspace: uiWorkspaceRef,
+          __keepSplit: keepSplit,
           __stopSequenceMs: stopSequenceMs,
           __remote: remoteRef,
           __readBusyEnter: readBusyEnter,
