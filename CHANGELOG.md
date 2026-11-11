@@ -1,5 +1,39 @@
 # Changelog / 变更日志
 
+## 0.1.15 — 2026-11-11
+
+### English
+
+#### Added
+
+- **The native Session follows the active tile.** Activating a tile also selects its Session in the native sidebar, so split tiles and native views stay on the same Session. The last active tile is restored across reloads, and native subagent views are protected from background re-syncs. (#9)
+- **New chats in empty cells.** An empty tile offers an explicit new-chat action that opens an independent Session in that tile. (#4)
+
+#### Changed
+
+- **Reasoning folds into a Think row.** Reasoning is grouped into a Think disclosure instead of separate blocks, and commands without reasoning still appear in disclosures. (#3, #31)
+
+#### Fixed
+
+- Empty-cell chats are created only on request, never by rendering or retries. (#33)
+- The split composer follows the Host busy-enter setting, and default-send steering targets running chats correctly. (#2, #32)
+
+### 中文
+
+#### 新增
+
+- **原生会话跟随激活格。** 激活某个格子时，原生侧边栏的当前会话同步切到该格子的会话，分屏与原生视图始终指向同一会话；刷新后恢复上次激活的格子，后台同步不会打断正在查看的子代理视图。 (#9)
+- **空格子里新建聊天。** 空格子提供显式的新建聊天入口，在该格子中打开独立的新会话。 (#4)
+
+#### 变更
+
+- **思考过程折叠为 Think 行。** 推理内容归入 Think 折叠行而不是独立块；没有推理的命令仍保留在折叠区中。 (#3, #31)
+
+#### 修复
+
+- 空格子的聊天只在显式操作时创建，渲染或重试不会误建会话。 (#33)
+- 分屏输入框遵循 Host 的忙碌回车设置；默认发送模式下的转向正确作用于运行中的会话。 (#2, #32)
+
 ## 0.1.14 — 2026-11-10
 
 ### English
