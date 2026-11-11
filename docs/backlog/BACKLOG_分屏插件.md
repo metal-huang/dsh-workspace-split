@@ -55,6 +55,27 @@
 - 备注：发布是外部不可逆动作，标签与 `package.json` 版本必须一致，否则 CI 的版本
   校验会直接失败。
 
+### 归档激活格会话会退出分屏（原生 clearMain 行为）
+
+- 现状：激活格会话成为原生 current 后，在原生侧栏归档它会走
+  `archiveSession → clearMain → selectPanel(null)`，整个分屏面板被卸载。
+  第一期接受该行为（与原生主视图归档一致），已写进 TESTCASES 的已知限制。
+- 待办（第二期）：订阅 `ctx.layout.panelInfo` 与归档集合，仅当「面板变 null
+  且刚归档的正是原 current 会话」时重选 split；其他原因的面板切换让
+  `inSplit` 标志跟随现实，不与原生导航全面对抗。
+- 备注：`keepSplit` 兜不住这条——它发生在原生服务内部，不在我们的调用栈里。
+
+### 上游若提供 panel-preserving selection API 则移除 keepSplit
+
+- 现状：DSH 0.2.2-rc.1 的 `openSession` 硬编码 `'reveal'`，插件用
+  「openSession 后同一同步块 selectPanel('split')」兜底（`src/native-context.js`
+  头注有完整机制说明）。上游无任何相关 issue/PR（2026-11-11 检索）。
+- 待办：跟踪上游 `uiWorkspace` 的 API 变化；一旦出现「选择但不揭示」的
+  官方入口（openSession 选项或独立方法），切回官方路径并删除兜底。
+- 备注：兜底已知的代价——每次格子激活会 abort 在途的原生异步导航
+  （如 openWorkspace 连接中）、窄视口折叠侧栏抽屉、每次激活多写一次
+  localStorage。换官方 API 后这些一并消失。
+
 ## 待评估
 
 ### 向 DSH 申请公开的「确认完成 / 标记已读」接口

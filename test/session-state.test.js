@@ -14,10 +14,29 @@ import {
   isArchivedSession,
   pickableSessions,
   reconcileCells,
+  restoredActiveCell,
   runningState,
 } from '../packages/dsh-workspace-split/src/session-state.js'
 
 const ids = (...values) => new Set(values)
+
+describe('restoredActiveCell', () => {
+  it('clamps an oversized index like the runtime shrink path', () => {
+    // Refreshing with saved=5 on a 2×2 grid must land where the live shrink
+    // (Math.min(prev, size - 1)) would: tile 3, not tile 0.
+    assert.equal(restoredActiveCell({ activeCell: 5 }, 4), 3)
+    assert.equal(restoredActiveCell({ activeCell: 3 }, 4), 3)
+  })
+
+  it('falls back to tile 0 for invalid or missing values', () => {
+    assert.equal(restoredActiveCell({}, 4), 0)
+    assert.equal(restoredActiveCell(undefined, 4), 0)
+    assert.equal(restoredActiveCell({ activeCell: -1 }, 4), 0)
+    assert.equal(restoredActiveCell({ activeCell: 1.5 }, 4), 0)
+    assert.equal(restoredActiveCell({ activeCell: '2' }, 4), 0)
+    assert.equal(restoredActiveCell({ activeCell: 2 }, 0), 0)
+  })
+})
 
 describe('archivedSessionIds', () => {
   it('reads the archive set off a Workspace snapshot', () => {

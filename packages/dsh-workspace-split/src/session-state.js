@@ -84,6 +84,24 @@ export function reconcileCells(cells, knownIds, archived) {
 }
 
 /**
+ * Restore the persisted active-tile index for the current grid size.
+ *
+ * Clamp instead of rejecting oversized values: the runtime shrink path uses
+ * `Math.min(prev, size - 1)`, so a refresh must land on the same last tile
+ * rather than jumping back to tile 0 (which would also sync tile 0's Session
+ * to the native main view). Invalid or negative values fall back to 0.
+ *
+ * @param saved - persisted layout record, if any.
+ * @param size - rows × cols of the grid being restored.
+ * @returns a valid active-tile index.
+ */
+export function restoredActiveCell(saved, size) {
+  const a = saved?.activeCell
+  if (!Number.isInteger(a) || a < 0 || !Number.isInteger(size) || size < 1) return 0
+  return Math.min(a, size - 1)
+}
+
+/**
  * Prefer the ready Host catalog over a retained history binding: the binding can
  * be stale after the turn settles, while the catalog receives Host status alone.
  */

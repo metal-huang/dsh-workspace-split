@@ -88,6 +88,16 @@ const WIRING = [
   "const summary = processSummary(group.items, { reasoning: t('reasoning.label') })",
   'h(ReasoningItem, { key: item.key, item })',
   "h('div', { style: reasoningStyles.body, 'data-dsws-reasoning': 'true' }, item.text)",
+  // Native-follow wiring: deleting the subscription, the effect, the click
+  // sync, or the prop injection silently disables the feature while the pure
+  // decision-module tests stay green.
+  'useSyncExternalStore(subscribeCurrentKey, readCurrentKey)',
+  'if (activeSessionId) syncNative(activeSessionId, true)',
+  'if (id) syncNative(id)',
+  '__uiWorkspace: uiWorkspaceRef',
+  '__keepSplit: keepSplit',
+  "'uiWorkspace',",
+  "archivedReady: wsState?.phase === 'ready'",
 ]
 
 describe('split-cell wiring', () => {
