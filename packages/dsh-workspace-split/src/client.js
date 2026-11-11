@@ -5116,19 +5116,30 @@ function SplitMain(props) {
   // the native view settle. Read it live inside syncNative too, because the
   // click handler must not trust a render-time snapshot.
   const subscribeCurrentKey = useCallback(
-    (cb) => uiSession.adapter.current.subscribe(cb),
+    (cb) => {
+      // Defensive like every other uiSession touchpoint: a missing adapter
+      // must degrade to no-sync, never a render-time throw that unmounts the
+      // whole panel. dsh-contract.test.js pins the adapter surface itself.
+      const source = uiSession?.adapter?.current
+      if (typeof source?.subscribe !== 'function') return () => {}
+      return source.subscribe(cb)
+    },
     [uiSession],
   )
-  const readCurrentKey = useCallback(() => uiSession.adapter.current.getSnapshot().key, [uiSession])
+  const readCurrentKey = useCallback(() => {
+    const snapshot = uiSession?.adapter?.current?.getSnapshot?.()
+    return snapshot?.key
+  }, [uiSession])
   const currentKey = useSyncExternalStore(subscribeCurrentKey, readCurrentKey)
   const syncNative = useCallback(
-    (id) => {
+    (id, background) => {
       const target = nativeSyncTarget({
         targetId: id,
         byId: list?.byId,
         archived,
         archivedReady: wsState?.phase === 'ready',
         currentKey: readCurrentKey(),
+        background,
       })
       if (target === null) return
       try {
@@ -5148,7 +5159,9 @@ function SplitMain(props) {
     [list, archived, wsState, uiWorkspace, keepSplit, readCurrentKey],
   )
   useEffect(() => {
-    if (activeSessionId) syncNative(activeSessionId)
+    // Background re-sync: catalog churn must not tear down a native subagent
+    // view; only an explicit tile activation navigates the native main view.
+    if (activeSessionId) syncNative(activeSessionId, true)
   }, [activeSessionId, list, currentKey, archived, syncNative])
   // Reader overrides for the per-cell text scale, one multiplier per cell.
   const [zooms, setZooms] = useState(() => savedZooms(saved))

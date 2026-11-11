@@ -186,6 +186,15 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     ])
   })
 
+  it('keeps the uiSession adapter surface the native sync subscribes to', () => {
+    // The split panel subscribes to adapter.current for the native current key.
+    // The readers stay defensive (a missing shape degrades to no-sync), and
+    // this fragment makes an upstream rename fail loudly instead.
+    includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
+      'readonly adapter: SlotScopeAdapter;',
+    ])
+  })
+
   it('keeps the private unread writers the tile has to reach into', () => {
     // Boundary guard, not public contract: DSH clears `completionUnread` only
     // for the main view and exposes no write path, so a tile clears the

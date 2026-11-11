@@ -74,10 +74,32 @@ describe('nativeSyncTarget', () => {
     assert.equal(decide({ currentKey: 's-child' }), null)
   })
 
-  it('still syncs when the native subagent view belongs to another Session', () => {
+  it('still syncs on activation when the native subagent view belongs to another Session', () => {
     const foreignChild = { id: 's-foreign-child', origin: 'subagent', parentId: 's-other' }
     const byId = { ...rows, 's-foreign-child': foreignChild }
     assert.equal(decide({ byId, currentKey: 's-foreign-child' }), 's-parent')
+  })
+
+  it('spares any native subagent view during background re-syncs', () => {
+    // Catalog churn is not a user action: it must never tear down the view the
+    // reader is inspecting, whatever Session that view belongs to.
+    const foreignChild = { id: 's-foreign-child', origin: 'subagent', parentId: 's-other' }
+    const byId = { ...rows, 's-foreign-child': foreignChild }
+    assert.equal(decide({ byId, currentKey: 's-foreign-child', background: true }), null)
+    assert.equal(decide({ currentKey: 's-child', background: true }), null)
+    assert.equal(decide({ background: true }), 's-parent')
+  })
+
+  it('compares ids by value so a numeric id cannot defeat the guards', () => {
+    // normalizeCell enforces string ids on tiles, but the Host can hand out
+    // numeric ids; a strict === would re-open the Session on every snapshot.
+    const numericRows = { 42: { id: 42 }, 's-other': { id: 's-other' } }
+    assert.equal(decide({ targetId: 42, byId: numericRows, currentKey: '42' }), null)
+    assert.equal(decide({ targetId: 42, byId: numericRows, currentKey: 42 }), null)
+    assert.equal(decide({ targetId: 42, byId: numericRows }), '42')
+    const numericChild = { id: 7, origin: 'subagent', parentId: 42 }
+    const withChild = { ...numericRows, 7: numericChild }
+    assert.equal(decide({ targetId: 42, byId: withChild, currentKey: 7 }), null)
   })
 
   it('follows a tile that itself holds a subagent Session', () => {

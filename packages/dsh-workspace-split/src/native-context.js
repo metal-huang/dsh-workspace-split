@@ -26,8 +26,17 @@
  *   unchanged target must be a no-op.
  * - subagent view: the native current key is the *child* Session id while the
  *   reader inspects a subagent. Re-opening the parent would release the child's
- *   mainView reference and destroy the view the reader is looking at, so a tile
- *   whose Session is the current view's parent does not sync.
+ *   mainView reference and destroy the view the reader is looking at. An
+ *   explicit tile activation only spares the tile's own child (clicking another
+ *   tile is an deliberate navigation); a background re-sync spares ANY subagent
+ *   view, because catalog churn must never tear down a view the reader is
+ *   inspecting without a user action.
+ *
+ * Ids are normalized to strings before every comparison: the archive set is
+ * stringified for the same reason (Host rows can carry numeric ids), and a
+ * strict `===` between a numeric current key and a string tile id would
+ * silently disable the duplicate guard and re-open the Session on every
+ * catalog snapshot.
  *
  * An undefined current key does NOT block the sync. DSH's own startup restore
  * uses 'preserve' (it never closes the panel), and a fresh Host has no tile
@@ -44,19 +53,30 @@ function rowOf(byId, id) {
   return row === null ? undefined : row
 }
 
+/** Ids compare by value: Host rows can carry numeric ids beside string ones. */
+function sameId(a, b) {
+  if (a === undefined || a === null || b === undefined || b === null) return false
+  return String(a) === String(b)
+}
+
+/** Normalize a tile's Session id to a non-empty string, or null when unusable. */
+function normalizeTargetId(id) {
+  if (typeof id !== 'string' && typeof id !== 'number') return null
+  const target = String(id)
+  return target === '' ? null : target
+}
+
 /**
- * The native current view is a subagent of this tile's Session: the current
- * key is the child id, and re-opening the parent would release the child's
- * mainView reference and destroy the view the reader is looking at.
- * The public SessionSummary calls the link `parentId` (the internal lineage
- * record's `parentSessionId` is renamed in the list snapshot mapping).
+ * Whether the native current view must be left alone: it is a subagent view,
+ * and either the sync is background-driven (any subagent view is protected),
+ * or the view belongs to this tile's own Session (explicit activation spares
+ * only that child). The public SessionSummary calls the link `parentId` (the
+ * internal lineage record's `parentSessionId` is renamed in the list mapping).
  */
-function currentIsChildOfTarget(current, targetId) {
-  return (
-    current?.origin === 'subagent' &&
-    current.parentId !== undefined &&
-    String(current.parentId) === targetId
-  )
+function protectSubagentView(current, targetId, background) {
+  if (current?.origin !== 'subagent') return false
+  if (background === true) return true
+  return sameId(current.parentId, targetId)
 }
 
 /**
@@ -67,21 +87,31 @@ function currentIsChildOfTarget(current, targetId) {
  *   phase; until then the archive set is an empty placeholder, not a fact.
  * @param currentKey - `uiSession.adapter.current.getSnapshot().key`; the native
  *   main view's Session id (a child id while a subagent view is open).
+ * @param background - true for effect-driven re-syncs (no user action): any
+ *   native subagent view then blocks the sync, not just the tile's own child.
  * @returns the id to pass to `uiWorkspace.openSession`, or null for no sync.
  */
-export function nativeSyncTarget({ targetId, byId, archived, archivedReady, currentKey }) {
-  if (typeof targetId !== 'string' || targetId === '') return null
+export function nativeSyncTarget({
+  targetId,
+  byId,
+  archived,
+  archivedReady,
+  currentKey,
+  background,
+}) {
+  const target = normalizeTargetId(targetId)
+  if (target === null) return null
   // mousedown and focus capture both activate a tile; without this guard each
   // click would re-retain and rewrite the persisted selection twice.
-  if (currentKey === targetId) return null
+  if (sameId(currentKey, target)) return null
   if (archivedReady !== true) return null
   // sessions.create resolves before the Host session-added event: retaining
   // an id the catalog does not know yet throws `unknown session`. The caller
   // re-runs on the next catalog snapshot, so the sync happens on arrival.
-  if (rowOf(byId, targetId) === undefined) return null
+  if (rowOf(byId, target) === undefined) return null
   // Archived Sessions stay in the catalog; opening one as current makes the
   // native archive watcher clear the main view.
-  if (isArchivedSession(archived, targetId)) return null
-  if (currentIsChildOfTarget(rowOf(byId, currentKey), targetId)) return null
-  return targetId
+  if (isArchivedSession(archived, target)) return null
+  if (protectSubagentView(rowOf(byId, currentKey), target, background)) return null
+  return target
 }
