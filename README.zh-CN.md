@@ -127,11 +127,17 @@ npm run build        # 重建客户端产物
 npm run release      # 发布桌面 profile 用的快照
 ```
 
-`packages/dsh-workspace-split/src/client.js` 是源码；同目录的 `client.js` 是
-构建产物，**不要手改**，也不入库——在该包里 `npm install` 会走 `prepare`
-构建一次，之后改源码用 `npm run build` 重建。
+`packages/dsh-workspace-split/src/client.js` 是源码；构建产物是包根目录的
+`packages/dsh-workspace-split/client.js`，由 `npm run build` 生成，**不要手改**，
+也不入库——在该包里 `npm install` 会走 `prepare` 构建一次，之后改源码用
+`npm run build` 重建。
 
 仓库规则见 [AGENTS.md](AGENTS.md)，产品与设计文档见 [docs/](docs)。
+
+## 贡献
+
+欢迎修 bug 和改文档。新功能、行为变更、改默认值、新增依赖、提高最低 DSH 版本
+请先开 issue——完整规则见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
 
 ## 许可证
 

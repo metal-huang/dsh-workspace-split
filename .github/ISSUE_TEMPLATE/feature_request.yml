@@ -1,0 +1,74 @@
+name: Feature or behaviour change
+description: Propose a new feature, a new default, or a change to the interaction model
+title: '[Feature]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Product decisions are made by the maintainers. Open this issue first — do not open an implementation PR until a maintainer approves the direction.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the user-visible problem, not only the proposed solution.
+      placeholder: |
+        When I ...
+        I expect ...
+        Instead ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What should happen? How should it feel in the split view?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, or the current workaround.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched existing issues and pull requests for a duplicate.
+          required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: What does this touch?
+      options:
+        - label: UI / layout
+        - label: Default behaviour or interaction
+        - label: Persistence or settings
+        - label: Dependencies or the minimum DSH version
+        - label: Documentation
+
+  - type: dropdown
+    id: willing
+    attributes:
+      label: Are you willing to implement it?
+      options:
+        - Yes, after the direction is approved
+        - Maybe
+        - No, just suggesting
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: approval
+    attributes:
+      label: Approval gate
+      options:
+        - label: I understand this is a product decision and will wait for a maintainer's approval before opening a pull request.
+          required: true

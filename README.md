@@ -150,12 +150,19 @@ npm run build        # rebuild the client bundle
 npm run release      # publish a snapshot for the desktop profile
 ```
 
-`packages/dsh-workspace-split/src/client.js` is the source. `client.js` next to
-it is generated and not tracked by git — `npm install` in that package builds it
-through `prepare`, and `npm run build` rebuilds it. Never edit it by hand.
+`packages/dsh-workspace-split/src/client.js` is the source. The build writes
+`packages/dsh-workspace-split/client.js` (the package root); it is generated and
+not tracked by git — `npm install` in that package builds it through `prepare`,
+and `npm run build` rebuilds it. Never edit it by hand.
 
 See [AGENTS.md](AGENTS.md) for the repository rules and [docs/](docs) for the
 product and design notes.
+
+## Contributing
+
+Bug fixes and documentation are welcome. Features, behaviour changes, new
+defaults, new dependencies, and a new minimum DSH version need an issue first —
+the full rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
