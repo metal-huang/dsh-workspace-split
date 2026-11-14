@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/metal-huang/dsh-workspace-split/blob/main/CONTRIBUTING.md
+    about: What we accept, and when to open an issue before a pull request.
+  - name: Read the README first
+    url: https://github.com/metal-huang/dsh-workspace-split#readme
+    about: Install, usage, requirements, and development commands.
+  - name: Product and design notes
+    url: https://github.com/metal-huang/dsh-workspace-split/tree/main/docs
+    about: PRD, design, technical inventory, and test cases.

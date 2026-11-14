@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible problem in the split view
+title: '[Bug]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Keep it short and concrete — long AI-generated reports are hard to act on.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: The actual behaviour and the behaviour you expected.
+      placeholder: |
+        Actual:
+        Expected:
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: From package.json, the release page, or `npm ls @metal-huang/dsh-workspace-split`.
+      placeholder: 0.1.13
+    validations:
+      required: true
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH version and profile
+      description: Output of `dsh --version`, and whether this is the desktop or web profile.
+      placeholder: 0.2.2-rc.1 · web profile
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and browser
+      placeholder: Windows 11 · Chrome 141
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, console errors, screenshots
+      description: Redact tokens and private paths before pasting.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This report contains no secrets or private data.
+          required: true
