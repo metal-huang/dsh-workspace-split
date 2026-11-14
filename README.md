@@ -160,8 +160,9 @@ product and design notes.
 
 ## Contributing
 
-Bug fixes and documentation are welcome. Features, behaviour changes, and new
-dependencies need an issue first — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Bug fixes and documentation are welcome. Features, behaviour changes, new
+defaults, new dependencies, and a new minimum DSH version need an issue first —
+the full rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

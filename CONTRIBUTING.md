@@ -13,7 +13,8 @@ with the maintainers.
 - **Feature, behaviour change, new default, new dependency, or a new minimum
   DSH version** — open an issue first and wait for a maintainer to approve the
   direction. Do not start coding before that.
-- **Docs, tests, chores** — a pull request is fine.
+- **Docs, tests, chores, and behaviour-preserving refactors** — a pull request
+  is fine.
 - **One pull request = one thing.** Unrelated edits slow review down and get
   reverted.
 
@@ -33,11 +34,18 @@ product coherent.
 Requires Node.js (current LTS) and npm.
 
 ```bash
-npm install
+# The repo root and the plugin package have separate dependencies: install both.
+npm install                                   # repo tooling (lint, gate, prettier)
+cd packages/dsh-workspace-split && npm install && cd ../..
 npm run build        # rebuild packages/dsh-workspace-split/client.js
 npm run check        # lint + duplication + format + tests
 npm run test:e2e     # browser E2E; needs a local Chrome/Chromium
 ```
+
+The root `package.json` has no `workspaces` field, so the plugin's own
+`node_modules` (esbuild, katex, mdast, …) is not installed by a root-only
+`npm install`. Skipping the package install makes `npm run build`, `npm run
+check`, and `npm run test:e2e` fail on a missing `esbuild`.
 
 Useful details:
 
@@ -62,11 +70,13 @@ Useful details:
 
 A pull request is a claim that the change works. Back the claim with evidence:
 
-- **Build and run it.** `npm install`, `npm run build`, `npm run check`, and
-  `npm run test:e2e` must pass locally. Then load the plugin in a real DSH web
-  profile and exercise the behaviour you changed. Syntax checks or pre-commit
-  hooks alone are not verification; "no local build was performed" is not an
-  acceptable validation note.
+- **Build and run it.** `npm install` (root and package), `npm run build`, and
+  `npm run check` must pass locally, and for UI changes `npm run test:e2e` too
+  (that group skips when no local Chrome/Chromium is present — say so in the PR).
+  Then load the plugin in a real DSH web profile and exercise the behaviour you
+  changed. Syntax checks or pre-commit hooks alone are not verification; "no
+  local build was performed" is not an acceptable validation note. A docs-only
+  pull request needs only `npm run check`; no profile run is required.
 - **Verify platform APIs before coding against them.** This plugin runs inside
   DSH and may only use what the target DSH version actually ships. Confirm that
   every method and option you call exists there: read the platform source or
@@ -90,7 +100,7 @@ A pull request is a claim that the change works. Back the claim with evidence:
 - Base on `main`.
 - Use a Conventional Commit title: `type(scope): summary`
   (`feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`, `build`,
-  `style`, `revert`); keep the subject under 72 characters.
+  `style`, `revert`); keep the subject to 72 characters or fewer.
 - Fill in the pull request template. Link the issue with `Fixes #123` when one
   exists.
 - Meet the [verification requirements](#verification-requirements) and paste
@@ -117,3 +127,8 @@ your own files (`git add <path>`); never `git add -A` or `git add .`.
 
 Do not paste tokens, private paths, or customer data into issues or pull
 requests. Redact logs before attaching them.
+
+To report a vulnerability, do not open a public issue. Use the repository's
+[private security advisory](https://github.com/metal-huang/dsh-workspace-split/security/advisories/new)
+("Report a vulnerability" on the Security tab) so the maintainer can respond
+before details become public.

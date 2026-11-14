@@ -136,8 +136,8 @@ npm run release      # 发布桌面 profile 用的快照
 
 ## 贡献
 
-欢迎修 bug 和改文档。新功能、行为变更、新依赖请先开 issue——见
-[CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
+欢迎修 bug 和改文档。新功能、行为变更、改默认值、新增依赖、提高最低 DSH 版本
+请先开 issue——完整规则见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
 
 ## 许可证
 

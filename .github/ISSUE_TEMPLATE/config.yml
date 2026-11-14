@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Contributing guide
     url: https://github.com/metal-huang/dsh-workspace-split/blob/main/CONTRIBUTING.md
-    about: What we accept, and when to open an issue before a pull request.
+    about: What we accept, and when to open an issue before a pull request. 中文版：CONTRIBUTING.zh-CN.md
   - name: Read the README first
     url: https://github.com/metal-huang/dsh-workspace-split#readme
     about: Install, usage, requirements, and development commands.

@@ -11,7 +11,7 @@
   就链接上。
 - **新功能、行为变更、改默认值、新增依赖、提高最低 DSH 版本** —— 请先开 issue，
   等维护者确认方向后再动手。确认之前不要写实现 PR。
-- **文档、测试、杂务** —— 可以直接提 PR。
+- **文档、测试、杂务、行为不变的重构** —— 可以直接提 PR。
 - **一个 PR 只做一件事。** 无关改动会拖慢评审，也会被回退。
 
 未经批准就改变产品行为的 PR 可能被直接关闭。这不是针对你的工作，而是为了保证
@@ -29,11 +29,18 @@
 需要 Node.js（当前 LTS）和 npm。
 
 ```bash
-npm install
+# 根目录和插件包依赖各自独立，两处都要装。
+npm install                                   # 仓库工具（lint、门禁、prettier）
+cd packages/dsh-workspace-split && npm install && cd ../..
 npm run build        # 重建 packages/dsh-workspace-split/client.js
 npm run check        # lint + 重复代码 + 格式 + 测试
 npm run test:e2e     # 浏览器 E2E；需要本机 Chrome/Chromium
 ```
+
+根 `package.json` 没有 `workspaces` 字段，插件包自己的 `node_modules`
+（esbuild、katex、mdast 等）不会被根目录的 `npm install` 装上；漏掉包目录那次
+安装，`npm run build`、`npm run check`、`npm run test:e2e` 都会因找不到
+`esbuild` 而失败。
 
 几个要点：
 
@@ -55,10 +62,11 @@ npm run test:e2e     # 浏览器 E2E；需要本机 Chrome/Chromium
 
 PR 是在声称「这个改动有效」。请用证据支撑这个声称：
 
-- **构建并运行它。** 本地必须通过 `npm install`、`npm run build`、`npm run check`、
-  `npm run test:e2e`，然后把插件加载进真实的 DSH web profile，实际操作你改动的
-  行为。只过语法检查或 pre-commit 钩子不算验证；「未做本地构建」不是可接受的
-  验证说明。
+- **构建并运行它。** 本地必须通过 `npm install`（根目录和包目录各一次）、
+  `npm run build`、`npm run check`；UI 改动还要通过 `npm run test:e2e`（本机没有
+  Chrome/Chromium 时该组会跳过，请在 PR 里注明）。然后把插件加载进真实的 DSH web
+  profile，实际操作你改动的行为。只过语法检查或 pre-commit 钩子不算验证；「未做
+  本地构建」不是可接受的验证说明。纯文档 PR 只需 `npm run check`，无需起 profile。
 - **写代码前先确认平台 API 存在。** 本插件运行在 DSH 内部，只能使用目标 DSH
   版本实际提供的能力。确认你调用的每个方法、每个选项都真实存在：读平台源码或
   类型定义（DSH 安装目录的 `node_modules/@deepseek-ai/*`，或公开仓库
@@ -97,3 +105,6 @@ PR 是在声称「这个改动有效」。请用证据支撑这个声称：
 ## 安全
 
 不要把 token、私人路径或客户数据贴进 issue 或 PR。日志请先脱敏。
+
+报告安全漏洞请勿开公开 issue，请使用仓库的[私密安全公告](https://github.com/metal-huang/dsh-workspace-split/security/advisories/new)
+（Security 页的「Report a vulnerability」），让维护者在细节公开前先响应。

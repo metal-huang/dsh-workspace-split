@@ -1,7 +1,8 @@
 ## Linked issue
 
 <!-- Required for features and behaviour changes. Use "Fixes #123" / "Closes #123".
-     Small bug fixes may write "No issue: <one-line reason>". -->
+     Small bug fixes may write "No issue: <one-line reason>".
+     Documentation / chore PRs: delete this line. -->
 
 Fixes #
 
@@ -23,7 +24,7 @@ Fixes #
 ## How did you verify it?
 
 - [ ] `npm run check`
-- [ ] `npm run test:e2e` (UI changes; needs Chrome)
+- [ ] `npm run test:e2e` (UI changes; needs Chrome — note if it skipped)
 - [ ] Loaded the plugin in a real DSH web profile and exercised the changed behaviour
 - [ ] Manual steps:
 
