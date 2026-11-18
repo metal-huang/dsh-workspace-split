@@ -98,6 +98,9 @@ const WIRING = [
   '__keepSplit: keepSplit',
   "'uiWorkspace',",
   "archivedReady: wsState?.phase === 'ready'",
+  // Picking a grid from the sidebar picker opens the split view when it is
+  // closed; dropping the toggle leaves the choice applying to a hidden panel.
+  'if (window.__dswsInSplit !== true) {',
 ]
 
 describe('split-cell wiring', () => {
