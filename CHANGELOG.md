@@ -1,5 +1,27 @@
 # Changelog / 变更日志
 
+## 0.1.16 — 2026-11-18
+
+### English
+
+#### Changed
+
+- **Tile typography tuned for a split view.** Cell text now uses a side gutter proportional to the tile width (4%) and a compact vertical rhythm (1.5 line-height, 8px block gap), so several tiles fit more content without feeling cramped. (#37)
+
+#### Fixed
+
+- **Process-row tool names stay on one left column.** The tool list no longer drifts mid-row; the duration is a fixed-width column and the tools sit right after it, aligned on a single left edge. (#38)
+
+### 中文
+
+#### 变更
+
+- **分屏格子的排版按小视野重新调校。** 格子文字的左右留白改为按格子宽度取百分比（4%），纵向节奏收紧（行高 1.5、段间距 8px），多格并排时既能放下更多内容又不显拥挤。 (#37)
+
+#### 修复
+
+- **「处理过程」行的工具名固定左对齐。** 工具名不再飘到行中间；时长作为定宽列，工具名紧跟其后，所有行对齐在同一条左边线。 (#38)
+
 ## 0.1.15 — 2026-11-11
 
 ### English
