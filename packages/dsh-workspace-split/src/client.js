@@ -3277,6 +3277,32 @@ const reasoningStyles = {
     fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
     color: 'var(--dsw-alias-label-tertiary, #888)',
   },
+  // The elapsed label is a fixed tag, not a spacer: it must not grow, or it
+  // steals half the row and pushes the tool summary around. A fixed min width
+  // with tabular digits keeps the tool list's left edge constant whether the
+  // duration reads "4.5s" or "51s".
+  duration: {
+    flex: 'none',
+    minWidth: '6ch',
+    fontVariantNumeric: 'tabular-nums',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    color: 'var(--dsw-alias-label-tertiary, #888)',
+    whiteSpace: 'nowrap',
+  },
+  // Tool list stays on the LEFT, right after the duration (native shows only the
+  // label; the tool list is our addition, and the request is to keep it on the
+  // left rather than floating at the right edge). It shrinks with an ellipsis
+  // before it would squeeze the label.
+  summary: {
+    flex: '0 1 auto',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    textAlign: 'left',
+    fontSize: 'var(--dsh-content-font-size-secondary, 12px)',
+    color: 'var(--dsw-alias-label-tertiary, #888)',
+  },
   dot: {
     flex: 'none',
     width: 5,
@@ -3307,13 +3333,24 @@ function GroupDuration(props) {
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [group.running])
-  if (group.startedAt === undefined) return null
-  const end = group.running === true ? now : (group.endedAt ?? group.startedAt)
-  if (!(end > group.startedAt)) return null
+  // Always render the slot, even with no duration: an absent span collapses the
+  // fixed-width column and shifts the tool list ~30px left on rows the Host left
+  // without timestamps, so the tools would lose their shared left edge.
+  const end =
+    group.startedAt === undefined
+      ? undefined
+      : group.running === true
+        ? now
+        : (group.endedAt ?? group.startedAt)
+  const label =
+    end !== undefined && end > group.startedAt ? formatDuration(end - group.startedAt) : ''
   return h(
     'span',
-    { style: reasoningStyles.preview, 'data-dsws-process-duration': 'true' },
-    formatDuration(end - group.startedAt),
+    {
+      style: reasoningStyles.duration,
+      'data-dsws-process-duration': label === '' ? undefined : 'true',
+    },
+    label,
   )
 }
 
@@ -3421,7 +3458,7 @@ function ProcessGroup(props) {
         ? h('span', { className: 'dsws-running-dot', style: reasoningStyles.dot })
         : null,
       h(GroupDuration, { group }),
-      summary === '' ? null : h('span', { style: reasoningStyles.preview }, summary),
+      summary === '' ? null : h('span', { style: reasoningStyles.summary }, summary),
     ),
     open
       ? h(
