@@ -388,7 +388,23 @@ function parseMarkdown(text) {
   return tree
 }
 
-const mdBlockGap = 16
+// Vertical gap between markdown blocks inside a tile. Native uses 16px, tuned
+// for a full-width single conversation; a split tile shows several columns at
+// once and every pixel of height is worth lines, so the same gap reads wasteful
+// here. Tightened with the line-height so a tile fits more content without
+// looking cramped.
+const mdBlockGap = 8
+
+// Horizontal inset for a tile's own text. The native Conversation pads its
+// column with a generous gutter; at the old 12px a tile's transcript read as
+// flush to the cell edges and felt dense. Expressed as a PERCENTAGE of the
+// tile's own width, not a fixed pixel count: a split tile can be a fifth of the
+// window on a 4K display or a full-width single tile on a laptop, so a fixed px
+// gutter changes proportion with every screen and grid size. 4% ≈ the 28px the
+// review picked at a ~680px two-up tile, and scales to stay proportional. Only
+// the horizontal inset grows, so a wider gutter never costs visible lines; the
+// header shares it so a Session title stays aligned with the transcript.
+const CELL_TEXT_INSET_PCT = 4
 
 const mdStyles = {
   root: {
@@ -396,15 +412,16 @@ const mdStyles = {
     maxWidth: '100%',
     overflowWrap: 'anywhere',
     font: 'var(--dsw-font-markdown-base, inherit)',
+    lineHeight: 1.5,
     color: 'var(--dsw-alias-label-primary, inherit)',
   },
   p: { margin: `${mdBlockGap}px 0` },
   h: (level) => ({
     font: `var(--dsw-font-markdown-h${Math.min(level, 4)}, inherit)`,
-    margin: level >= 4 ? '16px 0' : '32px 0 16px',
+    margin: level >= 4 ? '8px 0' : '16px 0 8px',
   }),
   ul: { margin: `${mdBlockGap}px 0`, paddingLeft: 18 },
-  li: { marginTop: 6 },
+  li: { marginTop: 3 },
   blockquote: {
     borderLeft: '2px solid var(--dsw-alias-label-caption, #888)',
     margin: `${mdBlockGap}px 0 0`,
@@ -413,7 +430,7 @@ const mdStyles = {
   hr: {
     border: 'none',
     height: '0.5px',
-    margin: '32px 0',
+    margin: '16px 0',
     background: 'var(--dsw-alias-border-l2, #4a4a4a)',
   },
   inlineCode: {
@@ -3470,7 +3487,7 @@ function eventStyle(kind) {
     fontSize: 'var(--dsh-content-font-size, 13px)',
     lineHeight: 'calc(20px + var(--dsh-content-font-delta, 0px))',
     color: 'var(--dsw-alias-label-primary, inherit)',
-    marginBottom: 8,
+    marginBottom: 5,
   }
   if (kind === 'user')
     return {
@@ -4318,7 +4335,7 @@ function CellView(props) {
             flex: 1,
             overflowY: 'auto',
             overflowX: 'hidden',
-            padding: '10px 12px',
+            padding: `10px ${CELL_TEXT_INSET_PCT}%`,
             minHeight: 0,
             minWidth: 0,
           },
@@ -5441,7 +5458,7 @@ function SplitMain(props) {
     gap: 8,
     flexShrink: 0,
     minHeight: 36,
-    padding: '8px 12px',
+    padding: `8px ${CELL_TEXT_INSET_PCT}%`,
     borderBottom: '0.5px solid var(--dsw-alias-border-l3, #444)',
     fontSize: 15,
     lineHeight: '20px',
