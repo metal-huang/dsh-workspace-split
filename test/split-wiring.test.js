@@ -98,6 +98,11 @@ const WIRING = [
   '__keepSplit: keepSplit',
   "'uiWorkspace',",
   "archivedReady: wsState?.phase === 'ready'",
+  // Pending-interaction service: 0.2.3 gates uiSession.sessionStatus behind
+  // inject, so it is resolved through session-status.js and provided per
+  // instance; a module global or a direct uiSession read crashes the tile.
+  'createSessionStatusGetter(ctx, uiSessionRef)',
+  'SessionStatusContext.Provider',
 ]
 
 describe('split-cell wiring', () => {

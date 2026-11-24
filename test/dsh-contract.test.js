@@ -17,6 +17,18 @@ const DEFAULT_ROOT =
 const root = process.env.DSH_CONTRACT_ROOT ?? DEFAULT_ROOT
 const installed = existsSync(root)
 
+// DSH 0.2.3 moved the pending-interaction registry out of `uiSession` into its
+// own inject-gated service/package `uiSession.sessionStatus`. The same contract
+// must pass on both: 0.2.2 keeps the member + private unread writers on
+// `uiSession`; 0.2.3 ships `dsh-client-ui-session-status` instead and removed
+// those private members, so the unread acknowledge degrades to a no-op.
+const sessionTypesPath = 'dsh-client-ui-session/lib/types/client/index.d.ts'
+const sessionTypes = existsSync(join(root, sessionTypesPath))
+  ? readFileSync(join(root, sessionTypesPath), 'utf8')
+  : ''
+const memberSessionStatus = sessionTypes.includes('sessionStatus')
+const hasSessionStatusPackage = existsSync(join(root, 'dsh-client-ui-session-status/package.json'))
+
 /** Read one DSH package file, or fail with the path that moved. */
 function read(relative) {
   const path = join(root, relative)
@@ -133,10 +145,16 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
   })
 
   it('keeps the pending-interaction registry and both answer paths', () => {
-    includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
-      'sessionStatus',
-      'pendingInteraction',
-    ])
+    if (memberSessionStatus) {
+      includes(sessionTypesPath, ['sessionStatus', 'pendingInteraction'])
+    } else {
+      // 0.2.3+: the registry is the separate `uiSession.sessionStatus` service.
+      assert.equal(
+        hasSessionStatusPackage,
+        true,
+        'DSH 0.2.3+ must ship dsh-client-ui-session-status (the pending-interaction service)',
+      )
+    }
     includes('dsh-client-ui-approval/lib/types/client/contract/slots.d.ts', [
       'answer(outcome: ApprovalDecision)',
       'answerable',
@@ -191,7 +209,7 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     // The readers stay defensive (a missing shape degrades to no-sync), and
     // this fragment makes an upstream rename fail loudly instead.
     includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
-      'readonly adapter: SlotScopeAdapter;',
+      'readonly adapter: SlotScopeAdapter',
     ])
   })
 
@@ -201,10 +219,20 @@ describe('DSH public contract', { skip: installed ? false : `no DSH install at $
     // instance's own set and republishes it. The fragments are complete
     // declarations on purpose — `completionUnread` alone also matches the public
     // read-only status field, which would let a rename pass unnoticed.
-    includes('dsh-client-ui-session/lib/types/client/index.d.ts', [
-      'private readonly completionUnread;',
-      'private publishStatus;',
-    ])
+    //
+    // 0.2.3 removed these private members and moved status into the separate
+    // `uiSession.sessionStatus` service with no write path, so clicking a tile
+    // can no longer clear its completion dot there (src/unread.js is a no-op).
+    // Pin the new package instead of the removed members.
+    if (!memberSessionStatus) {
+      assert.equal(
+        hasSessionStatusPackage,
+        true,
+        'DSH 0.2.3+ must ship dsh-client-ui-session-status after removing the private unread writers',
+      )
+      return
+    }
+    includes(sessionTypesPath, ['private readonly completionUnread;', 'private publishStatus;'])
   })
 
   it('keeps file upload and file-reference candidates', () => {

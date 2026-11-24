@@ -68,7 +68,11 @@ function dshInvocation() {
   if (dshPath === null) return null
   const entry = join(resolve(dshPath, '..'), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   if (existsSync(entry)) return { command: process.execPath, prefix: [entry], shell: false }
-  return { command: dshPath, prefix: [], shell: process.platform === 'win32' }
+  // A Windows .cmd shim must be quoted: with shell:true Node concatenates the
+  // command with its args, so an unquoted path containing spaces (e.g. the
+  // desktop runtime under "DeepSeek Harness") is split at the first space.
+  const shell = process.platform === 'win32'
+  return { command: shell ? `"${dshPath}"` : dshPath, prefix: [], shell }
 }
 
 const dshCommand = dshInvocation()
@@ -1063,6 +1067,36 @@ describe('split composer parity (headless DSH)', { skip }, () => {
     assert.equal(result.endVisible, true)
     assert.equal(result.activeDescendant, true)
     assert.equal(result.rowTabIndex, -1)
+  })
+
+  // Regression for the DSH 0.2.3 "split disappears" bug: the crash only fired
+  // when a tile held a real Session and its CellView read the pending-interaction
+  // service at mount, so fixture-only tests above cannot catch it. Here we open
+  // the real split, create a Session from an empty tile, and require the grid to
+  // stay rendered with no uncaught error.
+  it('opens the split with a real Session and keeps the panel', async () => {
+    const result = await evaluate(
+      page,
+      `(async () => {
+        window.__dswsErrors = []
+        window.addEventListener('error', (event) => window.__dswsErrors.push(String(event.message)))
+        if (window.__dswsInSplit !== true) window.__dswsToggle?.()
+        await new Promise((done) => setTimeout(done, 600))
+        const newChat = document.querySelector('[data-dsws-new-chat]')
+        if (newChat !== null) newChat.click()
+        await new Promise((done) => setTimeout(done, 3000))
+        return {
+          inSplit: window.__dswsInSplit === true,
+          headers: document.querySelectorAll('[data-dsws-header]').length,
+          errors: window.__dswsErrors,
+        }
+      })()`,
+    )
+    assert.equal(result.inSplit, true, 'the split toggle must keep inSplit true')
+    assert.ok(
+      result.headers >= 1,
+      `a tile must render after creating a Session; errors: ${JSON.stringify(result.errors)}`,
+    )
   })
 })
 

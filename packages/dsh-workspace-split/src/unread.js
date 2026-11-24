@@ -21,6 +21,14 @@
  * installed build, so an upstream rename fails a gate instead of breaking
  * quietly. The helper also degrades to "leave the dot lit" rather than throwing
  * when the internals moved or the Session is gone.
+ *
+ * DSH 0.2.3 removed both private members and moved status into the separate
+ * `uiSession.sessionStatus` service, which exposes no write path. There is no
+ * public way to clear another Session's completion dot there, so on 0.2.3+ this
+ * helper is a no-op: clicking a non-active tile leaves its dot lit until the
+ * reader opens Chat. Degrading is intentional — the alternative is crashing the
+ * tile — and the contract test pins the new package instead of the removed
+ * members.
  */
 
 /**

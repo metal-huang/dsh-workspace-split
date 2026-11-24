@@ -19,6 +19,11 @@ const h = React.createElement
 const { useState, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, useRef } =
   React
 
+// Per-plugin-instance status source getter, provided by `apply` around the split
+// tree so cells read their own instance's source instead of a shared module
+// global (which an HMR/re-activation could overwrite under still-mounted cells).
+const SessionStatusContext = React.createContext(null)
+
 // ---------- i18n ----------
 import { detectLanguage, t } from './i18n.js'
 
@@ -45,6 +50,7 @@ import { createEscapeStopHandler, sessionStoppable } from './escape-stop.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
+import { createSessionStatusGetter, subscribeWhenAvailable } from './session-status.js'
 import { ApprovalCard, QuestionCard } from './pending-ui.js'
 
 // ---------- composer seats ----------
@@ -3977,11 +3983,18 @@ function useInboxQueue(binding) {
   return Array.isArray(inbox?.['next-turn']) ? inbox['next-turn'] : []
 }
 
-/** Subscribe to the official pending-interaction registry for one Session. */
-function usePendingInteraction(uiSession, sessionId) {
-  const source = uiSession?.sessionStatus
-  const subscribe = useCallback((cb) => source?.subscribe(cb) ?? (() => {}), [source])
-  const snapshot = useCallback(() => source?.getSnapshot(), [source])
+/** Subscribe to the official pending-interaction registry for one Session.
+ *
+ *  The status source comes from the per-instance `SessionStatusContext` (see
+ *  `createSessionStatusGetter`): 0.2.2 exposes it on `uiSession`, 0.2.3+ as the
+ *  inject-gated `uiSession.sessionStatus` service. Because we keep it out of
+ *  `inject` (declaring it would wedge 0.2.2), Cordis gives no ordering edge, so
+ *  the service can register AFTER this cell mounts; we poll a few times to pick
+ *  up a late registration instead of staying blind for the page's lifetime. */
+function usePendingInteraction(sessionId) {
+  const getSource = React.useContext(SessionStatusContext)
+  const subscribe = useCallback((cb) => subscribeWhenAvailable(getSource, cb), [getSource])
+  const snapshot = useCallback(() => getSource?.()?.getSnapshot?.(), [getSource])
   const statusMap = useSyncExternalStore(subscribe, snapshot)
   return pendingOf(statusMap, sessionId)
 }
@@ -4126,16 +4139,7 @@ function PendingSeat(props) {
 
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
-  const {
-    sessions,
-    sessionId,
-    fileUpload,
-    uiSession,
-    remote,
-    readBusyEnter,
-    active,
-    stopSequenceMs,
-  } = props
+  const { sessions, sessionId, fileUpload, remote, readBusyEnter, active, stopSequenceMs } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
@@ -4177,7 +4181,7 @@ function CellView(props) {
 
   // Official approval / question packages publish their pending objects here;
   // one registry entry per Session, and answer() is the object's own method.
-  const pending = usePendingInteraction(uiSession, sessionId)
+  const pending = usePendingInteraction(sessionId)
   const { controls, metaError } = useComposerSeats(remote, binding, sessionId)
 
   // Retain session once catalogued.
@@ -6321,6 +6325,9 @@ export function apply(ctx) {
   const workspacesRef = ctx.workspaces
   const fileUploadRef = ctx.fileUpload
   const uiSessionRef = ctx.uiSession
+  // Per-instance status source getter (see session-status.js): a closure, not a
+  // module global, so a second activation cannot overwrite a live instance's.
+  const getSessionStatus = createSessionStatusGetter(ctx, uiSessionRef)
   const uiWorkspaceRef = ctx.uiWorkspace
   // The panel re-selects itself after every native openSession: 'reveal' hands
   // the main slot back to the Conversation, and the unregistered-id throw is
@@ -6347,17 +6354,21 @@ export function apply(ctx) {
         key: 'split',
       },
       function SplitPanel() {
-        return h(SplitMain, {
-          __sessions: sessionsRef,
-          __workspaces: workspacesRef,
-          __fileUpload: fileUploadRef,
-          __uiSession: uiSessionRef,
-          __uiWorkspace: uiWorkspaceRef,
-          __keepSplit: keepSplit,
-          __stopSequenceMs: stopSequenceMs,
-          __remote: remoteRef,
-          __readBusyEnter: readBusyEnter,
-        })
+        return h(
+          SessionStatusContext.Provider,
+          { value: getSessionStatus },
+          h(SplitMain, {
+            __sessions: sessionsRef,
+            __workspaces: workspacesRef,
+            __fileUpload: fileUploadRef,
+            __uiSession: uiSessionRef,
+            __uiWorkspace: uiWorkspaceRef,
+            __keepSplit: keepSplit,
+            __stopSequenceMs: stopSequenceMs,
+            __remote: remoteRef,
+            __readBusyEnter: readBusyEnter,
+          }),
+        )
       },
     ),
   )
