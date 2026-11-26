@@ -19,9 +19,9 @@ const h = React.createElement
 const { useState, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, useRef } =
   React
 
-// Per-plugin-instance status source getter, provided by `apply` around the split
-// tree so cells read their own instance's source instead of a shared module
-// global (which an HMR/re-activation could overwrite under still-mounted cells).
+// One store per plugin instance, provided by `apply` around the split tree so
+// every cell shares its subscription and identity poll. A module global could be
+// overwritten by HMR/re-activation while cells from the old tree remain mounted.
 const SessionStatusContext = React.createContext(null)
 
 // ---------- i18n ----------
@@ -50,7 +50,7 @@ import { createEscapeStopHandler, sessionStoppable } from './escape-stop.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
-import { createSessionStatusGetter, subscribeWhenAvailable } from './session-status.js'
+import { createSessionStatusGetter, createSessionStatusStore } from './session-status.js'
 import { ApprovalCard, QuestionCard } from './pending-ui.js'
 
 // ---------- composer seats ----------
@@ -3985,16 +3985,14 @@ function useInboxQueue(binding) {
 
 /** Subscribe to the official pending-interaction registry for one Session.
  *
- *  The status source comes from the per-instance `SessionStatusContext` (see
- *  `createSessionStatusGetter`): 0.2.2 exposes it on `uiSession`, 0.2.3+ as the
- *  inject-gated `uiSession.sessionStatus` service. Because we keep it out of
- *  `inject` (declaring it would wedge 0.2.2), Cordis gives no ordering edge, so
- *  the service can register AFTER this cell mounts; we poll a few times to pick
- *  up a late registration instead of staying blind for the page's lifetime. */
+ * Every cell reads the same per-instance store. Its pure snapshot is important:
+ * React may call getSnapshot repeatedly while rendering and after subscribing;
+ * probing or attaching there would both duplicate work and destabilize updates.
+ * The store alone discovers late registrations and follows service identity. */
 function usePendingInteraction(sessionId) {
-  const getSource = React.useContext(SessionStatusContext)
-  const subscribe = useCallback((cb) => subscribeWhenAvailable(getSource, cb), [getSource])
-  const snapshot = useCallback(() => getSource?.()?.getSnapshot?.(), [getSource])
+  const store = React.useContext(SessionStatusContext)
+  const subscribe = useCallback((cb) => store?.subscribe(cb) ?? (() => {}), [store])
+  const snapshot = useCallback(() => store?.getSnapshot(), [store])
   const statusMap = useSyncExternalStore(subscribe, snapshot)
   return pendingOf(statusMap, sessionId)
 }
@@ -6325,9 +6323,10 @@ export function apply(ctx) {
   const workspacesRef = ctx.workspaces
   const fileUploadRef = ctx.fileUpload
   const uiSessionRef = ctx.uiSession
-  // Per-instance status source getter (see session-status.js): a closure, not a
-  // module global, so a second activation cannot overwrite a live instance's.
+  // Per-instance store (see session-status.js): all cells share one upstream
+  // subscription and identity timer, without a module global that HMR can replace.
   const getSessionStatus = createSessionStatusGetter(ctx, uiSessionRef)
+  const sessionStatus = createSessionStatusStore(getSessionStatus)
   const uiWorkspaceRef = ctx.uiWorkspace
   // The panel re-selects itself after every native openSession: 'reveal' hands
   // the main slot back to the Conversation, and the unregistered-id throw is
@@ -6356,7 +6355,7 @@ export function apply(ctx) {
       function SplitPanel() {
         return h(
           SessionStatusContext.Provider,
-          { value: getSessionStatus },
+          { value: sessionStatus },
           h(SplitMain, {
             __sessions: sessionsRef,
             __workspaces: workspacesRef,

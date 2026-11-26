@@ -31,90 +31,139 @@ export function selectSessionStatusService(ctx, uiSession) {
 /**
  * A per-plugin-instance getter for the status source.
  *
- * It is created inside `apply` so two plugin instances never share state. The
- * first successful probe is cached, but every call re-probes until then: 0.2.3
- * keeps `uiSession.sessionStatus` out of our `inject` list (declaring it would
- * wedge 0.2.2 activation), so Cordis gives no ordering edge and the service can
- * register after `apply` has run. Callers (see `usePendingInteraction`) poll a
- * few times to pick up a late registration instead of staying blind forever.
+ * The getter deliberately has no cache. Only the shared store's subscription
+ * machinery calls it, so render-time snapshot reads stay pure, and a service
+ * removed by HMR cannot leave an old registry visible through a stale cache.
  *
  * @param ctx - the plugin client context.
  * @param uiSession - the injected `ctx.uiSession`.
- * @returns a function returning the status source, or undefined until it exists.
+ * @returns a function returning the current status source, or undefined.
  */
 export function createSessionStatusGetter(ctx, uiSession) {
-  let cached
-  return function getSessionStatusSource() {
-    // Compare against a fresh probe by identity, not by the cached object's
-    // shape: a replaced (HMR / re-registered) service still has `subscribe`, so
-    // a shape check would return the dead registry forever.
-    const found = selectSessionStatusService(ctx, uiSession)
-    if (found !== undefined) cached = found
-    return cached
-  }
+  return () => selectSessionStatusService(ctx, uiSession)
 }
 
 /**
- * Subscribe to a status source that may not exist yet.
+ * Share one status-source subscription and one identity poll per plugin instance.
  *
- * If the source is present now, subscribe and fire one read immediately (a
- * value may have changed between the render's snapshot and this subscription).
- * Otherwise poll fast (`intervalMs`) up to `maxTries`, then keep a slow
- * background poll until it appears — never permanently giving up, since a
- * missing late service is the whole reason this exists. This is what picks up
- * `uiSession.sessionStatus` when DSH 0.2.3 registers it after our `apply`.
- * @param getSource - returns the current source, or undefined.
- * @param onChange - store subscriber (React's re-read callback).
- * @param options - `intervalMs` and `maxTries` for the missing-source poll.
- * @returns an unsubscribe that also clears any pending poll.
+ * `getSnapshot` only reads the currently attached source. All probing happens
+ * on the first subscription and the single timer: missing services are checked
+ * quickly at first, then forever at the slow cadence. An existing service keeps
+ * the slow cadence too, because HMR can replace or remove its object identity.
+ * The last unsubscribe releases both resources and clears the source so a later
+ * subscription starts with a fresh attach.
+ *
+ * @param getSource - returns the current source, or undefined when unavailable.
+ * @param options - polling cadence and an optional timer implementation for tests.
+ * @returns a store with pure `getSnapshot` and idempotent `subscribe` disposers.
  */
-export function subscribeWhenAvailable(
+export function createSessionStatusStore(
   getSource,
-  onChange,
-  { intervalMs = 200, maxTries = 25 } = {},
+  { intervalMs = 200, maxTries = 25, slowIntervalMs = 1000, timers = globalThis } = {},
 ) {
-  const fire = () => {
-    try {
-      onChange()
-    } catch {
-      // A subscriber throw must not stop the poll/subscription setup.
+  // Counts rather than a Set preserve duplicate subscribe calls: React may tear
+  // down and establish subscriptions independently, and one disposer must not
+  // remove another registration of the same callback.
+  const listeners = new Map()
+  const noop = () => {}
+  let source
+  let stopSource = noop
+  let timer = null
+  let timerDelay
+  let misses = 0
+
+  const notify = () => {
+    for (const listener of [...listeners.keys()]) {
+      try {
+        listener()
+      } catch {
+        // One cell's listener must not prevent the others from seeing a change.
+      }
     }
   }
-  const source = getSource?.()
-  if (typeof source?.subscribe === 'function') {
-    const stop = source.subscribe(onChange)
-    fire()
-    // A store may return a non-function unsubscribe; hand React a safe one.
-    return typeof stop === 'function' ? stop : () => {}
+
+  const clearPoll = () => {
+    if (timer !== null) timers.clearInterval(timer)
+    timer = null
+    timerDelay = undefined
   }
-  let stop = () => {}
-  let timer = null
-  let tries = 0
-  // Fast poll first, then a slow background poll that never gives up: a service
-  // that registers after maxTries is still picked up instead of leaving this
-  // cell blind to approvals for the rest of the page's life. The slow interval
-  // is one no-op per second while absent, cleared on unmount.
-  let delay = intervalMs
-  const tick = () => {
-    const late = getSource?.()
-    if (typeof late?.subscribe === 'function') {
-      if (timer !== null) clearInterval(timer)
-      timer = null
-      const off = late.subscribe(onChange)
-      stop = typeof off === 'function' ? off : () => {}
-      fire()
+
+  const detach = () => {
+    const stop = stopSource
+    stopSource = noop
+    try {
+      stop()
+    } catch {
+      // A broken old service must not block attachment to its replacement.
+    }
+  }
+
+  const ensurePoll = () => {
+    if (listeners.size === 0) return
+    const delay = source !== undefined || misses >= maxTries ? slowIntervalMs : intervalMs
+    if (timer !== null && timerDelay === delay) return
+    clearPoll()
+    timer = timers.setInterval(tick, delay)
+    timerDelay = delay
+  }
+
+  const probe = (countMiss = false) => {
+    const found = getSource?.()
+    const next = typeof found?.subscribe === 'function' ? found : undefined
+    if (next !== source) {
+      // Detach before touching the replacement: old registries can outlive their
+      // Cordis registration during HMR and must receive no further notifications.
+      detach()
+      source = next
+      if (source !== undefined) {
+        const stop = source.subscribe(notify)
+        stopSource = typeof stop === 'function' ? stop : noop
+      }
+      // A late source may already contain pending interactions, so attachment
+      // itself is a change even if the source does not emit an initial event.
+      notify()
+    }
+    if (source === undefined) {
+      if (countMiss) misses += 1
+    } else {
+      misses = 0
+    }
+  }
+
+  function tick() {
+    if (listeners.size === 0) {
+      clearPoll()
       return
     }
-    if (delay === intervalMs && (tries += 1) >= maxTries) {
-      if (timer !== null) clearInterval(timer)
-      delay = 1000
-      timer = setInterval(tick, delay)
+    probe(true)
+    ensurePoll()
+  }
+
+  const subscribe = (listener) => {
+    const wasEmpty = listeners.size === 0
+    listeners.set(listener, (listeners.get(listener) ?? 0) + 1)
+    if (wasEmpty) {
+      misses = 0
+      probe()
+      ensurePoll()
+    }
+
+    let active = true
+    return () => {
+      if (!active) return
+      active = false
+      const count = listeners.get(listener)
+      if (count === undefined) return
+      if (count > 1) listeners.set(listener, count - 1)
+      else listeners.delete(listener)
+      if (listeners.size > 0) return
+      clearPoll()
+      detach()
+      source = undefined
+      misses = 0
     }
   }
-  timer = setInterval(tick, delay)
-  return () => {
-    if (timer !== null) clearInterval(timer)
-    timer = null
-    stop()
-  }
+
+  const getSnapshot = () => source?.getSnapshot?.()
+  return { subscribe, getSnapshot }
 }
