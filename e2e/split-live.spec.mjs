@@ -24,9 +24,17 @@ export default async function ({ page, h, expect }) {
     const newChat = page.locator('[data-dsws-new-chat]').first()
     expect((await newChat.count()) > 0, 'an empty tile must expose its new-chat button')
     // The isolated DSH_HOME/browser context starts with an empty tile. Save its
-    // cell before the click removes the button, and wait inside that same cell so
-    // an already-bound tile elsewhere cannot satisfy the assertion.
-    const cell = newChat.locator('xpath=ancestor::div[contains(@class, "dsws-cell")][1]')
+    // numeric cell index before the click removes the button: unlike a locator
+    // derived from that button or an element handle, this survives a cell-root
+    // rerender and cannot drift to another empty tile.
+    const cellIndex = await newChat.evaluate((button) => {
+      const cell = button.closest('.dsws-cell')
+      return cell === null
+        ? -1
+        : Array.from(globalThis.document.querySelectorAll('.dsws-cell')).indexOf(cell)
+    })
+    expect(cellIndex >= 0, 'new-chat button must belong to a rendered split cell')
+    const cell = page.locator('.dsws-cell').nth(cellIndex)
     await newChat.click()
     // CellView returns a loading row until the retained Session's `ready`
     // resolves and sets `binding`; only then does it render the Composer. Its
