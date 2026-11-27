@@ -98,6 +98,15 @@ export function createSessionStatusStore(
     }
   }
 
+  const attach = (next) => {
+    if (next === undefined) return
+    try {
+      const stop = next.subscribe(notify)
+      source = next
+      stopSource = typeof stop === 'function' ? stop : noop
+    } catch {}
+  }
+
   const ensurePoll = () => {
     if (listeners.size === 0) return
     const delay = source !== undefined || misses >= maxTries ? slowIntervalMs : intervalMs
@@ -114,11 +123,11 @@ export function createSessionStatusStore(
       // Detach before touching the replacement: old registries can outlive their
       // Cordis registration during HMR and must receive no further notifications.
       detach()
-      source = next
-      if (source !== undefined) {
-        const stop = source.subscribe(notify)
-        stopSource = typeof stop === 'function' ? stop : noop
-      }
+      // Do not expose a source until its subscription succeeds. A throwing
+      // attach must leave an empty snapshot and be retried by the next tick,
+      // rather than escaping the interval and pinning a dead registry forever.
+      source = undefined
+      attach(next)
       // A late source may already contain pending interactions, so attachment
       // itself is a change even if the source does not emit an initial event.
       notify()

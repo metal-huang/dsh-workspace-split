@@ -23,17 +23,26 @@ export default async function ({ page, h, expect }) {
 
     const newChat = page.locator('[data-dsws-new-chat]').first()
     expect((await newChat.count()) > 0, 'an empty tile must expose its new-chat button')
+    // The isolated DSH_HOME/browser context starts with an empty tile. Save its
+    // cell before the click removes the button, and wait inside that same cell so
+    // an already-bound tile elsewhere cannot satisfy the assertion.
+    const cell = newChat.locator('xpath=ancestor::div[contains(@class, "dsws-cell")][1]')
     await newChat.click()
     // CellView returns a loading row until the retained Session's `ready`
     // resolves and sets `binding`; only then does it render the Composer. Its
     // textarea is therefore a real binding signal, not a fixed-duration sleep.
-    await page.waitForSelector('.dsws-cell textarea', { timeout: 15000 })
+    await cell.locator('textarea').waitFor({ state: 'visible', timeout: 15000 })
 
     const headers = await page.locator('[data-dsws-header]').count()
     expect(headers >= 1, 'split stays rendered after creating a real Session')
     expect(pageErrors.length === 0, 'no uncaught page errors: ' + pageErrors.join(' | '))
   } finally {
-    // A failed binding wait needs the same visual evidence as a successful run.
-    await h.shot('split-real-session')
+    // A failed binding wait needs the same visual evidence as a successful run,
+    // but a screenshot failure must not replace the assertion that explains it.
+    try {
+      await h.shot('split-real-session')
+    } catch (error) {
+      globalThis.console.warn(`split-real-session screenshot failed: ${String(error)}`)
+    }
   }
 }

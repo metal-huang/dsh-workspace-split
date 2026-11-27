@@ -197,6 +197,38 @@ describe('createSessionStatusStore', () => {
     assert.equal(clock.size, 0)
   })
 
+  it('retries a throwing source subscribe without exposing its stale snapshot', () => {
+    const clock = fakeClock()
+    const stale = new Map([['stale', true]])
+    let attempts = 0
+    const source = {
+      subscribe() {
+        attempts += 1
+        if (attempts === 1) throw new Error('attach failed')
+        return () => {}
+      },
+      getSnapshot: () => stale,
+    }
+    const store = createSessionStatusStore(() => source, { timers: clock })
+    let reads = 0
+    let off
+    assert.doesNotThrow(() => {
+      off = store.subscribe(() => {
+        reads += 1
+      })
+    })
+    assert.equal(attempts, 1)
+    assert.equal(store.getSnapshot(), undefined)
+    assert.equal(reads, 1, 'a failed attach still clears any previously rendered state')
+    assert.equal(clock.size, 1)
+
+    assert.doesNotThrow(() => clock.tick(200))
+    assert.equal(attempts, 2)
+    assert.equal(reads, 2, 'the successful retry must notify listeners')
+    assert.equal(store.getSnapshot(), stale)
+    off()
+  })
+
   it('detaches before identity replacement and clears a disappeared source', () => {
     const clock = fakeClock()
     const events = []
