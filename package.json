@@ -19,10 +19,13 @@
     "release": "node scripts/release.mjs",
     "check:full": "npm run check && npm run build",
     "ratchet:tighten": "node gate/ratchet_tighten.mjs",
-    "test:e2e:live": "node node_modules/dsh-plugin-e2e/bin/dsh-plugin-e2e.mjs run"
+    "test:e2e:live": "node scripts/e2e-live.mjs",
+    "e2e:clean": "node scripts/isolated-env.mjs clean",
+    "e2e:slots": "node scripts/isolated-env.mjs slots"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "dsh-plugin-e2e": "^0.2.9",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.0.0",
     "globals": "^15.0.0",
