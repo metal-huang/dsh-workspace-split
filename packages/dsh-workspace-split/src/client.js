@@ -19,6 +19,11 @@ const h = React.createElement
 const { useState, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, useRef } =
   React
 
+// One store per plugin instance, provided by `apply` around the split tree so
+// every cell shares its subscription and identity poll. A module global could be
+// overwritten by HMR/re-activation while cells from the old tree remain mounted.
+const SessionStatusContext = React.createContext(null)
+
 // ---------- i18n ----------
 import { detectLanguage, t } from './i18n.js'
 
@@ -45,6 +50,7 @@ import { createEscapeStopHandler, sessionStoppable } from './escape-stop.js'
 
 // ---------- pending interactions ----------
 import { interactionKey, pendingOf } from './pending.js'
+import { createSessionStatusGetter, createSessionStatusStore } from './session-status.js'
 import { ApprovalCard, QuestionCard } from './pending-ui.js'
 
 // ---------- composer seats ----------
@@ -3977,11 +3983,16 @@ function useInboxQueue(binding) {
   return Array.isArray(inbox?.['next-turn']) ? inbox['next-turn'] : []
 }
 
-/** Subscribe to the official pending-interaction registry for one Session. */
-function usePendingInteraction(uiSession, sessionId) {
-  const source = uiSession?.sessionStatus
-  const subscribe = useCallback((cb) => source?.subscribe(cb) ?? (() => {}), [source])
-  const snapshot = useCallback(() => source?.getSnapshot(), [source])
+/** Subscribe to the official pending-interaction registry for one Session.
+ *
+ * Every cell reads the same per-instance store. Its pure snapshot is important:
+ * React may call getSnapshot repeatedly while rendering and after subscribing;
+ * probing or attaching there would both duplicate work and destabilize updates.
+ * The store alone discovers late registrations and follows service identity. */
+function usePendingInteraction(sessionId) {
+  const store = React.useContext(SessionStatusContext)
+  const subscribe = useCallback((cb) => store?.subscribe(cb) ?? (() => {}), [store])
+  const snapshot = useCallback(() => store?.getSnapshot(), [store])
   const statusMap = useSyncExternalStore(subscribe, snapshot)
   return pendingOf(statusMap, sessionId)
 }
@@ -4126,16 +4137,7 @@ function PendingSeat(props) {
 
 // ---------- single cell: live session events + input ----------
 function CellView(props) {
-  const {
-    sessions,
-    sessionId,
-    fileUpload,
-    uiSession,
-    remote,
-    readBusyEnter,
-    active,
-    stopSequenceMs,
-  } = props
+  const { sessions, sessionId, fileUpload, remote, readBusyEnter, active, stopSequenceMs } = props
   const [binding, setBinding] = useState(null)
   const [error, setError] = useState(null)
   const [inputText, setInputText] = useState('')
@@ -4177,7 +4179,7 @@ function CellView(props) {
 
   // Official approval / question packages publish their pending objects here;
   // one registry entry per Session, and answer() is the object's own method.
-  const pending = usePendingInteraction(uiSession, sessionId)
+  const pending = usePendingInteraction(sessionId)
   const { controls, metaError } = useComposerSeats(remote, binding, sessionId)
 
   // Retain session once catalogued.
@@ -6321,6 +6323,10 @@ export function apply(ctx) {
   const workspacesRef = ctx.workspaces
   const fileUploadRef = ctx.fileUpload
   const uiSessionRef = ctx.uiSession
+  // Per-instance store (see session-status.js): all cells share one upstream
+  // subscription and identity timer, without a module global that HMR can replace.
+  const getSessionStatus = createSessionStatusGetter(ctx, uiSessionRef)
+  const sessionStatus = createSessionStatusStore(getSessionStatus)
   const uiWorkspaceRef = ctx.uiWorkspace
   // The panel re-selects itself after every native openSession: 'reveal' hands
   // the main slot back to the Conversation, and the unregistered-id throw is
@@ -6347,17 +6353,21 @@ export function apply(ctx) {
         key: 'split',
       },
       function SplitPanel() {
-        return h(SplitMain, {
-          __sessions: sessionsRef,
-          __workspaces: workspacesRef,
-          __fileUpload: fileUploadRef,
-          __uiSession: uiSessionRef,
-          __uiWorkspace: uiWorkspaceRef,
-          __keepSplit: keepSplit,
-          __stopSequenceMs: stopSequenceMs,
-          __remote: remoteRef,
-          __readBusyEnter: readBusyEnter,
-        })
+        return h(
+          SessionStatusContext.Provider,
+          { value: sessionStatus },
+          h(SplitMain, {
+            __sessions: sessionsRef,
+            __workspaces: workspacesRef,
+            __fileUpload: fileUploadRef,
+            __uiSession: uiSessionRef,
+            __uiWorkspace: uiWorkspaceRef,
+            __keepSplit: keepSplit,
+            __stopSequenceMs: stopSequenceMs,
+            __remote: remoteRef,
+            __readBusyEnter: readBusyEnter,
+          }),
+        )
       },
     ),
   )
