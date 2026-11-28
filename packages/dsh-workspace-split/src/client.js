@@ -1442,7 +1442,16 @@ function SidebarSplitControl(props) {
       cols: geometry.cols,
       maxCells,
       confirmCells,
-      onApply: updateGeometry,
+      // Picking a layout is a request to see the split view: apply the grid, and
+      // if the panel is closed open it right away so the chosen layout shows.
+      onApply: (nextRows, nextCols) => {
+        updateGeometry(nextRows, nextCols)
+        if (window.__dswsInSplit !== true) {
+          try {
+            window.__dswsToggle?.()
+          } catch (_e) {}
+        }
+      },
       open: pickOpen,
       onOpenChange: setPickOpen,
       anchorPos,

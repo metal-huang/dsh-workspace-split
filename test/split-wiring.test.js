@@ -103,6 +103,9 @@ const WIRING = [
   // instance; a module global or a direct uiSession read crashes the tile.
   'createSessionStatusGetter(ctx, uiSessionRef)',
   'SessionStatusContext.Provider',
+  // Picking a grid from the sidebar picker opens the split view when it is
+  // closed; dropping the toggle leaves the choice applying to a hidden panel.
+  'if (window.__dswsInSplit !== true) {',
 ]
 
 describe('split-cell wiring', () => {
